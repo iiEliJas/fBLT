@@ -3,3 +3,6 @@ build/
 *.o
 *.obj
 __pycache__/
+.venv
+docs
+
