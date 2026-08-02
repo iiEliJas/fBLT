@@ -1,5 +1,6 @@
 CC ?= gcc
-CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Iinclude -lm
+CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Iinclude
+LDLIBS ?= -lm
 
 SRC_DIR := src
 TESTS_DIR := tests
@@ -12,18 +13,22 @@ SRCS := \
     $(SRC_DIR)/backend_cpu/elementwise_cpu.c \
     $(SRC_DIR)/backend_cpu/matmul_cpu.c \
     $(SRC_DIR)/backend_cpu/softmax_cpu.c \
+    $(SRC_DIR)/models/entropy.c \
+    $(wildcard $(TESTS_DIR)/unit/*/*.c) \
     $(TESTS_DIR)/test_main.c
 
 all: $(BUILD_DIR)/test_main
 
 $(BUILD_DIR):
-	mkdir -p $(BUILD_DIR)
+	mkdir $(BUILD_DIR)
 
 $(BUILD_DIR)/test_main: $(SRCS) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) $(SRCS) -o $@
+	$(CC) $(CFLAGS) $(SRCS) -o $@ $(LDLIBS)
 
 run: $(BUILD_DIR)/test_main
 	./$(BUILD_DIR)/test_main
 
 clean:
-	rm -rf $(BUILD_DIR)
+	@echo Cleaning build directory...
+	@$(call RM_RF,$(BUILD_DIR))
+	@echo Clean complete.

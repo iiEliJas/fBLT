@@ -1,0 +1,36 @@
+#include <stdio.h>
+#include "blt/core/allocator.h"
+#include "blt/ops/softmax.h"
+
+int run_softmax_backend_tests(void) {
+    blt_arena* arena = blt_arena_create(4096, BLT_BACKEND_CPU);
+    if (!arena) {
+        fprintf(stderr, "[FAIL] arena creation for softmax tests\n");
+        return 0;
+    }
+
+    size_t shape[2] = {2, 3};
+    blt_tensor input = blt_tensor_create(arena, shape, 2, BLT_DTYPE_FP32);
+    blt_tensor output = blt_tensor_create(arena, shape, 2, BLT_DTYPE_FP32);
+
+    float* in_data = (float*)input.data;
+    float* out_data = (float*)output.data;
+    in_data[0] = 1.0f; in_data[1] = 2.0f; in_data[2] = 3.0f;
+    in_data[3] = 1.0f; in_data[4] = 1.0f; in_data[5] = 1.0f;
+
+    blt_softmax(&input, &output);
+
+    if (out_data[0] + out_data[1] + out_data[2] < 0.999f || out_data[0] + out_data[1] + out_data[2] > 1.001f) {
+        fprintf(stderr, "[FAIL] softmax row sum\n");
+        blt_arena_destroy(arena);
+        return 0;
+    }
+    if (out_data[2] <= out_data[1] || out_data[1] <= out_data[0]) {
+        fprintf(stderr, "[FAIL] softmax ordering\n");
+        blt_arena_destroy(arena);
+        return 0;
+    }
+
+    blt_arena_destroy(arena);
+    return 1;
+}

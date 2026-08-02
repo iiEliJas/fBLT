@@ -8,6 +8,19 @@
 #include "blt/ops/matmul.h"
 #include "blt/ops/softmax.h"
 
+int run_tensor_core_tests(void);
+int run_allocator_core_tests(void);
+int run_backend_core_tests(void);
+int run_elementwise_backend_tests(void);
+int run_matmul_backend_tests(void);
+int run_softmax_backend_tests(void);
+int run_entropy_model_tests(void);
+
+typedef struct {
+    const char* name;
+    int (*fn)(void);
+} test_case;
+
 static int load_binary_tensor(const char* path, blt_arena* arena, blt_tensor* out_tensor) {
     FILE* fp = fopen(path, "rb");
     if (!fp) {
@@ -77,7 +90,8 @@ static int run_matmul_test(void) {
     if (!load_binary_tensor("tests/golden_matmul_a.bin", arena, &a) ||
         !load_binary_tensor("tests/golden_matmul_b.bin", arena, &b) ||
         !load_binary_tensor("tests/golden_matmul_out.bin", arena, &expected)) {
-        goto cleanup;
+        blt_arena_destroy(arena);
+        return ok;
     }
 
     size_t out_shape[2] = {a.shape[0], b.shape[1]};
@@ -85,7 +99,6 @@ static int run_matmul_test(void) {
     blt_matmul(&a, &b, &out);
     ok = check_close(&out, &expected, 1e-4f);
 
-cleanup:
     blt_arena_destroy(arena);
     return ok;
 }
@@ -99,36 +112,47 @@ static int run_softmax_test(void) {
     int ok = 0;
     if (!load_binary_tensor("tests/golden_softmax_in.bin", arena, &input) ||
         !load_binary_tensor("tests/golden_softmax_out.bin", arena, &expected)) {
-        goto cleanup;
+        blt_arena_destroy(arena);
+        return ok;
     }
 
     output = blt_tensor_create(arena, input.shape, input.ndim, BLT_DTYPE_FP32);
     blt_softmax(&input, &output);
     ok = check_close(&output, &expected, 1e-4f);
 
-cleanup:
     blt_arena_destroy(arena);
     return ok;
 }
 
 int main(void) {
+    const test_case tests[] = {
+        {"matmul parity", run_matmul_test},
+        {"softmax parity", run_softmax_test},
+        {"tensor core helpers", run_tensor_core_tests},
+        {"allocator core helpers", run_allocator_core_tests},
+        {"backend dispatch", run_backend_core_tests},
+        {"elementwise backend", run_elementwise_backend_tests},
+        {"matmul backend", run_matmul_backend_tests},
+        {"softmax backend", run_softmax_backend_tests},
+        {"entropy model", run_entropy_model_tests},
+    };
+
     int passed = 0;
-    printf("Running BLT Phase 0 tests...\n");
+    const size_t test_count = sizeof(tests) / sizeof(tests[0]);
 
-    if (run_matmul_test()) {
-        printf("[PASS] matmul parity\n");
-        passed++;
-    } else {
-        printf("[FAIL] matmul parity\n");
+    printf("\n------------------------------------------\n");
+    printf("            Running FBLT tests...\n");
+    printf("------------------------------------------\n");
+
+    for (size_t i = 0; i < test_count; ++i) {
+        if (tests[i].fn()) {
+            printf("[PASS] %s\n", tests[i].name);
+            passed++;
+        } else {
+            printf("[FAIL] %s\n", tests[i].name);
+        }
     }
 
-    if (run_softmax_test()) {
-        printf("[PASS] softmax parity\n");
-        passed++;
-    } else {
-        printf("[FAIL] softmax parity\n");
-    }
-
-    printf("Summary: %d/2 tests passed\n", passed);
-    return passed == 2 ? 0 : 1;
+    printf("Summary: %d/%zu tests passed\n", passed, test_count);
+    return passed == (int)test_count ? 0 : 1;
 }
