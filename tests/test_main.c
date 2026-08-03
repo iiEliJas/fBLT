@@ -15,6 +15,8 @@ int run_elementwise_backend_tests(void);
 int run_matmul_backend_tests(void);
 int run_softmax_backend_tests(void);
 int run_entropy_model_tests(void);
+int run_patcher_model_tests(void);
+int run_phase1_tests(void);
 
 typedef struct {
     const char* name;
@@ -135,6 +137,8 @@ int main(void) {
         {"matmul backend", run_matmul_backend_tests},
         {"softmax backend", run_softmax_backend_tests},
         {"entropy model", run_entropy_model_tests},
+        {"patcher model", run_patcher_model_tests},
+        {"phase1 parity", run_phase1_tests},
     };
 
     int passed = 0;

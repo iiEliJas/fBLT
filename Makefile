@@ -14,8 +14,10 @@ SRCS := \
     $(SRC_DIR)/backend_cpu/matmul_cpu.c \
     $(SRC_DIR)/backend_cpu/softmax_cpu.c \
     $(SRC_DIR)/models/entropy.c \
+    $(SRC_DIR)/models/patcher.c \
     $(wildcard $(TESTS_DIR)/unit/*/*.c) \
-    $(TESTS_DIR)/test_main.c
+    $(TESTS_DIR)/test_main.c \
+    $(TESTS_DIR)/test_phase1.c
 
 all: $(BUILD_DIR)/test_main
 

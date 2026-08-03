@@ -9,4 +9,8 @@
     exit(EXIT_FAILURE); \
 } while (0)
 
+#define BLT_WARN(msg, ...) do { \
+    fprintf(stderr, "BLT Warning [%s:%d]: " msg "\n", __FILE__, __LINE__, ##__VA_ARGS__); \
+} while (0)
+
 #endif // BLT_CORE_BACKEND_H
