@@ -22,6 +22,7 @@ void blt_add_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
     }
 }
 
+
 void blt_mul_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
     validate_same_shape_and_dtype(a, b, out);
     const float* a_data = (const float*)a->data;
@@ -29,5 +30,20 @@ void blt_mul_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
     float* out_data = (float*)out->data;
     for (size_t i = 0; i < out->numel; ++i) {
         out_data[i] = a_data[i] * b_data[i];
+    }
+}
+
+
+void blt_scale(blt_tensor* t, float scalar) {
+    if (t == NULL) {
+        BLT_FATAL("blt_scale: tensor must not be null");
+    }
+    if (t->dtype != BLT_DTYPE_FP32) {
+        BLT_FATAL("blt_scale: only supports FP32 tensors");
+    }
+ 
+    float* data = (float*)t->data;
+    for (size_t i = 0; i < t->numel; ++i) {
+        data[i] *= scalar;
     }
 }

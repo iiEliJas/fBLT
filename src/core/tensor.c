@@ -27,3 +27,19 @@ void blt_tensor_compute_row_major_strides(const size_t* shape, size_t ndim, size
 size_t blt_tensor_bytes(const blt_tensor* t) {
     return t->numel * blt_dtype_sizeof(t->dtype);
 }
+
+
+blt_tensor blt_tensor_view_2d(void* data, size_t rows, size_t cols, blt_dtype dtype){
+    blt_tensor tensor = {0};
+    tensor.data = data;
+    tensor.shape[0] = rows;
+    tensor.shape[1] = cols;
+    tensor.strides[0] = cols;
+    tensor.strides[1] = 1;
+    tensor.ndim = 2;
+    tensor.numel = rows * cols;
+    tensor.dtype = dtype;
+    tensor.backend = BLT_BACKEND_CPU;
+    tensor.is_view = false;
+    return tensor;
+}

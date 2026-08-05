@@ -12,9 +12,11 @@ SRCS := \
     $(SRC_DIR)/core/backend.c \
     $(SRC_DIR)/backend_cpu/elementwise_cpu.c \
     $(SRC_DIR)/backend_cpu/matmul_cpu.c \
+    $(SRC_DIR)/backend_cpu/vecmath_cpu.c \
     $(SRC_DIR)/backend_cpu/softmax_cpu.c \
     $(SRC_DIR)/models/entropy.c \
     $(SRC_DIR)/models/patcher.c \
+    $(SRC_DIR)/models/attention.c \
     $(wildcard $(TESTS_DIR)/unit/*/*.c) \
     $(TESTS_DIR)/test_main.c \
     $(TESTS_DIR)/test_phase1.c

@@ -3,9 +3,11 @@
 #include <math.h>
 
 
-// For each row in the input probabilities tensor, compute the entropy and store it in the output tensor
-// Ensure that the input tensor is 2D and the output tensor is 1D with the correct shape
-// Entropy formula: H = -sum(p * log(p)) for each probability distribution in the input tensor
+/*
+    For each row in the input probabilities tensor, compute the entropy and store it in the output tensor
+    Ensure that the input tensor is 2D and the output tensor is 1D with the correct shape
+    Entropy formula: H = -sum(p * log(p)) for each probability distribution in the input tensor
+*/
 void blt_compute_entropy(const blt_tensor* probs, blt_tensor* entropy_out, const blt_entropy_config* config){
     if (probs->ndim != 2) {
         BLT_FATAL("Input probabilities tensor must be 2D");

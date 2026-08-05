@@ -17,6 +17,7 @@ int run_softmax_backend_tests(void);
 int run_entropy_model_tests(void);
 int run_patcher_model_tests(void);
 int run_phase1_tests(void);
+int run_attention_model_tests(void);
 
 typedef struct {
     const char* name;
@@ -139,6 +140,7 @@ int main(void) {
         {"entropy model", run_entropy_model_tests},
         {"patcher model", run_patcher_model_tests},
         {"phase1 parity", run_phase1_tests},
+        {"attention model", run_attention_model_tests},
     };
 
     int passed = 0;
