@@ -71,7 +71,7 @@ def _softmax(values):
     return [x / total for x in exps]
 
 
-def generate_golden_files(output_dir: str = "tests") -> None:
+def generate_golden_files(output_dir: str = "data") -> None:
     if torch is not None:
         a = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32)
         b = torch.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]], dtype=torch.float32)

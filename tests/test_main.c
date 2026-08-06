@@ -90,9 +90,9 @@ static int run_matmul_test(void) {
     blt_tensor expected = {0};
 
     int ok = 0;
-    if (!load_binary_tensor("tests/golden_matmul_a.bin", arena, &a) ||
-        !load_binary_tensor("tests/golden_matmul_b.bin", arena, &b) ||
-        !load_binary_tensor("tests/golden_matmul_out.bin", arena, &expected)) {
+    if (!load_binary_tensor("data/golden_matmul_a.bin", arena, &a) ||
+        !load_binary_tensor("data/golden_matmul_b.bin", arena, &b) ||
+        !load_binary_tensor("data/golden_matmul_out.bin", arena, &expected)) {
         blt_arena_destroy(arena);
         return ok;
     }
@@ -113,8 +113,8 @@ static int run_softmax_test(void) {
     blt_tensor output = {0};
 
     int ok = 0;
-    if (!load_binary_tensor("tests/golden_softmax_in.bin", arena, &input) ||
-        !load_binary_tensor("tests/golden_softmax_out.bin", arena, &expected)) {
+    if (!load_binary_tensor("data/golden_softmax_in.bin", arena, &input) ||
+        !load_binary_tensor("data/golden_softmax_out.bin", arena, &expected)) {
         blt_arena_destroy(arena);
         return ok;
     }

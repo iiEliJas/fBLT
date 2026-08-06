@@ -2,11 +2,11 @@ import struct
 from pathlib import Path
 
 for path in [
-    'tests/golden_matmul_a.bin',
-    'tests/golden_matmul_b.bin',
-    'tests/golden_matmul_out.bin',
-    'tests/golden_softmax_in.bin',
-    'tests/golden_softmax_out.bin',
+    'data/golden_matmul_a.bin',
+    'data/golden_matmul_b.bin',
+    'data/golden_matmul_out.bin',
+    'data/golden_softmax_in.bin',
+    'data/golden_softmax_out.bin',
 ]:
     with open(path, 'rb') as fh:
         data = fh.read()

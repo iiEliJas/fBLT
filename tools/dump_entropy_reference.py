@@ -55,7 +55,7 @@ def build_patches(entropy: torch.Tensor, threshold: float):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Dump entropy reference data for Phase 1 tests.")
-    parser.add_argument("--output-dir", type=Path, default=Path("tests"), help="Directory to write reference files")
+    parser.add_argument("--output-dir", type=Path, default=Path("data"), help="Directory to write reference files")
     parser.add_argument("--threshold", type=float, default=6.0, help="Patch threshold in bits")
     parser.add_argument("--seed", type=int, default=0, help="Random seed for reproducibility")
     args = parser.parse_args()

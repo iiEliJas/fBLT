@@ -93,8 +93,8 @@ int run_phase1_tests(void) {
 
     blt_tensor probs = {0};
     blt_tensor expected_entropy = {0};
-    if (!load_binary_tensor("tests/phase1_probs.bin", arena, &probs) ||
-        !load_binary_tensor("tests/phase1_entropy.bin", arena, &expected_entropy)) {
+    if (!load_binary_tensor("data/phase1_probs.bin", arena, &probs) ||
+        !load_binary_tensor("data/phase1_entropy.bin", arena, &expected_entropy)) {
         blt_arena_destroy(arena);
         return 0;
     }
@@ -141,7 +141,7 @@ int run_phase1_tests(void) {
     size_t expected_starts[1024];
     size_t expected_lengths[1024];
     size_t expected_count = 0;
-    if (!load_patch_boundaries("tests/phase1_patch_boundaries.txt", expected_starts, expected_lengths, 1024, &expected_count)) {
+    if (!load_patch_boundaries("data/phase1_patch_boundaries.txt", expected_starts, expected_lengths, 1024, &expected_count)) {
         blt_arena_destroy(arena);
         return 0;
     }
