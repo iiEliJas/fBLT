@@ -2,6 +2,9 @@
 #include "blt/core/allocator.h"
 #include "blt/ops/softmax.h"
 
+#include "test_helpers.h"
+#include "test_suite.h"
+
 int run_softmax_backend_tests(void) {
     blt_arena* arena = blt_arena_create(4096, BLT_BACKEND_CPU);
     if (!arena) {
@@ -20,16 +23,8 @@ int run_softmax_backend_tests(void) {
 
     blt_softmax(&input, &output);
 
-    if (out_data[0] + out_data[1] + out_data[2] < 0.999f || out_data[0] + out_data[1] + out_data[2] > 1.001f) {
-        fprintf(stderr, "[FAIL] softmax row sum\n");
-        blt_arena_destroy(arena);
-        return 0;
-    }
-    if (out_data[2] <= out_data[1] || out_data[1] <= out_data[0]) {
-        fprintf(stderr, "[FAIL] softmax ordering\n");
-        blt_arena_destroy(arena);
-        return 0;
-    }
+    TEST_ASSERT(out_data[0] + out_data[1] + out_data[2] >= 0.999f && out_data[0] + out_data[1] + out_data[2] <= 1.001f);
+    TEST_ASSERT(out_data[2] > out_data[1] && out_data[1] > out_data[0]);
 
     blt_arena_destroy(arena);
     return 1;

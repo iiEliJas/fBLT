@@ -1,5 +1,5 @@
 CC ?= gcc
-CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Iinclude
+CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Iinclude -Itests
 LDLIBS ?= -lm
 
 SRC_DIR := src
@@ -17,6 +17,7 @@ SRCS := \
     $(SRC_DIR)/models/patcher.c \
     $(SRC_DIR)/models/attention.c \
     $(wildcard $(TESTS_DIR)/unit/*/*.c) \
+    $(TESTS_DIR)/test_helpers.c \
     $(TESTS_DIR)/test_main.c \
     $(TESTS_DIR)/test_phase1.c
 

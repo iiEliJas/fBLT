@@ -2,6 +2,9 @@
 #include "blt/core/allocator.h"
 #include "blt/models/entropy.h"
 
+#include "test_helpers.h"
+#include "test_suite.h"
+
 int run_entropy_model_tests(void) {
     blt_arena* arena = blt_arena_create(4096, BLT_BACKEND_CPU);
     if (!arena) {
@@ -25,11 +28,8 @@ int run_entropy_model_tests(void) {
 
     blt_compute_entropy(&probs, &entropy, &config);
 
-    if (entropy_data[0] <= 0.0f || entropy_data[1] != 0.0f) {
-        fprintf(stderr, "[FAIL] entropy computation\n");
-        blt_arena_destroy(arena);
-        return 0;
-    }
+    TEST_ASSERT(entropy_data[0] > 0.0f);
+    TEST_ASSERT(entropy_data[1] == 0.0f);
 
     blt_arena_destroy(arena);
     return 1;

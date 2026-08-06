@@ -1,0 +1,22 @@
+cc -O2 -std=c99 -Wall -Wextra -Iinclude -Itests src/core/tensor.c src/core/allocator.c src/core/backend.c src/backend_cpu/elementwise_cpu.c src/backend_cpu/linalg_cpu.c src/backend_cpu/reductions_cpu.c src/models/entropy.c src/models/patcher.c src/models/attention.c tests/unit/backend/test_backend_cpu_elementwise.c tests/unit/backend/test_backend_cpu_matmul.c tests/unit/backend/test_backend_cpu_softmax.c tests/unit/core/test_core_allocator.c tests/unit/core/test_core_backend.c tests/unit/core/test_core_tensor.c tests/unit/models/test_models_attention.c tests/unit/models/test_models_entropy.c tests/unit/models/test_models_patcher.c tests/test_main.c tests/test_phase1.c -o build/test_main -lm
+tests/unit/backend/test_backend_cpu_elementwise.c: In function 'run_elementwise_backend_tests':
+tests/unit/backend/test_backend_cpu_elementwise.c:23:12: warning: unused variable 'out_data' [-Wunused-variable]
+   23 |     float* out_data = (float*)out.data;
+      |            ^~~~~~~~
+tests/unit/backend/test_backend_cpu_matmul.c: In function 'run_matmul_backend_tests':
+tests/unit/backend/test_backend_cpu_matmul.c:25:12: warning: unused variable 'out_data' [-Wunused-variable]
+   25 |     float* out_data = (float*)out.data;
+      |            ^~~~~~~~
+tests/unit/core/test_core_backend.c: In function 'run_backend_core_tests':
+tests/unit/core/test_core_backend.c:25:12: warning: unused variable 'out_data' [-Wunused-variable]
+   25 |     float* out_data = (float*)out.data;
+      |            ^~~~~~~~
+tests/test_main.c: In function 'run_matmul_test':
+tests/test_main.c:28:10: error: implicit declaration of function 'load_binary_tensor'; did you mean 'blt_test_load_binary_tensor'? [-Wimplicit-function-declaration]
+   28 |     if (!load_binary_tensor("data/golden_matmul_a.bin", arena, &a) ||
+      |          ^~~~~~~~~~~~~~~~~~
+      |          blt_test_load_binary_tensor
+tests/test_main.c:38:10: error: implicit declaration of function 'check_close' [-Wimplicit-function-declaration]
+   38 |     ok = check_close(&out, &expected, 1e-4f);
+      |          ^~~~~~~~~~~
+make: *** [Makefile:29: build/test_main] Error 1

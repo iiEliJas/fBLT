@@ -3,6 +3,9 @@
 #include "blt/models/entropy.h"
 #include "blt/models/patcher.h"
 
+#include "test_helpers.h"
+#include "test_suite.h"
+
 int run_patcher_model_tests(void) {
     blt_arena* arena = blt_arena_create(4096, BLT_BACKEND_CPU);
     if (!arena) {
@@ -26,11 +29,7 @@ int run_patcher_model_tests(void) {
     blt_patch_info patches_out[10];
     size_t num_patches = blt_segment_patches(&entropy, patches_out, 10, &config);
 
-    if (num_patches == 0) {
-        fprintf(stderr, "[FAIL] patch segmentation\n");
-        blt_arena_destroy(arena);
-        return 0;
-    }
+    TEST_ASSERT(num_patches != 0);
 
     // Optionally print the patches for verification
     for (size_t i = 0; i < num_patches; ++i) {

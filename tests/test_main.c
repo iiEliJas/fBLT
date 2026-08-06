@@ -8,79 +8,14 @@
 #include "blt/ops/matmul.h"
 #include "blt/ops/softmax.h"
 
-int run_tensor_core_tests(void);
-int run_allocator_core_tests(void);
-int run_backend_core_tests(void);
-int run_elementwise_backend_tests(void);
-int run_matmul_backend_tests(void);
-int run_softmax_backend_tests(void);
-int run_entropy_model_tests(void);
-int run_patcher_model_tests(void);
-int run_phase1_tests(void);
-int run_attention_model_tests(void);
+#include "test_helpers.h"
+#include "test_suite.h"
 
 typedef struct {
     const char* name;
     int (*fn)(void);
 } test_case;
 
-static int load_binary_tensor(const char* path, blt_arena* arena, blt_tensor* out_tensor) {
-    FILE* fp = fopen(path, "rb");
-    if (!fp) {
-        fprintf(stderr, "failed to open %s\n", path);
-        return 0;
-    }
-
-    uint32_t ndim = 0;
-    if (fread(&ndim, sizeof(ndim), 1, fp) != 1) {
-        fclose(fp);
-        return 0;
-    }
-
-    size_t shape[BLT_MAX_NDIM] = {0};
-    for (uint32_t i = 0; i < ndim; ++i) {
-        uint32_t dim = 0;
-        if (fread(&dim, sizeof(dim), 1, fp) != 1) {
-            fclose(fp);
-            return 0;
-        }
-        shape[i] = dim;
-    }
-
-    size_t numel = 1;
-    for (uint32_t i = 0; i < ndim; ++i) {
-        numel *= shape[i];
-    }
-
-    *out_tensor = blt_tensor_create(arena, shape, ndim, BLT_DTYPE_FP32);
-    float* data = (float*)out_tensor->data;
-    for (size_t i = 0; i < numel; ++i) {
-        float value = 0.0f;
-        if (fread(&value, sizeof(value), 1, fp) != 1) {
-            fclose(fp);
-            return 0;
-        }
-        data[i] = value;
-    }
-
-    fclose(fp);
-    return 1;
-}
-
-static int check_close(const blt_tensor* actual, const blt_tensor* expected, float tol) {
-    if (actual->numel != expected->numel) {
-        return 0;
-    }
-    const float* a = (const float*)actual->data;
-    const float* b = (const float*)expected->data;
-    for (size_t i = 0; i < actual->numel; ++i) {
-        if (fabsf(a[i] - b[i]) > tol) {
-            fprintf(stderr, "mismatch at %zu: got %.6f expected %.6f\n", i, a[i], b[i]);
-            return 0;
-        }
-    }
-    return 1;
-}
 
 static int run_matmul_test(void) {
     blt_arena* arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
@@ -127,6 +62,7 @@ static int run_softmax_test(void) {
     return ok;
 }
 
+
 int main(void) {
     const test_case tests[] = {
         {"matmul parity", run_matmul_test},
@@ -159,6 +95,9 @@ int main(void) {
         }
     }
 
+    printf("------------------------------------------\n");
     printf("Summary: %d/%zu tests passed\n", passed, test_count);
+    printf("------------------------------------------\n");
+    
     return passed == (int)test_count ? 0 : 1;
 }
