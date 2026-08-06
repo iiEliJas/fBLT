@@ -11,9 +11,8 @@ SRCS := \
     $(SRC_DIR)/core/allocator.c \
     $(SRC_DIR)/core/backend.c \
     $(SRC_DIR)/backend_cpu/elementwise_cpu.c \
-    $(SRC_DIR)/backend_cpu/matmul_cpu.c \
-    $(SRC_DIR)/backend_cpu/vecmath_cpu.c \
-    $(SRC_DIR)/backend_cpu/softmax_cpu.c \
+    $(SRC_DIR)/backend_cpu/linalg_cpu.c \
+    $(SRC_DIR)/backend_cpu/reductions_cpu.c \
     $(SRC_DIR)/models/entropy.c \
     $(SRC_DIR)/models/patcher.c \
     $(SRC_DIR)/models/attention.c \
