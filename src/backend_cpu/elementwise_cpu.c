@@ -1,5 +1,6 @@
 #include "blt/core/backend.h"
 #include "blt/ops/gelu.h"
+#include "blt/ops/swiglu.h"
 #include "blt/ops/elementwise.h"
 
 #include <string.h>
@@ -51,8 +52,9 @@ void blt_scale(blt_tensor* t, float scalar) {
 }
 
 
+
 // -------------------------------------------------------------
-// GELU CPU Implementation
+// GELU
 
 void blt_gelu_forward_cpu(const blt_tensor* x, blt_tensor* out) {
     blt_check_elementwise_fp32(x, out, "GELU: input/output must be FP32 with matching element count");
@@ -73,4 +75,30 @@ void blt_gelu_backward_cpu(const blt_tensor* grad_out, const blt_tensor* x, blt_
     (void)x;
     (void)grad_x;
     BLT_FATAL("GELU backward not yet implemented");
+}
+
+
+
+// -------------------------------------------------------------
+// SwiGLU
+
+void blt_swiglu_forward_cpu(const blt_tensor* gate, const blt_tensor* up, blt_tensor* out) {
+    blt_check_elementwise_fp32(gate, up, "SwiGLU: gate/up must be FP32 with matching element count");
+    blt_check_elementwise_fp32(gate, out, "SwiGLU: output must be FP32 with matching element count");
+ 
+    const float* g = (const float*)gate->data;
+    const float* u = (const float*)up->data;
+    float* o = (float*)out->data;
+ 
+    for (size_t i = 0; i < gate->numel; i++) {
+        float gv = g[i];
+        float silu = gv / (1.0f + expf(-gv));
+        o[i] = silu * u[i];
+    }
+}
+ 
+void blt_swiglu_backward_cpu(const blt_tensor* grad_out, const blt_tensor* gate, const blt_tensor* up,
+                              blt_tensor* grad_gate, blt_tensor* grad_up) {
+    (void)grad_out; (void)gate; (void)up; (void)grad_gate; (void)grad_up;
+    BLT_FATAL("SwiGLU backward not yet implemented");
 }
