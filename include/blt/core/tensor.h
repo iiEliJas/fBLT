@@ -26,6 +26,7 @@ typedef struct {
 size_t blt_tensor_compute_numel(const size_t* shape, size_t ndim);
 void blt_tensor_compute_row_major_strides(const size_t* shape, size_t ndim, size_t* strides_out);
 size_t blt_tensor_bytes(const blt_tensor* t);
-blt_tensor blt_tensor_view_2d(void* data, size_t rows, size_t cols, blt_dtype dtype);
+void blt_tensor_view_2d(blt_tensor* t, void* data, size_t rows, size_t cols, blt_backend backend);
+void blt_tensor_view_3d(blt_tensor* t, void* data, size_t d0, size_t d1, size_t d2, blt_backend backend);
 
 #endif // BLT_CORE_TENSOR_H

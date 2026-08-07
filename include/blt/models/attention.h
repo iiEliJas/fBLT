@@ -12,6 +12,8 @@ typedef struct {
     bool is_causal;      // apply masking matrix
     bool use_rope;       // use rotary position embedding
     float rope_theta;    // base for rotary position embedding (500000.0f)
+    const blt_tensor* rope_cos_cache;   // precomputed cos table for RoPE (optional)
+    const blt_tensor* rope_sin_cache;   // precomputed sin table for RoPE (optional)
 } blt_attention_config;
 
 // Computes Multi-Head Self-Attention

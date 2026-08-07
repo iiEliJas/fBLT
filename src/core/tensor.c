@@ -29,17 +29,31 @@ size_t blt_tensor_bytes(const blt_tensor* t) {
 }
 
 
-blt_tensor blt_tensor_view_2d(void* data, size_t rows, size_t cols, blt_dtype dtype){
-    blt_tensor tensor = {0};
-    tensor.data = data;
-    tensor.shape[0] = rows;
-    tensor.shape[1] = cols;
-    tensor.strides[0] = cols;
-    tensor.strides[1] = 1;
-    tensor.ndim = 2;
-    tensor.numel = rows * cols;
-    tensor.dtype = dtype;
-    tensor.backend = BLT_BACKEND_CPU;
-    tensor.is_view = false;
-    return tensor;
+
+void blt_tensor_view_2d(blt_tensor* t, void* data, size_t rows, size_t cols, blt_backend backend) {
+    t->data = data;
+    t->shape[0] = rows;
+    t->shape[1] = cols;
+    t->shape[2] = 0;
+    t->shape[3] = 0;
+    t->ndim = 2;
+    t->numel = blt_tensor_compute_numel(t->shape, 2);
+    t->dtype = BLT_DTYPE_FP32;
+    t->backend = backend;
+    t->is_view = true;
+    blt_tensor_compute_row_major_strides(t->shape, 2, t->strides);
+}
+ 
+void blt_tensor_view_3d(blt_tensor* t, void* data, size_t d0, size_t d1, size_t d2, blt_backend backend) {
+    t->data = data;
+    t->shape[0] = d0;
+    t->shape[1] = d1;
+    t->shape[2] = d2;
+    t->shape[3] = 0;
+    t->ndim = 3;
+    t->numel = blt_tensor_compute_numel(t->shape, 3);
+    t->dtype = BLT_DTYPE_FP32;
+    t->backend = backend;
+    t->is_view = true;
+    blt_tensor_compute_row_major_strides(t->shape, 3, t->strides);
 }
