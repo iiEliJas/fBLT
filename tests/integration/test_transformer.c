@@ -115,6 +115,8 @@ int run_phase2_transformer_block_parity_test(void) {
             .num_heads = 4,
             .head_dim = 0,
             .is_causal = true,
+            .use_rope = true,
+            .rope_theta = 10000.0f,
         },
         .hidden_dim = hidden_dim,
         .layer_norm_eps = 1e-5f,

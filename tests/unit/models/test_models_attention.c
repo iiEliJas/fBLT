@@ -55,8 +55,22 @@ int run_attention_model_tests(void) {
     config.num_heads = 2;
     config.head_dim = 2;
     config.is_causal = false;
+    config.use_rope = false;
 
     blt_multihead_attention(&input, &weight_qkv, &weight_proj, &output, &config, attention_arena);
+
+    remove("build/rope_cache.bin");
+    blt_attention_config rope_config = config;
+    rope_config.use_rope = true;
+    rope_config.rope_theta = 10000.0f;
+
+    blt_tensor rope_output = blt_tensor_create(arena, output_shape, 2, BLT_DTYPE_FP32);
+    blt_tensor rope_output_repeat = blt_tensor_create(arena, output_shape, 2, BLT_DTYPE_FP32);
+
+    blt_multihead_attention(&input, &weight_qkv, &weight_proj, &rope_output, &rope_config, attention_arena);
+    blt_multihead_attention(&input, &weight_qkv, &weight_proj, &rope_output_repeat, &rope_config, attention_arena);
+
+    TEST_ASSERT_CLOSE(&rope_output, &rope_output_repeat, 1e-4f);
 
     float* expected_data = (float*)expected.data;
     const float expected_values[] = {

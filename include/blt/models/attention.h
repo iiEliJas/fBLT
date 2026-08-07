@@ -10,14 +10,17 @@ typedef struct {
     size_t num_heads;    // Number of attention heads
     size_t head_dim;     // Dimension per head (embed_dim / num_heads)
     bool is_causal;      // apply masking matrix
+    bool use_rope;       // use rotary position embedding
+    float rope_theta;    // base for rotary position embedding (500000.0f)
 } blt_attention_config;
 
 // Computes Multi-Head Self-Attention
+// RoPE tables are precomputed internally from the attention config when enabled.
 void blt_multihead_attention(
-    const blt_tensor* input, 
-    const blt_tensor* weight_qkv, 
-    const blt_tensor* weight_proj, 
-    blt_tensor* output, 
+    const blt_tensor* input,
+    const blt_tensor* weight_qkv,
+    const blt_tensor* weight_proj,
+    blt_tensor* output,
     const blt_attention_config* config,
     blt_arena* arena
 );

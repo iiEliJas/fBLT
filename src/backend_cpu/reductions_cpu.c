@@ -2,6 +2,7 @@
 #include "blt/ops/softmax.h"
 #include "blt/ops/layernorm.h"
 #include "blt/ops/rmsnorm.h"
+#include "blt/ops/rope.h"
 
 #include <math.h>
 
@@ -43,6 +44,59 @@ void blt_softmax_cpu(const blt_tensor* in, blt_tensor* out) {
 
         for (size_t i = 0; i < last_dim; ++i) {
             out_data[base + i] /= sum;
+        }
+    }
+}
+
+
+
+//----------------------------------------------------------------
+// RoPE (Rotary Position Embedding)
+
+void blt_rope_precompute_cpu(size_t max_seq_len, const blt_rope_config* config,
+                          blt_tensor* cos_out, blt_tensor* sin_out) {
+    BLT_REQUIRE(config->head_dim % 2 == 0, "rope: head_dim must be even");
+    size_t half = config->head_dim / 2;
+    blt_check_2d_fp32(cos_out, max_seq_len, half, "rope cos_out");
+    blt_check_2d_fp32(sin_out, max_seq_len, half, "rope sin_out");
+
+    float* cos_data = (float*)cos_out->data;
+    float* sin_data = (float*)sin_out->data;
+
+    for (size_t pos = 0; pos < max_seq_len; pos++) {
+        for (size_t i = 0; i < half; i++) {
+            float freq = 1.0f / powf(config->theta, (float)(2 * i) / (float)config->head_dim);
+            float angle = (float)pos * freq;
+            cos_data[pos * half + i] = cosf(angle);
+            sin_data[pos * half + i] = sinf(angle);
+        }
+    }
+}
+
+void blt_rope_apply_cpu(const blt_tensor* x, const blt_tensor* cos, const blt_tensor* sin, blt_tensor* out) {
+    BLT_REQUIRE(x->ndim == 3, "rope: x must be [seq_len, num_heads, head_dim]");
+    size_t seq_len = x->shape[0];
+    size_t num_heads = x->shape[1];
+    size_t head_dim = x->shape[2];
+    size_t half = head_dim / 2;
+
+    const float* xd = (const float*)x->data;
+    const float* cd = (const float*)cos->data;
+    const float* sd = (const float*)sin->data;
+    float* od = (float*)out->data;
+
+    for (size_t t = 0; t < seq_len; t++) {
+        for (size_t h = 0; h < num_heads; h++) {
+            const float* xv = xd + (t * num_heads + h) * head_dim;
+            float* ov = od + (t * num_heads + h) * head_dim;
+            const float* c = cd + t * half;
+            const float* s = sd + t * half;
+            for (size_t i = 0; i < half; i++) {
+                float x0 = xv[2 * i];
+                float x1 = xv[2 * i + 1];
+                ov[2 * i]     = x0 * c[i] - x1 * s[i];
+                ov[2 * i + 1] = x1 * c[i] + x0 * s[i];
+            }
         }
     }
 }

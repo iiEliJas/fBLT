@@ -174,6 +174,12 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
   - Input: input tensor and output tensor.
   - Output: writes the softmax result into `out`.
 
+### blt/ops/rope.h
+- `blt_rope_precompute(size_t max_seq_len, const blt_rope_config* config, blt_tensor* cos_out, blt_tensor* sin_out)`
+  - Input: maximum sequence length, rope configuration, and output tensors for cosine and sine.
+  - Output: writes the precomputed sin and cos into cos_out, sin_out
+  - Behaviour: Precomputes cos/sin tables for positions [0, max_seq_len) and head_dim/2 frequency bands
+
 ### blt/ops/layernorm.h
 - `blt_layernorm_forward(x, weight, bias, out, eps)`
   - Input: 2D input tensor `[seq_len, embed_dim]`, per-channel weight and bias tensors of length `embed_dim`, output tensor, and epsilon.
@@ -276,13 +282,13 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
 - `blt_gelu_backward(grad_out, x, grad_x)`
   - Not yet implemented.
 
-### src/backend_cpu/matmul_cpu.c
+### src/backend_cpu/linalg_cpu.c
 - `blt_matmul_cpu(a, b, out)`
   - Input: two 2D FP32 tensors and an FP32 output tensor.
   - Output: writes a matrix multiplication result into `out`.
   - Requires: `a.shape[1] == b.shape[0]` and `out` shape must match the product dimensions.
 
-### src/backend_cpu/softmax_cpu.c
+### src/backend_cpu/reductions_cpu.c
 - `blt_softmax_cpu(in, out)`
   - Input: FP32 input tensor and FP32 output tensor with matching element count.
   - Output: writes the softmax values into `out`.

@@ -52,7 +52,26 @@ def softmax_last_axis(x: np.ndarray) -> np.ndarray:
     return e / np.sum(e, axis=-1, keepdims=True)
 
 
-def multihead_attention(x, w_qkv, w_proj, num_heads, is_causal):
+def apply_rope(xh, seq_len, head_dim, theta=10000.0):
+    half = head_dim // 2
+    positions = np.arange(seq_len)[:, None]
+    freqs = 1.0 / (theta ** ((2 * np.arange(half))[None, :] / head_dim))
+    angles = positions * freqs
+    cos = np.cos(angles)
+    sin = np.sin(angles)
+
+    x_even = xh[:, :, 0::2]
+    x_odd = xh[:, :, 1::2]
+    rotated_even = x_even * cos[None, :, :] - x_odd * sin[None, :, :]
+    rotated_odd = x_odd * cos[None, :, :] + x_even * sin[None, :, :]
+
+    rotated = np.empty_like(xh)
+    rotated[:, :, 0::2] = rotated_even
+    rotated[:, :, 1::2] = rotated_odd
+    return rotated
+
+
+def multihead_attention(x, w_qkv, w_proj, num_heads, is_causal, use_rope=False, rope_theta=10000.0):
     """
     x:      [seq_len, embed_dim]
     w_qkv:  [embed_dim, 3*embed_dim]
@@ -69,6 +88,10 @@ def multihead_attention(x, w_qkv, w_proj, num_heads, is_causal):
         return t.reshape(seq_len, num_heads, head_dim).transpose(1, 0, 2)  # [heads, seq_len, head_dim]
 
     qh, kh, vh = split_heads(q), split_heads(k), split_heads(v)
+
+    if use_rope:
+        qh = apply_rope(qh, seq_len, head_dim, rope_theta)
+        kh = apply_rope(kh, seq_len, head_dim, rope_theta)
 
     scale = 1.0 / np.sqrt(head_dim)
     scores = np.einsum("hqd,hkd->hqk", qh, kh) * scale  # [heads, seq_len, seq_len]
@@ -91,9 +114,9 @@ def layer_norm(x, weight, bias, eps):
     return normed * weight + bias
 
 
-def transformer_block(x, weights, num_heads, is_causal, eps):
+def transformer_block(x, weights, num_heads, is_causal, eps, use_rope=False, rope_theta=10000.0):
     norm1 = layer_norm(x, weights["norm1_weight"], weights["norm1_bias"], eps)
-    attn_out = multihead_attention(norm1, weights["attn_qkv_w"], weights["attn_proj_w"], num_heads, is_causal)
+    attn_out = multihead_attention(norm1, weights["attn_qkv_w"], weights["attn_proj_w"], num_heads, is_causal, use_rope=use_rope, rope_theta=rope_theta)
     attn_residual = x + attn_out
 
     norm2 = layer_norm(attn_residual, weights["norm2_weight"], weights["norm2_bias"], eps)
@@ -111,6 +134,7 @@ def transformer_block(x, weights, num_heads, is_causal, eps):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--outdir", default="data")
+    parser.add_argument("--use-rope", action="store_true", help="Enable RoPE in the reference math")
     args = parser.parse_args()
 
     os.makedirs(args.outdir, exist_ok=True)
@@ -126,7 +150,7 @@ def main():
     attn_qkv_w = randn(EMBED_DIM, 3 * EMBED_DIM)
     attn_proj_w = randn(EMBED_DIM, EMBED_DIM)
 
-    attn_expected = multihead_attention(attn_input, attn_qkv_w, attn_proj_w, NUM_HEADS, is_causal=True)
+    attn_expected = multihead_attention(attn_input, attn_qkv_w, attn_proj_w, NUM_HEADS, is_causal=True, use_rope=args.use_rope)
 
     write_tensor(os.path.join(args.outdir, "phase2_attn_input.bin"), attn_input)
     write_tensor(os.path.join(args.outdir, "phase2_attn_qkv_w.bin"), attn_qkv_w)
@@ -148,7 +172,7 @@ def main():
         "ffn_down_w": randn(HIDDEN_DIM, EMBED_DIM),
     }
 
-    block_expected = transformer_block(block_input, block_weights, NUM_HEADS, is_causal=True, eps=LAYER_NORM_EPS)
+    block_expected = transformer_block(block_input, block_weights, NUM_HEADS, is_causal=True, eps=LAYER_NORM_EPS, use_rope=args.use_rope)
 
     write_tensor(os.path.join(args.outdir, "phase2_block_input.bin"), block_input)
     write_tensor(os.path.join(args.outdir, "phase2_block_norm1_weight.bin"), block_weights["norm1_weight"])
