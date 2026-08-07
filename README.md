@@ -7,8 +7,8 @@ A minimal C/CUDA implementation of a byte-level, tokenizer-free language model.
 
 This project implements the architecture described in two Meta papers:
 
-* **Byte Latent Transformer (BLT)**
-* **Fast-BLT**
+* [Byte Latent Transformer (BLT)](https://arxiv.org/abs/2412.09871)
+* [Fast-BLT](https://arxiv.org/abs/2605.08044)
 
 It is designed primarily for byte-level code completion and small general LLM use cases.
 

@@ -20,7 +20,8 @@ SRCS := \
     $(wildcard $(TESTS_DIR)/unit/*/*.c) \
     $(TESTS_DIR)/test_helpers.c \
     $(TESTS_DIR)/test_main.c \
-    $(TESTS_DIR)/test_phase1.c
+    $(TESTS_DIR)/integration/test_backend.c \
+    $(TESTS_DIR)/integration/test_transformer.c
 
 all: $(BUILD_DIR)/test_main
 

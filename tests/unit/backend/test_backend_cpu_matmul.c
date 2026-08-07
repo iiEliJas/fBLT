@@ -38,3 +38,29 @@ int run_matmul_backend_tests(void) {
     blt_arena_destroy(arena);
     return 1;
 }
+
+
+
+int run_matmul_test(void) {
+    blt_arena* arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
+    blt_tensor a = {0};
+    blt_tensor b = {0};
+    blt_tensor out = {0};
+    blt_tensor expected = {0};
+
+    int ok = 0;
+    if (!load_binary_tensor("data/golden_matmul_a.bin", arena, &a) ||
+        !load_binary_tensor("data/golden_matmul_b.bin", arena, &b) ||
+        !load_binary_tensor("data/golden_matmul_out.bin", arena, &expected)) {
+        blt_arena_destroy(arena);
+        return ok;
+    }
+
+    size_t out_shape[2] = {a.shape[0], b.shape[1]};
+    out = blt_tensor_create(arena, out_shape, 2, BLT_DTYPE_FP32);
+    blt_matmul(&a, &b, &out);
+    ok = check_close(&out, &expected, 1e-4f);
+
+    blt_arena_destroy(arena);
+    return ok;
+}
