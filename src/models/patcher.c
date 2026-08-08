@@ -7,12 +7,8 @@
     It also tracks the peak entropy value for each patch
 */
 size_t blt_segment_patches(const blt_tensor* entropy, blt_patch_info* patches_out, size_t max_patches, const blt_entropy_config* config){
-    if(entropy->ndim != 1){
-        BLT_FATAL("Entropy tensor must be 1D");
-    }
-    if(entropy->numel == 0){
-        BLT_FATAL("Entropy tensor is empty");
-    }
+    blt_check_nd_fp32(entropy, 1, (const size_t[]){0}, "Entropy tensor must be 1D");
+    BLT_REQUIRE(entropy->numel != 0, "Entropy tensor must not be empty");
 
     size_t seq_len = entropy->numel;
     size_t patch_count = 0;

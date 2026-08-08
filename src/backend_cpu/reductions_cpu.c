@@ -12,12 +12,8 @@
 // Softmax
 
 void blt_softmax_cpu(const blt_tensor* in, blt_tensor* out) {
-    if (in->dtype != BLT_DTYPE_FP32 || out->dtype != BLT_DTYPE_FP32) {
-        BLT_FATAL("softmax only supports FP32 tensors");
-    }
-    if (in->numel != out->numel) {
-        BLT_FATAL("softmax input/output numel mismatch");
-    }
+    BLT_REQUIRE(in->dtype == BLT_DTYPE_FP32 && out->dtype == BLT_DTYPE_FP32, "softmax only supports FP32 tensors");
+    BLT_REQUIRE(in->numel == out->numel, "softmax input/output numel mismatch");
 
     const float* in_data = (const float*)in->data;
     float* out_data = (float*)out->data;
@@ -57,8 +53,8 @@ void blt_rope_precompute_cpu(size_t max_seq_len, const blt_rope_config* config,
                           blt_tensor* cos_out, blt_tensor* sin_out) {
     BLT_REQUIRE(config->head_dim % 2 == 0, "rope: head_dim must be even");
     size_t half = config->head_dim / 2;
-    blt_check_2d_fp32(cos_out, max_seq_len, half, "rope cos_out");
-    blt_check_2d_fp32(sin_out, max_seq_len, half, "rope sin_out");
+    blt_check_nd_fp32(cos_out, 2, (const size_t[]){max_seq_len, half}, "rope cos_out");
+    blt_check_nd_fp32(sin_out, 2, (const size_t[]){max_seq_len, half}, "rope sin_out");
 
     float* cos_data = (float*)cos_out->data;
     float* sin_data = (float*)sin_out->data;
@@ -74,7 +70,11 @@ void blt_rope_precompute_cpu(size_t max_seq_len, const blt_rope_config* config,
 }
 
 void blt_rope_apply_cpu(const blt_tensor* x, const blt_tensor* cos, const blt_tensor* sin, blt_tensor* out) {
-    BLT_REQUIRE(x->ndim == 3, "rope: x must be [seq_len, num_heads, head_dim]");
+    blt_check_nd_fp32(x, 3, (const size_t[]){0, 0, 0}, "rope: x must be 3D FP32");
+    blt_check_nd_fp32(cos, 2, (const size_t[]){x->shape[0], x->shape[2] / 2}, "rope: cos shape mismatch");
+    blt_check_nd_fp32(sin, 2, (const size_t[]){x->shape[0], x->shape[2] / 2}, "rope: sin shape mismatch");
+    blt_check_nd_fp32(out, 3, (const size_t[]){x->shape[0], x->shape[1], x->shape[2]}, "rope: out shape mismatch");
+
     size_t seq_len = x->shape[0];
     size_t num_heads = x->shape[1];
     size_t head_dim = x->shape[2];
@@ -108,13 +108,13 @@ void blt_rope_apply_cpu(const blt_tensor* x, const blt_tensor* cos, const blt_te
 
 void blt_layernorm_forward_cpu(const blt_tensor* x, const blt_tensor* weight, const blt_tensor* bias,
                                 blt_tensor* out, float eps) {
-    blt_check_2d_fp32(x, 0, 0, "LayerNorm: input must be 2D FP32");
+    blt_check_nd_fp32(x, 2, (const size_t[]){0, 0}, "LayerNorm: input must be 2D FP32");
     size_t seq_len = x->shape[0];
     size_t embed_dim = x->shape[1];
  
-    blt_check_1d_fp32(weight, embed_dim, "LayerNorm: weight must be [embed_dim] FP32");
-    blt_check_1d_fp32(bias, embed_dim, "LayerNorm: bias must be [embed_dim] FP32");
-    blt_check_2d_fp32(out, seq_len, embed_dim, "LayerNorm: output shape/dtype mismatch");
+    blt_check_nd_fp32(weight, 1, (const size_t[]){embed_dim}, "LayerNorm: weight must be [embed_dim] FP32");
+    blt_check_nd_fp32(bias, 1, (const size_t[]){embed_dim}, "LayerNorm: bias must be [embed_dim] FP32");
+    blt_check_nd_fp32(out, 2, (const size_t[]){seq_len, embed_dim}, "LayerNorm: output shape/dtype mismatch");
     BLT_REQUIRE(eps >= 1e-12f, "LayerNorm: eps is too small");
  
     const float* in = (const float*)x->data;
@@ -159,12 +159,12 @@ void blt_layernorm_backward_cpu(const blt_tensor* grad_out, const blt_tensor* x,
 #define BLT_RMSNORM_EPS 1e-6f
  
 void blt_rmsnorm_forward_cpu(const blt_tensor* x, const blt_tensor* weight, blt_tensor* out) {
-    blt_check_2d_fp32(x, 0, 0, "RMSNorm: input must be 2D FP32");
+    blt_check_nd_fp32(x, 2, (const size_t[]){0, 0}, "RMSNorm: input must be 2D FP32");
     size_t seq_len = x->shape[0];
     size_t embed_dim = x->shape[1];
  
-    blt_check_1d_fp32(weight, embed_dim, "RMSNorm: weight must be [embed_dim] FP32");
-    blt_check_2d_fp32(out, seq_len, embed_dim, "RMSNorm: output shape/dtype mismatch");
+    blt_check_nd_fp32(weight, 1, (const size_t[]){embed_dim}, "RMSNorm: weight must be [embed_dim] FP32");
+    blt_check_nd_fp32(out, 2, (const size_t[]){seq_len, embed_dim}, "RMSNorm: output shape/dtype mismatch");
  
     const float* in = (const float*)x->data;
     const float* w = (const float*)weight->data;

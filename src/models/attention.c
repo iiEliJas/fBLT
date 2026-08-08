@@ -29,14 +29,14 @@ static void validate_attention_call(
     BLT_REQUIRE(num_heads != 0 && embed_dim % num_heads == 0,
                 "blt_multihead_attention: embed_dim must be divisible by num_heads");
  
-    blt_check_2d_fp32(input, 0, embed_dim, "blt_multihead_attention: input must be [seq_len, embed_dim] FP32");
+    blt_check_nd_fp32(input, 2, (const size_t[]){0, embed_dim}, "blt_multihead_attention: input must be [seq_len, embed_dim] FP32");
     size_t seq_len = input->shape[0];
  
-    blt_check_2d_fp32(weight_qkv, embed_dim, 3 * embed_dim,
+    blt_check_nd_fp32(weight_qkv, 2, (const size_t[]){embed_dim, 3 * embed_dim},
                        "blt_multihead_attention: weight_qkv must be [embed_dim, 3*embed_dim] FP32");
-    blt_check_2d_fp32(weight_proj, embed_dim, embed_dim,
+    blt_check_nd_fp32(weight_proj, 2, (const size_t[]){embed_dim, embed_dim},
                        "blt_multihead_attention: weight_proj must be [embed_dim, embed_dim] FP32");
-    blt_check_2d_fp32(output, seq_len, embed_dim,
+    blt_check_nd_fp32(output, 2, (const size_t[]){seq_len, embed_dim},
                        "blt_multihead_attention: output must be [seq_len, embed_dim] FP32");
  
     size_t head_dim = (config->head_dim != 0) ? config->head_dim : (embed_dim / num_heads);
@@ -217,9 +217,9 @@ void blt_multihead_attention(const blt_tensor* input, const blt_tensor* weight_q
         bool have_cache = (config->rope_cos_cache != NULL && config->rope_sin_cache != NULL);
  
         if (have_cache) {
-            blt_check_2d_fp32(config->rope_cos_cache, seq_len, half,
+            blt_check_nd_fp32(config->rope_cos_cache, 2, (const size_t[]){seq_len, half},
                                "blt_multihead_attention: rope_cos_cache must be [seq_len, head_dim/2] FP32");
-            blt_check_2d_fp32(config->rope_sin_cache, seq_len, half,
+            blt_check_nd_fp32(config->rope_sin_cache, 2, (const size_t[]){seq_len, half},
                                "blt_multihead_attention: rope_sin_cache must be [seq_len, head_dim/2] FP32");
             rope_cos_t = config->rope_cos_cache;
             rope_sin_t = config->rope_sin_cache;

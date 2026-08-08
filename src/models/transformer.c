@@ -6,7 +6,7 @@
 #include "blt/ops/swiglu.h"
 #include "blt/ops/layernorm.h"
 #include "blt/ops/rmsnorm.h"
- 
+#include "blt/ops/rope.h"
 
 
 //--------------------------------
@@ -24,18 +24,18 @@ static void validate_transformer_call(
     BLT_REQUIRE(w != NULL, "Transformer: weights cannot be NULL");
     BLT_REQUIRE(config != NULL, "Transformer: config cannot be NULL");
  
-    blt_check_2d_fp32(input, 0, 0, "Transformer: input must be 2D [seq_len, embed_dim] FP32");
+    blt_check_nd_fp32(input, 2, (const size_t[]){0, 0}, "Transformer: input must be 2D [seq_len, embed_dim] FP32");
     size_t seq_len = input->shape[0];
     size_t embed_dim = input->shape[1];
  
-    blt_check_2d_fp32(output, seq_len, embed_dim, "Transformer: output shape must match input [seq_len, embed_dim]");
+    blt_check_nd_fp32(output, 2, (const size_t[]){seq_len, embed_dim}, "Transformer: output shape must match input [seq_len, embed_dim]");
  
-    blt_check_1d_fp32(w->norm1_weight, embed_dim, "Transformer: norm1_weight must be [embed_dim] FP32");
-    blt_check_1d_fp32(w->norm2_weight, embed_dim, "Transformer: norm2_weight must be [embed_dim] FP32");
+    blt_check_nd_fp32(w->norm1_weight, 1, (const size_t[]){embed_dim}, "Transformer: norm1_weight must be [embed_dim] FP32");
+    blt_check_nd_fp32(w->norm2_weight, 1, (const size_t[]){embed_dim}, "Transformer: norm2_weight must be [embed_dim] FP32");
  
     if (config->norm_type == BLT_NORM_LAYERNORM) {
-        blt_check_1d_fp32(w->norm1_bias, embed_dim, "Transformer: norm1_bias must be [embed_dim] FP32 for LayerNorm");
-        blt_check_1d_fp32(w->norm2_bias, embed_dim, "Transformer: norm2_bias must be [embed_dim] FP32 for LayerNorm");
+        blt_check_nd_fp32(w->norm1_bias, 1, (const size_t[]){embed_dim}, "Transformer: norm1_bias must be [embed_dim] FP32 for LayerNorm");
+        blt_check_nd_fp32(w->norm2_bias, 1, (const size_t[]){embed_dim}, "Transformer: norm2_bias must be [embed_dim] FP32 for LayerNorm");
         BLT_REQUIRE(config->layer_norm_eps >= 1e-12f, "Transformer: layer_norm_eps is too small");
     }
  
@@ -48,11 +48,12 @@ static void validate_transformer_call(
     BLT_REQUIRE(hidden_dim == config->hidden_dim, "Transformer: ffn_up_w hidden dimension mismatch with config");
  
     if (config->activation_type == BLT_ACTIVATION_SWIGLU) {
-        blt_check_2d_fp32(w->ffn_gate_w, embed_dim, hidden_dim,
+        blt_check_nd_fp32(w->ffn_gate_w, 2, (const size_t[]){embed_dim, hidden_dim},
                            "Transformer: ffn_gate_w must be [embed_dim, hidden_dim] FP32 for SwiGLU");
     }
  
-    blt_check_2d_fp32(w->ffn_down_w, hidden_dim, embed_dim, "Transformer: ffn_down_w must be [hidden_dim, embed_dim] FP32");
+    blt_check_nd_fp32(w->ffn_down_w, 2, (const size_t[]){hidden_dim, embed_dim}, 
+                            "Transformer: ffn_down_w must be [hidden_dim, embed_dim] FP32");
  
     *out_seq_len = seq_len;
     *out_embed_dim = embed_dim;

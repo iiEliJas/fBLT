@@ -2,18 +2,11 @@
 #include "blt/ops/matmul.h"
 
 void blt_matmul_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
-    if (a->ndim != 2 || b->ndim != 2 || out->ndim != 2) {
-        BLT_FATAL("matmul expects 2D tensors");
-    }
-    if (a->shape[1] != b->shape[0]) {
-        BLT_FATAL("matmul inner dimensions do not match");
-    }
-    if (out->shape[0] != a->shape[0] || out->shape[1] != b->shape[1]) {
-        BLT_FATAL("matmul output shape is incorrect");
-    }
-    if (a->dtype != BLT_DTYPE_FP32 || b->dtype != BLT_DTYPE_FP32 || out->dtype != BLT_DTYPE_FP32) {
-        BLT_FATAL("matmul only supports FP32 tensors");
-    }
+    blt_check_nd_fp32(a, 2, (const size_t[]){0, 0}, "matmul: input tensor a must be 2D FP32");
+    blt_check_nd_fp32(b, 2, (const size_t[]){0, 0}, "matmul: input tensor b must be 2D FP32");
+    blt_check_nd_fp32(out, 2, (const size_t[]){0, 0}, "matmul: output tensor must be 2D FP32");
+    BLT_REQUIRE(a->shape[1] == b->shape[0], "matmul inner dimensions do not match");
+    BLT_REQUIRE(out->shape[0] == a->shape[0] && out->shape[1] == b->shape[1], "matmul output shape is incorrect");
 
     const float* a_data = (const float*)a->data;
     const float* b_data = (const float*)b->data;

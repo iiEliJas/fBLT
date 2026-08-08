@@ -50,12 +50,9 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
 - `BLT_REQUIRE(cond, msg)` macro
   - Input: a condition and a message string
   - Behavior: checks the condition and does a BLT_FATAL call if cond is false.
-- `blt_check_2d_fp32(tensor, dim0, dim1, msg)`
-  - Input: blt_tensor to check and dimensions and message
-  - Behaviour: Validates a 2D FP32 tensor. Pass 0 for dim0/dim1 to skip that dimensions check.
-- `blt_check_1d_fp32(tensor, dim0, msg)`
-  - Input: blt_tensor to check and dimensions and message string
-  - Behaviour: Validates a 1D FP32 tensor of exact length dim0.
+- `blt_check_nd_fp32(tensor, ndim, dims, msg)`
+  - Input: blt_tensor to check, number of dimensions, dimension array, and message string
+  - Behaviour: Validates an N-dimensional FP32 tensor. Pass 0 for any dimension in `dims` to skip that dimension's check.
 - `blt_check_elementwise_fp32(a, b, msg)`
   - Input: two tensors and a message string
   - Behaviour: Validates that two tensors are FP32 and elementwise-compatible, regardless of rank
@@ -95,6 +92,10 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
     - `size_t num_heads`: number of attention heads.
     - `size_t head_dim`: dimension per head; if zero, it may be inferred from `embed_dim / num_heads`.
     - `bool is_causal`: whether causal masking should be applied.
+    - `bool use_rope`: use rotary position embedding
+    - `float rope_theta`: base for rotary position embedding
+    - `const blt_tensor* rope_cos_cache`: precomputed cos table for RoPE (optional)
+    - `const blt_tensor* rope_sin_cache`: precomputed sin table for RoPE (optional)
 - `blt_multihead_attention(input, weight_qkv, weight_proj, output, config, arena)`
   - Input: input sequence tensor, QKV projection weights, output projection weights, output tensor, and attention config.
   - Output: writes the multi-head self-attention result into `output`.
@@ -175,10 +176,18 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
   - Output: writes the softmax result into `out`.
 
 ### blt/ops/rope.h
+- `blt_rope_config` struct
+  - Fields:
+    - `float theta`: base for rotary position embedding (e.g., 500000.0f).
+    - `size_t head_dim`: dimension per attention head (must be even).
 - `blt_rope_precompute(size_t max_seq_len, const blt_rope_config* config, blt_tensor* cos_out, blt_tensor* sin_out)`
   - Input: maximum sequence length, rope configuration, and output tensors for cosine and sine.
   - Output: writes the precomputed sin and cos into cos_out, sin_out
   - Behaviour: Precomputes cos/sin tables for positions [0, max_seq_len) and head_dim/2 frequency bands
+- `blt_rope_apply(const blt_tensor* x, const blt_tensor* cos, const blt_tensor* sin, blt_tensor* out)`
+  - Input: input tensor x, precomputed cos and sin tables, and output tensor.
+  - Output: applies rotary embedding in place to x using the precomputed cos/sin tables.
+  - Behaviour: reads x [seq_len, num_heads, head_dim], writes rotated result into out (same shape)
 
 ### blt/ops/layernorm.h
 - `blt_layernorm_forward(x, weight, bias, out, eps)`

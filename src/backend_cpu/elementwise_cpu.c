@@ -6,17 +6,10 @@
 #include <string.h>
 #include <math.h>
 
-static void validate_same_shape_and_dtype(const blt_tensor* a, const blt_tensor* b, const blt_tensor* out) {
-    if (a->numel != b->numel || b->numel != out->numel) {
-        BLT_FATAL("elementwise tensors must have equal numel");
-    }
-    if (a->dtype != BLT_DTYPE_FP32 || b->dtype != BLT_DTYPE_FP32 || out->dtype != BLT_DTYPE_FP32) {
-        BLT_FATAL("elementwise ops only support FP32 tensors");
-    }
-}
 
 void blt_add_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
-    validate_same_shape_and_dtype(a, b, out);
+    blt_check_elementwise_fp32(a, b, "blt_add_cpu: input tensors must be FP32 with matching element count");
+    blt_check_elementwise_fp32(a, out, "blt_add_cpu: output tensor must be FP32 with matching element count");
     const float* a_data = (const float*)a->data;
     const float* b_data = (const float*)b->data;
     float* out_data = (float*)out->data;
@@ -27,7 +20,8 @@ void blt_add_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
 
 
 void blt_mul_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
-    validate_same_shape_and_dtype(a, b, out);
+    blt_check_elementwise_fp32(a, b, "blt_mul_cpu: input tensors must be FP32 with matching element count");
+    blt_check_elementwise_fp32(a, out, "blt_mul_cpu: output tensor must be FP32 with matching element count");
     const float* a_data = (const float*)a->data;
     const float* b_data = (const float*)b->data;
     float* out_data = (float*)out->data;
@@ -38,12 +32,8 @@ void blt_mul_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
 
 
 void blt_scale(blt_tensor* t, float scalar) {
-    if (t == NULL) {
-        BLT_FATAL("blt_scale: tensor must not be null");
-    }
-    if (t->dtype != BLT_DTYPE_FP32) {
-        BLT_FATAL("blt_scale: only supports FP32 tensors");
-    }
+    BLT_REQUIRE(t != NULL, "blt_scale: tensor must not be null");
+    BLT_REQUIRE(t->dtype == BLT_DTYPE_FP32, "blt_scale: only supports FP32 tensors");
  
     float* data = (float*)t->data;
     for (size_t i = 0; i < t->numel; ++i) {
