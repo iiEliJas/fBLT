@@ -84,6 +84,37 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
 ------------------------------------------------------------------------------------------------------------
 ## Model APIs
 
+### blt/models/entropy.h
+- `blt_entropy_config` struct
+  - Fields:
+    - `float threshold`: entropy threshold used to trigger a new patch.
+    - `size_t vocab_size`: size of the probability distribution vocabulary.
+    - `bool use_log2`: whether entropy should use base-2 logarithms.
+- `blt_compute_entropy(probs, entropy_out, config)`
+  - Input: 2D probability tensor and entropy output tensor.
+  - Output: writes per-row entropy values into `entropy_out`.
+
+### blt/models/patcher.h
+- `blt_patch_info` struct
+  - Fields:
+    - `size_t start_idx`: starting index of the patch in the entropy sequence.
+    - `size_t length`: number of elements in the patch.
+    - `float peak_entropy`: maximum entropy value observed in the patch.
+- `blt_segment_patches(entropy, patches_out, max_patches, config)`
+  - Input: 1D entropy tensor, output patch buffer, maximum patch count, and entropy config.
+  - Output: returns the number of produced patches and fills `patches_out` with patch metadata.
+
+## blt/models/byte_embedding.h
+- `blt_byte_embedding` struct
+  - Fields:
+    - `blt_tensor weight`: embedding table of shape `[256, embed_dim]` in FP32.
+    - `size_t embed_dim`: dimension of the embedding vectors.
+- `blt_byte_embedding_create(arena, embed_dim)`
+  - Input: arena for storage and embedding dimension.
+  - Output: allocated and zero-initialized embedding table; caller fills `weight->data`.
+- `blt_byte_embedding_forward(emb, bytes_in, out)`
+  - Input: embedding struct, 1D UINT8 tensor of raw byte values `[seq_len]`, and output tensor.
+  - Output: writes the corresponding 2D FP32 embeddings `[seq_len, embed_dim]` into `out`.
 
 ### blt/models/attention.h
 - `blt_attention_config` struct
@@ -129,26 +160,6 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
   - Input: input sequence tensor, transformer weights, output tensor, transformer config, and scratch arena.
   - Output: writes a single transformer block forward pass result into `output`.
   - Behavior: performs pre-norm self-attention with residual, followed by pre-norm FFN with residual. The `arena` is used for intermediate tensors and is not reset by the function.
-
-### blt/models/entropy.h
-- `blt_entropy_config` struct
-  - Fields:
-    - `float threshold`: entropy threshold used to trigger a new patch.
-    - `size_t vocab_size`: size of the probability distribution vocabulary.
-    - `bool use_log2`: whether entropy should use base-2 logarithms.
-- `blt_compute_entropy(probs, entropy_out, config)`
-  - Input: 2D probability tensor and entropy output tensor.
-  - Output: writes per-row entropy values into `entropy_out`.
-
-### blt/models/patcher.h
-- `blt_patch_info` struct
-  - Fields:
-    - `size_t start_idx`: starting index of the patch in the entropy sequence.
-    - `size_t length`: number of elements in the patch.
-    - `float peak_entropy`: maximum entropy value observed in the patch.
-- `blt_segment_patches(entropy, patches_out, max_patches, config)`
-  - Input: 1D entropy tensor, output patch buffer, maximum patch count, and entropy config.
-  - Output: returns the number of produced patches and fills `patches_out` with patch metadata.
 
 
 ------------------------------------------------------------------------------------------------------------
@@ -276,6 +287,17 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
   - Validates that the entropy input is 1D and non-empty.
   - Segments the sequence into patches when entropy values cross the configured threshold and records each patch's start, length, and peak entropy.
 
+### src/models/byte_embedding.c
+- `blt_byte_embedding_create(...)`
+  - Allocates a 2D FP32 tensor of shape `[256, embed_dim]` for the embedding table. 
+  - The initial values are zero; the caller is expected to fill in the weights.
+- `blt_byte_embedding_forward(...)`
+  - Validates that the input is a 1D UINT8 tensor and that the output has the correct shape `[seq_len, embed_dim]`.
+  - Performs a lookup for each byte value in the embedding table and writes the corresponding embedding vector into the output.
+  - No computation, just a gather.
+- `blt_byte_embedding_backward(...)`
+  - Backward pass for byte embedding. Scatter-adds `grad_out` rows into `grad_weight` at the row indexed by the corresponding input byte value. `grad_weight` must be zeroed by the caller before accumulating across a batch.
+
 ### src/backend_cpu/elementwise_cpu.c
 - `blt_add_cpu(a, b, out)`
   - Input: two FP32 tensors of equal element count and an FP32 output tensor.
@@ -283,8 +305,9 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
 - `blt_mul_cpu(a, b, out)`
   - Input: two FP32 tensors of equal element count and an FP32 output tensor.
   - Output: writes per-element multiplication into `out`.
-- `validate_same_shape_and_dtype(...)` (static helper)
-  - Checks that the operands and output have matching element counts and FP32 dtype.
+- `blt_scale_cpu(t, scalar)`
+  - Input: one FP32 tensor and a float scalar.
+  - Output: multiplies each element of t with the scalar.
 - `blt_gelu_forward(x, out)`
   - Behaviour: computes elementwise GELU (tanh approximation): out = 0.5*x*(1 + tanh(sqrt(2/pi) * (x + 0.044715*x^3))). 
   - x and out just need matching element count (any rank).

@@ -14,6 +14,7 @@ SRCS := \
     $(SRC_DIR)/backend_cpu/linalg_cpu.c \
     $(SRC_DIR)/backend_cpu/reductions_cpu.c \
     $(SRC_DIR)/models/entropy.c \
+    $(SRC_DIR)/models/byte_embedding.c \
     $(SRC_DIR)/models/patcher.c \
     $(SRC_DIR)/models/attention.c \
     $(SRC_DIR)/models/transformer.c \

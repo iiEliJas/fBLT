@@ -34,8 +34,9 @@ int main(void) {
         {"softmax backend", run_softmax_backend_tests},
         {"entropy model", run_entropy_model_tests},
         {"patcher model", run_patcher_model_tests},
-        {"phase1 parity", run_phase1_tests},
+        {"byte embedding model", run_byte_embedding_model_tests},
         {"attention model", run_attention_model_tests},
+        {"phase1 parity", run_phase1_tests},
         {"phase2 parity", run_phase2_tests},
     };
 

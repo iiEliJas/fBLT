@@ -12,6 +12,7 @@ int run_softmax_backend_tests(void);
 int run_softmax_test(void);
 
 int run_entropy_model_tests(void);
+int run_byte_embedding_model_tests(void);
 int run_patcher_model_tests(void);
 int run_attention_model_tests(void);
 
