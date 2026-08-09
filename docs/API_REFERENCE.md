@@ -1,7 +1,5 @@
 # FBLT API Reference
 
-This is a brief reference for the Phase 0 API surface in the include and src trees.
-
 ## Core types and constants
 
 ### blt/core/dtype.h
@@ -88,6 +86,102 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
   - Output: a zero-initialized tensor with allocated storage.
 
 
+
+------------------------------------------------------------------------------------------------------------
+## Operator APIs
+
+### blt/ops/elementwise.h
+- `blt_add(a, b, out)`
+  - Input: two input tensors and an output tensor.
+  - Output: writes elementwise `a + b` into `out`.
+- `blt_mul(a, b, out)`
+  - Input: two input tensors and an output tensor.
+  - Output: writes elementwise `a * b` into `out`.
+- `blt_scale(t, scalar)`
+  - Input: one tensor to modify and a scalar float.
+  - Output: multiplies each element of t with the scalar.
+
+### blt/ops/matmul.h
+- `blt_matmul(const blt_tensor* a, const blt_tensor* b, blt_tensor* out)`
+  - Input: two 2D input tensors and an output tensor.
+  - Output: writes the matrix product into `out`.
+- `blt_matmul_backward(const blt_tensor* a, const blt_tensor* b, const blt_tensor* grad_out, blt_tensor* grad_a, blt_tensor* grad_b)`
+  - Input: two 2D input tensors, gradient output, and output gradient tensors.
+  - Output: computes backward gradients for `a` and `b`.
+
+### blt/ops/softmax.h
+- `blt_softmax(in, out)`
+  - Input: input tensor and output tensor.
+  - Output: writes the softmax result into `out`.
+- `blt_softmax_backward(const blt_tensor* grad_out, const blt_tensor* softmax_out, blt_tensor* grad_in)`
+  - Input: gradient output, softmax output, and input gradient tensor.
+  - Output: writes the gradient respect to the input into `grad_in` using the chain rule.
+
+### blt/ops/cross_entropy.h
+- `blt_cross_entropy_forward(logits, targets, loss_out)`
+  - Input: `logits` [seq_len, vocab_size] FP32 (not normalized) and `targets` [seq_len] UINT8 or INT32 input tensors, `loss_out` output tensor
+  - Output: writes scalar mean cross-entropy over seq_len into loss_out
+- `blt_cross_entropy_backward(logits, targets, grad_logits)`
+  - Input: `logits`, `targets` input tensors and `grad_logits` as output tensor
+  - Output: Writes dL/dlogits into `grad_logits` [seq_len, vocab_size]
+
+### blt/ops/rope.h
+- `blt_rope_config` struct
+  - Fields:
+    - `float theta`: base for rotary position embedding (e.g., 500000.0f).
+    - `size_t head_dim`: dimension per attention head (must be even).
+- `blt_rope_precompute(size_t max_seq_len, const blt_rope_config* config, blt_tensor* cos_out, blt_tensor* sin_out)`
+  - Input: maximum sequence length, rope configuration, and output tensors for cosine and sine.
+  - Output: writes the precomputed sin and cos into cos_out, sin_out
+  - Behaviour: Precomputes cos/sin tables for positions [0, max_seq_len) and head_dim/2 frequency bands
+- `blt_rope_apply(const blt_tensor* x, const blt_tensor* cos, const blt_tensor* sin, blt_tensor* out)`
+  - Input: input tensor x, precomputed cos and sin tables, and output tensor.
+  - Output: applies rotary embedding in place to x using the precomputed cos/sin tables.
+  - Behaviour: reads x [seq_len, num_heads, head_dim], writes rotated result into out (same shape)
+- `blt_rope_apply_backward(const blt_tensor* grad_out, const blt_tensor* cos, const blt_tensor* sin, blt_tensor* grad_in)`
+  - Input: gradient output, precomputed cos and sin tables, and input gradient tensor.
+  - Output: computes the backward gradient for x using the chain rule and writes into grad_in.
+
+### blt/ops/layernorm.h
+- `blt_layernorm_forward(const blt_tensor* x, const blt_tensor* weight, const blt_tensor* bias, blt_tensor* out, float eps)`
+  - Input: 2D input tensor `[seq_len, embed_dim]`, per-channel weight and bias tensors of length `embed_dim`, output tensor, and epsilon.
+  - Output: writes row-wise layer normalization over the last dimension into `out`.
+- `blt_layernorm_backward(const blt_tensor* grad_out, const blt_tensor* x, const blt_tensor* weight, blt_tensor* grad_x, blt_tensor* grad_weight, blt_tensor* grad_bias, float eps))`
+  - Input: gradient respect to the output, original input, weight tensor, output gradient tensors, and epsilon.
+  - Output: computes backward gradients for `x`, `weight`, and `bias`.
+
+### blt/ops/rmsnorm.h
+- `blt_rmsnorm_forward(x, weight, out)`
+  - Input: 2D input tensor `[seq_len, embed_dim]`, per-channel weight tensor of length `embed_dim`, and output tensor.
+  - Output: writes row-wise RMS normalization into `out`.
+- `blt_rmsnorm_backward(grad_out, x, weight, grad_x, grad_weight)`
+  - Input: gradient w.r.t. output, original input, weight tensor, and output gradient tensors.
+  - Output: computes backward gradients for `x` and `weight`.
+
+### blt/ops/swiglu.h
+- `blt_swiglu_forward(gate, up, out)`
+  - Input: gate tensor, up tensor, and output tensor, all with matching element counts.
+  - Output: writes elementwise `silu(gate) * up` into `out`.
+- `blt_swiglu_backward(grad_out, gate, up, grad_gate, grad_up)`
+  - Input: gradient w.r.t. output, gate tensor, up tensor, and gradient output tensors.
+  - Output: computes backward gradients for `gate` and `up`.
+
+### blt/ops/vecmath.h
+- `blt_vec_dot(a, b, n)`
+  - Input: two input data floats and size_t n.
+  - Output: float dot product.
+  - Behavior: computes the dot product in length n.
+
+### blt/ops/gelu.h
+- `blt_gelu_forward(x, out)`
+  - Input: tensor input and tensor output.
+  - Output: writes elementwise gelu result into out.
+- `blt_gelu_backward(grad_out, x, grad_x)`
+  - Input: gradient respect to output, original input, and output gradient tensor.
+  - Output: computes backward gradient for `x` and writes into `grad_x`.
+
+
+
 ------------------------------------------------------------------------------------------------------------
 ## Model APIs
 
@@ -122,6 +216,9 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
 - `blt_byte_embedding_forward(emb, bytes_in, out)`
   - Input: embedding struct, 1D UINT8 tensor of raw byte values `[seq_len]`, and output tensor.
   - Output: writes the corresponding 2D FP32 embeddings `[seq_len, embed_dim]` into `out`.
+- `blt_byte_embedding_backward(emb, bytes_in, grad_out, grad_weight)`
+  - Input: embedding struct, 1D UINT8 tensor of raw byte values `[seq_len]`, gradient output tensor, and gradient weight tensor.
+  - Output: scatter-adds `grad_out` rows into `grad_weight` at the row indexed by the corresponding input byte value. `grad_weight` must be zeroed by the caller before accumulating across a batch.
 
 ### blt/models/attention.h
 - `blt_attention_config` struct
@@ -137,6 +234,9 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
 - `blt_multihead_attention(input, weight_qkv, weight_proj, output, config, arena)`
   - Input: input sequence tensor, QKV projection weights, output projection weights, output tensor, and attention config.
   - Output: writes the multi-head self-attention result into `output`.
+- `blt_multihead_attention_backward(input, weight_qkv, weight_proj, grad_out, grad_input, grad_weight_qkv, grad_weight_proj, config, arena)`
+  - Input: input sequence tensor, QKV projection weights, output projection weights, gradient output tensor, gradient input tensor, gradient QKV weights tensor, gradient output projection weights tensor, and attention config.
+  - Output: computes backward gradients for the attention block and writes into the provided gradient tensors.
 
 ### blt/models/transformer.h
 - `blt_norm_type` enum
@@ -167,90 +267,11 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
   - Input: input sequence tensor, transformer weights, output tensor, transformer config, and scratch arena.
   - Output: writes a single transformer block forward pass result into `output`.
   - Behavior: performs pre-norm self-attention with residual, followed by pre-norm FFN with residual. The `arena` is used for intermediate tensors and is not reset by the function.
+  
 
 
 ------------------------------------------------------------------------------------------------------------
-## Operator APIs
-
-### blt/ops/elementwise.h
-- `blt_add(a, b, out)`
-  - Input: two input tensors and an output tensor.
-  - Output: writes elementwise `a + b` into `out`.
-- `blt_mul(a, b, out)`
-  - Input: two input tensors and an output tensor.
-  - Output: writes elementwise `a * b` into `out`.
-- `blt_scale(t, scalar)`
-  - Input: one tensor to modify and a scalar float.
-  - Output: multiplies each element of t with the scalar.
-
-### blt/ops/matmul.h
-- `blt_matmul(const blt_tensor* a, const blt_tensor* b, blt_tensor* out)`
-  - Input: two 2D input tensors and an output tensor.
-  - Output: writes the matrix product into `out`.
-- `blt_matmul_backward(const blt_tensor* a, const blt_tensor* b, const blt_tensor* grad_out, blt_tensor* grad_a, blt_tensor* grad_b)`
-  - Input: two 2D input tensors, gradient output, and output gradient tensors.
-  - Output: computes backward gradients for `a` and `b`.
-
-### blt/ops/softmax.h
-- `blt_softmax(in, out)`
-  - Input: input tensor and output tensor.
-  - Output: writes the softmax result into `out`.
-
-### blt/ops/rope.h
-- `blt_rope_config` struct
-  - Fields:
-    - `float theta`: base for rotary position embedding (e.g., 500000.0f).
-    - `size_t head_dim`: dimension per attention head (must be even).
-- `blt_rope_precompute(size_t max_seq_len, const blt_rope_config* config, blt_tensor* cos_out, blt_tensor* sin_out)`
-  - Input: maximum sequence length, rope configuration, and output tensors for cosine and sine.
-  - Output: writes the precomputed sin and cos into cos_out, sin_out
-  - Behaviour: Precomputes cos/sin tables for positions [0, max_seq_len) and head_dim/2 frequency bands
-- `blt_rope_apply(const blt_tensor* x, const blt_tensor* cos, const blt_tensor* sin, blt_tensor* out)`
-  - Input: input tensor x, precomputed cos and sin tables, and output tensor.
-  - Output: applies rotary embedding in place to x using the precomputed cos/sin tables.
-  - Behaviour: reads x [seq_len, num_heads, head_dim], writes rotated result into out (same shape)
-
-### blt/ops/layernorm.h
-- `blt_layernorm_forward(x, weight, bias, out, eps)`
-  - Input: 2D input tensor `[seq_len, embed_dim]`, per-channel weight and bias tensors of length `embed_dim`, output tensor, and epsilon.
-  - Output: writes row-wise layer normalization over the last dimension into `out`.
-- `blt_layernorm_backward(grad_out, x, weight, grad_x, grad_weight, grad_bias, eps)`
-  - Input: gradient w.r.t. output, original input, weight tensor, output gradient tensors, and epsilon.
-  - Output: computes backward gradients for `x`, `weight`, and `bias`.
-
-### blt/ops/rmsnorm.h
-- `blt_rmsnorm_forward(x, weight, out)`
-  - Input: 2D input tensor `[seq_len, embed_dim]`, per-channel weight tensor of length `embed_dim`, and output tensor.
-  - Output: writes row-wise RMS normalization into `out`.
-- `blt_rmsnorm_backward(grad_out, x, weight, grad_x, grad_weight)`
-  - Input: gradient w.r.t. output, original input, weight tensor, and output gradient tensors.
-  - Output: computes backward gradients for `x` and `weight`.
-
-### blt/ops/swiglu.h
-- `blt_swiglu_forward(gate, up, out)`
-  - Input: gate tensor, up tensor, and output tensor, all with matching element counts.
-  - Output: writes elementwise `silu(gate) * up` into `out`.
-- `blt_swiglu_backward(grad_out, gate, up, grad_gate, grad_up)`
-  - Input: gradient w.r.t. output, gate tensor, up tensor, and gradient output tensors.
-  - Output: computes backward gradients for `gate` and `up`.
-
-### blt/ops/vecmath.h
-- `blt_vec_dot(a, b, n)`
-  - Input: two input data floats and size_t n.
-  - Output: float dot product.
-  - Behavior: computes the dot product in length n.
-
-### blt/ops/gelu.h
-- `blt_gelu_forward(x, out)`
-  - Input: tensor input and tensor output.
-  - Output: writes elementwise gelu result into out.
-- `blt_gelu_backward(grad_out, x, grad_x)`
-  - Not yet implemented.
-
-
-
-------------------------------------------------------------------------------------------------------------
-## Implementations
+## Core Implementations
 
 ### src/core/allocator.c
 - `blt_arena_create(...)`
@@ -281,57 +302,3 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
   - Dispatches to the CPU matmul implementation; raises a fatal error for CUDA unless CUDA support is enabled.
 - `blt_softmax(...)`
   - Dispatches to the CPU softmax implementation; raises a fatal error for CUDA unless CUDA support is enabled.
-
-### src/models/attention.c
-- `blt_multihead_attention(...)`
-  - Validates tensor dtypes, ranks, shapes, and config values.
-  - Builds a QKV projection, computes attention scores with optional causal masking, and applies the output projection.
-
-### src/models/entropy.c
-- `blt_compute_entropy(...)`
-  - Validates that the input is a 2D probability tensor and that the output matches the expected row count.
-  - Computes entropy per probability distribution using either `log2` or `ln` based on the config.
-
-### src/models/patcher.c
-- `blt_segment_patches(...)`
-  - Validates that the entropy input is 1D and non-empty.
-  - Segments the sequence into patches when entropy values cross the configured threshold and records each patch's start, length, and peak entropy.
-
-### src/models/byte_embedding.c
-- `blt_byte_embedding_create(...)`
-  - Allocates a 2D FP32 tensor of shape `[256, embed_dim]` for the embedding table. 
-  - The initial values are zero; the caller is expected to fill in the weights.
-- `blt_byte_embedding_forward(...)`
-  - Validates that the input is a 1D UINT8 tensor and that the output has the correct shape `[seq_len, embed_dim]`.
-  - Performs a lookup for each byte value in the embedding table and writes the corresponding embedding vector into the output.
-  - No computation, just a gather.
-- `blt_byte_embedding_backward(...)`
-  - Backward pass for byte embedding. Scatter-adds `grad_out` rows into `grad_weight` at the row indexed by the corresponding input byte value. `grad_weight` must be zeroed by the caller before accumulating across a batch.
-
-### src/backend_cpu/elementwise_cpu.c
-- `blt_add_cpu(a, b, out)`
-  - Input: two FP32 tensors of equal element count and an FP32 output tensor.
-  - Output: writes per-element addition into `out`.
-- `blt_mul_cpu(a, b, out)`
-  - Input: two FP32 tensors of equal element count and an FP32 output tensor.
-  - Output: writes per-element multiplication into `out`.
-- `blt_scale_cpu(t, scalar)`
-  - Input: one FP32 tensor and a float scalar.
-  - Output: multiplies each element of t with the scalar.
-- `blt_gelu_forward(x, out)`
-  - Behaviour: computes elementwise GELU (tanh approximation): out = 0.5*x*(1 + tanh(sqrt(2/pi) * (x + 0.044715*x^3))). 
-  - x and out just need matching element count (any rank).
-- `blt_gelu_backward(grad_out, x, grad_x)`
-  - Not yet implemented.
-
-### src/backend_cpu/linalg_cpu.c
-- `blt_matmul_cpu(a, b, out)`
-  - Input: two 2D FP32 tensors and an FP32 output tensor.
-  - Output: writes a matrix multiplication result into `out`.
-  - Requires: `a.shape[1] == b.shape[0]` and `out` shape must match the product dimensions.
-
-### src/backend_cpu/reductions_cpu.c
-- `blt_softmax_cpu(in, out)`
-  - Input: FP32 input tensor and FP32 output tensor with matching element count.
-  - Output: writes the softmax values into `out`.
-  - Behavior: computes softmax across the last dimension of the tensor.

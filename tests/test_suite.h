@@ -12,6 +12,7 @@ int run_matmul_test(void);
 int run_matmul_backward_backend_tests(void);
 int run_softmax_backend_tests(void);
 int run_softmax_test(void);
+int run_cross_entropy_tests(void);
 int run_rope_backend_test(void);
 
 int run_entropy_model_tests(void);

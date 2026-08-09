@@ -8,6 +8,7 @@
 #include "blt/ops/vecmath.h"
 #include "blt/ops/gelu.h"
 #include "blt/ops/swiglu.h"
+#include "blt/ops/cross_entropy.h"
 #include "blt/core/tensor.h"
 
 
@@ -31,6 +32,8 @@ void blt_matmul_backward_cpu(const blt_tensor* a, const blt_tensor* b, const blt
 // reduction ops
 void blt_softmax_cpu(const blt_tensor* in, blt_tensor* out);
 void blt_softmax_backward_cpu(const blt_tensor* grad_out, const blt_tensor* softmax_out, blt_tensor* grad_in);
+void blt_cross_entropy_forward_cpu(const blt_tensor* logits, const blt_tensor* targets, blt_tensor* loss_out);
+void blt_cross_entropy_backward_cpu(const blt_tensor* logits, const blt_tensor* targets, blt_tensor* grad_logits);
 void blt_rope_precompute_cpu(size_t max_seq_len, const blt_rope_config* config, blt_tensor* cos_out, blt_tensor* sin_out);
 void blt_rope_apply_cpu(const blt_tensor* x, const blt_tensor* cos, const blt_tensor* sin, blt_tensor* out);
 void blt_rope_apply_backward_cpu(const blt_tensor* grad_out, const blt_tensor* cos, const blt_tensor* sin, blt_tensor* grad_in);
@@ -129,6 +132,14 @@ void blt_softmax(const blt_tensor* in, blt_tensor* out) {
 
 void blt_softmax_backward(const blt_tensor* grad_out, const blt_tensor* softmax_out, blt_tensor* grad_in){
     BLT_DISPATCH(grad_out, blt_softmax_backward_cpu(grad_out, softmax_out, grad_in), BLT_CUDA_NOT_IMPLEMENTED("blt_softmax_backward"));
+}
+
+void blt_cross_entropy_forward(const blt_tensor* logits, const blt_tensor* targets, blt_tensor* loss_out){
+    BLT_DISPATCH(logits, blt_cross_entropy_forward_cpu(logits, targets, loss_out), BLT_CUDA_NOT_IMPLEMENTED("blt_cross_entropy_forward"));
+}
+
+void blt_cross_entropy_backward(const blt_tensor* logits, const blt_tensor* targets, blt_tensor* grad_logits){
+    BLT_DISPATCH(logits, blt_cross_entropy_backward_cpu(logits, targets, grad_logits), BLT_CUDA_NOT_IMPLEMENTED("blt_cross_entropy_backward"));
 }
 
 void blt_rope_precompute(size_t max_seq_len, const blt_rope_config* config, blt_tensor* cos_out, blt_tensor* sin_out) {

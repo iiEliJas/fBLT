@@ -4,6 +4,7 @@
 #include "blt/core/allocator.h"
 #include "blt/ops/softmax.h"
 #include "blt/ops/rope.h"
+#include "blt/ops/cross_entropy.h"
 
 #include "test_helpers.h"
 #include "test_suite.h"
@@ -90,6 +91,55 @@ int run_softmax_test(void) {
     return ok;
 }
 
+
+
+int run_cross_entropy_tests(void) {
+    blt_arena* arena = blt_arena_create(4096, BLT_BACKEND_CPU);
+    if (!arena) {
+        fprintf(stderr, "[FAIL] arena creation for cross entropy tests\n");
+        return 0;
+    }
+ 
+    size_t logits_shape[2] = {2, 2};
+    size_t targets_shape[1] = {2};
+    size_t loss_shape[1] = {1};
+ 
+    blt_tensor logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
+    blt_tensor targets = blt_tensor_create(arena, targets_shape, 1, BLT_DTYPE_UINT8);
+    blt_tensor loss = blt_tensor_create(arena, loss_shape, 1, BLT_DTYPE_FP32);
+    blt_tensor grad_logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
+    
+    // seq_len=2, vocab_size=2. logits=[[0,0],[0,0]], targets=[0,1]
+    //      softmax([0,0]) = [0.5,0.5]
+    //      loss = mean(-log(0.5), -log(0.5)) = -log(0.5) so approx. 0.693147
+    //      grad = (softmax - one_hot) / seq_len
+    //      row0: ([0.5,0.5] - [1,0]) / 2 = [-0.25, 0.25]
+    //      row1: ([0.5,0.5] - [0,1]) / 2 = [0.25, -0.25]
+
+    float* logits_data = (float*)logits.data;
+    logits_data[0] = 0.0f; logits_data[1] = 0.0f;
+    logits_data[2] = 0.0f; logits_data[3] = 0.0f;
+ 
+    uint8_t* targets_data = (uint8_t*)targets.data;
+    targets_data[0] = 0;
+    targets_data[1] = 1;
+ 
+    blt_cross_entropy_forward(&logits, &targets, &loss);
+ 
+    float* loss_data = (float*)loss.data;
+    TEST_ASSERT(fabsf(loss_data[0] - 0.693147f) < 1e-4f);
+ 
+    blt_cross_entropy_backward(&logits, &targets, &grad_logits);
+ 
+    float* grad_data = (float*)grad_logits.data;
+    TEST_ASSERT(fabsf(grad_data[0] - (-0.25f)) < 1e-4f);
+    TEST_ASSERT(fabsf(grad_data[1] - 0.25f) < 1e-4f);
+    TEST_ASSERT(fabsf(grad_data[2] - 0.25f) < 1e-4f);
+    TEST_ASSERT(fabsf(grad_data[3] - (-0.25f)) < 1e-4f);
+ 
+    blt_arena_destroy(arena);
+    return 1;
+}
 
 
 

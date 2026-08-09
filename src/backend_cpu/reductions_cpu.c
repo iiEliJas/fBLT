@@ -77,6 +77,113 @@ void blt_softmax_backward_cpu(const blt_tensor* grad_out, const blt_tensor* soft
 
 
 //----------------------------------------------------------------
+// Cross Entropy
+
+// loss = mean_i [-log(softmax(logits_i)[target_i])]
+//      = mean_i [log(sum_v exp(logits_i[v] - max_i)) - (logits_i[target_i] - max_i)]
+ 
+void blt_cross_entropy_forward_cpu(const blt_tensor* logits, const blt_tensor* targets, blt_tensor* loss_out) {
+    BLT_REQUIRE(logits != NULL && targets != NULL && loss_out != NULL,
+                "blt_cross_entropy_forward: logits, targets, loss_out must not be NULL");
+    blt_check_nd_fp32(logits, 2, (const size_t[]){0, 0}, "blt_cross_entropy_forward: logits must be 2D FP32 [seq_len, vocab_size]");
+ 
+    size_t seq_len = logits->shape[0];
+    size_t vocab_size = logits->shape[1];
+ 
+    BLT_REQUIRE(targets->dtype == BLT_DTYPE_UINT8, "blt_cross_entropy_forward: targets must be UINT8");
+    BLT_REQUIRE(targets->ndim == 1 && targets->shape[0] == seq_len,
+                "blt_cross_entropy_forward: targets must be [seq_len]");
+ 
+    BLT_REQUIRE(loss_out->dtype == BLT_DTYPE_FP32 && loss_out->numel == 1,
+                "blt_cross_entropy_forward: loss_out must be a 1-element FP32 tensor");
+ 
+    const float* logits_data = (const float*)logits->data;
+    const uint8_t* td = (const uint8_t*)targets->data;      // adjust if INT32
+    float* loss_data = (float*)loss_out->data;
+ 
+    float total_loss = 0.0f;
+ 
+    for (size_t i = 0; i < seq_len; i++) {
+        const float* row = logits_data + i * vocab_size;
+        uint8_t target = td[i];
+        BLT_REQUIRE((size_t)target < vocab_size,
+                    "blt_cross_entropy_forward: target index out of range for vocab_size");
+ 
+        float max_val = row[0];
+        for (size_t v = 1; v < vocab_size; v++) {
+            if (row[v] > max_val) {
+                max_val = row[v];
+            }
+        }
+ 
+        float sum_exp = 0.0f;
+        for (size_t v = 0; v < vocab_size; v++) {
+            sum_exp += expf(row[v] - max_val);
+        }
+ 
+        float log_sum_exp = logf(sum_exp) + max_val;
+        total_loss += (log_sum_exp - row[target]);
+    }
+ 
+    loss_data[0] = total_loss / (float)seq_len;
+}
+ 
+ 
+
+// dL/dlogits = (softmax(logits) - one_hot(targets)) / seq_len
+void blt_cross_entropy_backward_cpu(const blt_tensor* logits, const blt_tensor* targets, blt_tensor* grad_logits) {
+    BLT_REQUIRE(logits != NULL && targets != NULL && grad_logits != NULL,
+                "blt_cross_entropy_backward: logits, targets, grad_logits must not be NULL");
+    blt_check_nd_fp32(logits, 2, (const size_t[]){0, 0}, "blt_cross_entropy_backward: logits must be 2D FP32 [seq_len, vocab_size]");
+ 
+    size_t seq_len = logits->shape[0];
+    size_t vocab_size = logits->shape[1];
+ 
+    BLT_REQUIRE(targets->dtype == BLT_DTYPE_UINT8, "blt_cross_entropy_backward: targets must be UINT8");
+    BLT_REQUIRE(targets->ndim == 1 && targets->shape[0] == seq_len,
+                "blt_cross_entropy_backward: targets must be [seq_len]");
+ 
+    blt_check_nd_fp32(grad_logits, 2, (const size_t[]){seq_len, vocab_size},
+                       "blt_cross_entropy_backward: grad_logits must be [seq_len, vocab_size] FP32");
+ 
+    const float* logits_data = (const float*)logits->data;
+    const uint8_t* td = (const uint8_t*)targets->data;      // adjust if INT32
+    float* grad_data = (float*)grad_logits->data;
+ 
+    float inv_seq_len = 1.0f / (float)seq_len;
+ 
+    for (size_t i = 0; i < seq_len; i++) {
+        const float* row = logits_data + i * vocab_size;
+        float* grad_row = grad_data + i * vocab_size;
+        uint8_t target = td[i];
+        BLT_REQUIRE((size_t)target < vocab_size,
+                    "blt_cross_entropy_backward: target index out of range for vocab_size");
+ 
+        float max_val = row[0];
+        for (size_t v = 1; v < vocab_size; v++) {
+            if (row[v] > max_val) {
+                max_val = row[v];
+            }
+        }
+ 
+        float sum_exp = 0.0f;
+        for (size_t v = 0; v < vocab_size; v++) {
+            grad_row[v] = expf(row[v] - max_val);   // store exp(logit - max)
+            sum_exp += grad_row[v];
+        }
+ 
+        for (size_t v = 0; v < vocab_size; v++) {
+            float softmax_v = grad_row[v] / sum_exp;
+            float one_hot_v = (v == target) ? 1.0f : 0.0f;
+            grad_row[v] = (softmax_v - one_hot_v) * inv_seq_len;
+        }
+    }
+}
+
+
+
+
+//----------------------------------------------------------------
 // RoPE (Rotary Position Embedding)
 
 void blt_rope_precompute_cpu(size_t max_seq_len, const blt_rope_config* config,

@@ -34,6 +34,7 @@ int main(void) {
         {"matmul backward backend", run_matmul_backward_backend_tests},
         {"softmax backend", run_softmax_backend_tests},
         {"softmax parity", run_softmax_test},
+        {"cross entropy backend", run_cross_entropy_tests},
         {"rope backend", run_rope_backend_test},
         {"entropy model", run_entropy_model_tests},
         {"patcher model", run_patcher_model_tests},
