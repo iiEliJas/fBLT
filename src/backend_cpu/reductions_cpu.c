@@ -355,7 +355,7 @@ void blt_rmsnorm_forward_cpu(const blt_tensor* x, const blt_tensor* weight, blt_
     const float* w = (const float*)weight->data;
     float* o = (float*)out->data;
  
-    for (size_t i = 0; i < seq_len; i++) {
+    for(size_t i = 0; i < seq_len; i++) {
         const float* row = in + i * embed_dim;
         float* out_row = o + i * embed_dim;
  
@@ -364,14 +364,53 @@ void blt_rmsnorm_forward_cpu(const blt_tensor* x, const blt_tensor* weight, blt_
         float mean_sq = sumsq / (float)embed_dim;
         float inv_rms = 1.0f / sqrtf(mean_sq + BLT_RMSNORM_EPS);
  
-        for (size_t j = 0; j < embed_dim; j++) {
+        for(size_t j = 0; j < embed_dim; j++) {
             out_row[j] = row[j] * inv_rms * w[j];
         }
     }
 }
- 
+
+
 void blt_rmsnorm_backward_cpu(const blt_tensor* grad_out, const blt_tensor* x,
-                               const blt_tensor* weight, blt_tensor* grad_x, blt_tensor* grad_weight) {
-    (void)grad_out; (void)x; (void)weight; (void)grad_x; (void)grad_weight;
-    BLT_FATAL("RMSNorm backward not yet implemented");
+                            const blt_tensor* weight, blt_tensor* grad_x, blt_tensor* grad_weight) {
+    blt_check_nd_fp32(x, 2, (const size_t[]){0, 0}, "RMSNorm backward: x must be 2D FP32");
+    size_t seq_len = x->shape[0];
+    size_t embed_dim = x->shape[1];
+ 
+    blt_check_nd_fp32(weight, 1, (const size_t[]){embed_dim}, "RMSNorm backward: weight must be [embed_dim] FP32");
+    blt_check_nd_fp32(grad_out, 2, (const size_t[]){seq_len, embed_dim}, "RMSNorm backward: grad_out shape/dtype mismatch");
+    blt_check_nd_fp32(grad_x, 2, (const size_t[]){seq_len, embed_dim}, "RMSNorm backward: grad_x shape/dtype mismatch");
+    blt_check_nd_fp32(grad_weight, 1, (const size_t[]){embed_dim}, "RMSNorm backward: grad_weight must be [embed_dim] FP32");
+ 
+    const float* xd = (const float*)x->data;
+    const float* w = (const float*)weight->data;
+    const float* god = (const float*)grad_out->data;
+    float* gxd = (float*)grad_x->data;
+    float* gwd = (float*)grad_weight->data;
+    
+    // out_j = x_j * inv_rms * w_j,  inv_rms = 1/sqrt(mean(x^2) + eps)
+    // grad_x_i = grad_out_i * w_i * inv_rms - (x_i * inv_rms^3 / n) * sum_j(grad_out_j * w_j * x_j)
+    // grad_weight_j += sum_over_rows( grad_out[row,j] * x[row,j] * inv_rms[row] )
+    // (grad_weight must be zeroed by caller)
+    for(size_t i = 0; i < seq_len; i++) {
+        const float* row = xd + i * embed_dim;
+        const float* go_row = god + i * embed_dim;
+        float* gx_row = gxd + i * embed_dim;
+ 
+        float sumsq = 0.0f;
+        for (size_t j = 0; j < embed_dim; j++) sumsq += row[j] * row[j];
+        float mean_sq = sumsq / (float)embed_dim;
+        float inv_rms = 1.0f / sqrtf(mean_sq + BLT_RMSNORM_EPS);
+ 
+        float dot = 0.0f;
+        for(size_t j = 0; j < embed_dim; j++) {
+            dot += go_row[j] * w[j] * row[j];
+        }
+ 
+        float inv_rms3_over_n = (inv_rms * inv_rms * inv_rms) / (float)embed_dim;
+        for (size_t j = 0; j < embed_dim; j++) {
+            gx_row[j] = go_row[j] * w[j] * inv_rms - row[j] * inv_rms3_over_n * dot;
+            gwd[j] += go_row[j] * row[j] * inv_rms;
+        }
+    }
 }

@@ -62,8 +62,8 @@ void blt_gelu_forward_cpu(const blt_tensor* x, blt_tensor* out) {
 
 
 void blt_gelu_backward_cpu(const blt_tensor* grad_out, const blt_tensor* x, blt_tensor* grad_x) {
-    blt_check_elementwise_fp32(grad_out, x, "blt_gelu_backward: grad_out/x must be FP32 with matching element count");
-    blt_check_elementwise_fp32(grad_out, grad_x, "blt_gelu_backward: grad_out/grad_x must be FP32 with matching element count");
+    blt_check_elementwise_fp32(grad_out, x, "GELU backward: grad_out/x must be FP32 with matching element count");
+    blt_check_elementwise_fp32(grad_out, grad_x, "GELU backward: grad_out/grad_x must be FP32 with matching element count");
  
     const float* go = (const float*)grad_out->data;
     const float* xd = (const float*)x->data;
@@ -108,6 +108,30 @@ void blt_swiglu_forward_cpu(const blt_tensor* gate, const blt_tensor* up, blt_te
  
 void blt_swiglu_backward_cpu(const blt_tensor* grad_out, const blt_tensor* gate, const blt_tensor* up,
                               blt_tensor* grad_gate, blt_tensor* grad_up) {
-    (void)grad_out; (void)gate; (void)up; (void)grad_gate; (void)grad_up;
-    BLT_FATAL("SwiGLU backward not yet implemented");
+    blt_check_elementwise_fp32(gate, up, "SwiGLU backward: gate/up must be FP32 with matching element count");
+    blt_check_elementwise_fp32(gate, grad_out, "SwiGLU backward: grad_out must be FP32 with matching element count");
+    blt_check_elementwise_fp32(gate, grad_gate, "SwiGLU backward: grad_gate must be FP32 with matching element count");
+    blt_check_elementwise_fp32(gate, grad_up, "SwiGLU backward: grad_up must be FP32 with matching element count");
+ 
+    const float* go = (const float*)grad_out->data;
+    const float* g = (const float*)gate->data;
+    const float* u = (const float*)up->data;
+    float* gg = (float*)grad_gate->data;
+    float* gu = (float*)grad_up->data;
+                                
+    // out = silu(gate) * up
+    // silu(x) = x * sigmoid(x)
+    // d(silu)/dx = sigmoid(x) * (1 + x * (1 - sigmoid(x)))
+
+    // grad_gate = grad_out * up * d(silu)/dgate
+    // grad_up   = grad_out * silu(gate)
+    for (size_t i = 0; i < gate->numel; i++) {
+        float gv = g[i];
+        float sig = 1.0f / (1.0f + expf(-gv));
+        float silu = gv * sig;
+        float dsilu_dgate = sig * (1.0f + gv * (1.0f - sig));
+ 
+        gg[i] = go[i] * u[i] * dsilu_dgate;
+        gu[i] = go[i] * silu;
+    }
 }

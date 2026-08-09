@@ -163,7 +163,7 @@
   - Input: gate tensor, up tensor, and output tensor, all with matching element counts.
   - Output: writes elementwise `silu(gate) * up` into `out`.
 - `blt_swiglu_backward(grad_out, gate, up, grad_gate, grad_up)`
-  - Input: gradient w.r.t. output, gate tensor, up tensor, and gradient output tensors.
+  - Input: gradient respect to the output, gate tensor, up tensor, and gradient output tensors.
   - Output: computes backward gradients for `gate` and `up`.
 
 ### blt/ops/vecmath.h
