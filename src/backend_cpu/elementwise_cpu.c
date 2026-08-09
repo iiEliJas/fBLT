@@ -60,11 +60,30 @@ void blt_gelu_forward_cpu(const blt_tensor* x, blt_tensor* out) {
     }
 }
 
+
 void blt_gelu_backward_cpu(const blt_tensor* grad_out, const blt_tensor* x, blt_tensor* grad_x) {
-    (void)grad_out;
-    (void)x;
-    (void)grad_x;
-    BLT_FATAL("GELU backward not yet implemented");
+    blt_check_elementwise_fp32(grad_out, x, "blt_gelu_backward: grad_out/x must be FP32 with matching element count");
+    blt_check_elementwise_fp32(grad_out, grad_x, "blt_gelu_backward: grad_out/grad_x must be FP32 with matching element count");
+ 
+    const float* go = (const float*)grad_out->data;
+    const float* xd = (const float*)x->data;
+    float* gx = (float*)grad_x->data;
+    size_t n = x->numel;
+ 
+    const float k0 = 0.7978845608f; // sqrt(2/pi) approx.
+    const float k1 = 0.044715f;
+ 
+    for (size_t i = 0; i < n; i++) {
+        float xi = xd[i];
+        float x3 = xi * xi * xi;
+        float inner = k0 * (xi + k1 * x3);
+        float t = tanhf(inner);
+        float sech2 = 1.0f - t * t;
+        float dinner_dx = k0 * (1.0f + 3.0f * k1 * xi * xi);
+        // d/dx [0.5*x*(1+tanh(inner))] = 0.5*(1+tanh(inner)) + 0.5*x*sech2*dinner_dx
+        float dgelu_dx = 0.5f * (1.0f + t) + 0.5f * xi * sech2 * dinner_dx;
+        gx[i] = go[i] * dgelu_dx;
+    }
 }
 
 

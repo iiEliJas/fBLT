@@ -24,18 +24,22 @@ typedef struct {
 
 int main(void) {
     const test_case tests[] = {
-        {"matmul parity", run_matmul_test},
-        {"softmax parity", run_softmax_test},
         {"tensor core helpers", run_tensor_core_tests},
         {"allocator core helpers", run_allocator_core_tests},
         {"backend dispatch", run_backend_core_tests},
         {"elementwise backend", run_elementwise_backend_tests},
+        {"gelu backend", run_gelu_backend_tests},
         {"matmul backend", run_matmul_backend_tests},
+        {"matmul parity", run_matmul_test},
+        {"matmul backward backend", run_matmul_backward_backend_tests},
         {"softmax backend", run_softmax_backend_tests},
+        {"softmax parity", run_softmax_test},
+        {"rope backend", run_rope_backend_test},
         {"entropy model", run_entropy_model_tests},
         {"patcher model", run_patcher_model_tests},
         {"byte embedding model", run_byte_embedding_model_tests},
         {"attention model", run_attention_model_tests},
+        {"attention backward model", run_attention_backward_model_tests},
         {"phase1 parity", run_phase1_tests},
         {"phase2 parity", run_phase2_tests},
     };

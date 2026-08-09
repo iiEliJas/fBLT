@@ -16,6 +16,7 @@ typedef struct {
     const blt_tensor* rope_sin_cache;   // precomputed sin table for RoPE (optional)
 } blt_attention_config;
 
+
 // Computes Multi-Head Self-Attention
 // RoPE tables are precomputed internally from the attention config when enabled.
 void blt_multihead_attention(
@@ -26,6 +27,14 @@ void blt_multihead_attention(
     const blt_attention_config* config,
     blt_arena* arena
 );
+
+
+// Computes gradients for Multi-Head Self-Attention
+void blt_multihead_attention_backward(const blt_tensor* input, const blt_tensor* weight_qkv,
+    const blt_tensor* weight_proj, const blt_tensor* grad_out,
+    blt_tensor* grad_input, blt_tensor* grad_weight_qkv,
+    blt_tensor* grad_weight_proj,
+    const blt_attention_config* config, blt_arena* arena);
 
 
 #endif // BLT_MODELS_ATTENTION_H

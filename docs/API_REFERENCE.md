@@ -30,15 +30,22 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
     - `blt_dtype dtype`: element type.
     - `blt_backend backend`: backend for the tensor.
     - `bool is_view`: whether the tensor is a view rather than owned storage.
-- `blt_tensor_compute_numel(shape, ndim)`
+- `blt_tensor_compute_numel(const size_t* shape, size_t ndim)`
   - Input: shape array and rank.
   - Output: total number of elements.
-- `blt_tensor_compute_row_major_strides(shape, ndim, strides_out)`
+- `blt_tensor_compute_row_major_strides(const size_t* shape, size_t ndim, size_t* strides_out)`
   - Input: shape array, rank, and output stride buffer.
   - Output: fills `strides_out` with row-major strides.
-- `blt_tensor_bytes(t)`
+- `blt_tensor_bytes(const blt_tensor* t)`
   - Input: pointer to a tensor.
   - Output: total byte size of the tensor storage.
+- `blt_tensor_view_2d(blt_tensor* t, void* data, size_t rows, size_t cols, blt_backend backend)`
+  - Input: tensor pointer, data pointer, row count, column count, and backend.
+  - Output: initializes `t` as a 2D view over the provided data.
+- `blt_tensor_view_3d(blt_tensor* t, void* data, size_t d0, size_t d1, size_t d2, blt_backend backend)`
+  - Input: tensor pointer, data pointer, three dimension sizes, and backend.
+  - Output: initializes `t` as a 3D view over the provided data.
+
 
 ### blt/core/backend.h
 - `BLT_FATAL(msg)` macro
@@ -50,10 +57,10 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
 - `BLT_REQUIRE(cond, msg)` macro
   - Input: a condition and a message string
   - Behavior: checks the condition and does a BLT_FATAL call if cond is false.
-- `blt_check_nd_fp32(tensor, ndim, dims, msg)`
+- `blt_check_nd_fp32(const blt_tensor* t, size_t ndim, const size_t* dims, const char* msg)`
   - Input: blt_tensor to check, number of dimensions, dimension array, and message string
   - Behaviour: Validates an N-dimensional FP32 tensor. Pass 0 for any dimension in `dims` to skip that dimension's check.
-- `blt_check_elementwise_fp32(a, b, msg)`
+- `blt_check_elementwise_fp32(const blt_tensor* a, const blt_tensor* b, const char* msg)`
   - Input: two tensors and a message string
   - Behaviour: Validates that two tensors are FP32 and elementwise-compatible, regardless of rank
 
@@ -64,19 +71,19 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
     - `size_t capacity`: total capacity in bytes.
     - `size_t offset`: current allocation offset.
     - `blt_backend backend`: backend associated with the arena.
-- `blt_arena_create(capacity_bytes, backend)`
+- `blt_arena_create(size_t capacity_bytes, blt_backend backend)`
   - Input: arena capacity and backend.
   - Output: allocated arena handle, or aborts on failure.
-- `blt_arena_destroy(arena)`
+- `blt_arena_destroy(blt_arena* arena)`
   - Input: arena handle.
   - Output: frees arena memory and associated buffer.
-- `blt_arena_reset(arena)`
+- `blt_arena_reset(blt_arena* arena)`
   - Input: arena handle.
   - Output: resets allocation offset to zero.
-- `blt_arena_alloc(arena, bytes, alignment)`
+- `blt_arena_alloc(blt_arena* arena, size_t bytes, size_t alignment)`
   - Input: arena, allocation size, and alignment.
   - Output: pointer to aligned memory inside the arena, or aborts on failure.
-- `blt_tensor_create(arena, shape, ndim, dtype)`
+- `blt_tensor_create(blt_arena* arena, const size_t* shape, size_t ndim, blt_dtype dtype)`
   - Input: arena for storage, shape, rank, and element type.
   - Output: a zero-initialized tensor with allocated storage.
 
@@ -177,9 +184,12 @@ This is a brief reference for the Phase 0 API surface in the include and src tre
   - Output: multiplies each element of t with the scalar.
 
 ### blt/ops/matmul.h
-- `blt_matmul(a, b, out)`
+- `blt_matmul(const blt_tensor* a, const blt_tensor* b, blt_tensor* out)`
   - Input: two 2D input tensors and an output tensor.
   - Output: writes the matrix product into `out`.
+- `blt_matmul_backward(const blt_tensor* a, const blt_tensor* b, const blt_tensor* grad_out, blt_tensor* grad_a, blt_tensor* grad_b)`
+  - Input: two 2D input tensors, gradient output, and output gradient tensors.
+  - Output: computes backward gradients for `a` and `b`.
 
 ### blt/ops/softmax.h
 - `blt_softmax(in, out)`

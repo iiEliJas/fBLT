@@ -45,6 +45,36 @@ void blt_softmax_cpu(const blt_tensor* in, blt_tensor* out) {
 }
 
 
+// dx_i = y_i * (dy_i - sum_j(dy_j * y_j)), applied per row over the last dim.
+void blt_softmax_backward_cpu(const blt_tensor* grad_out, const blt_tensor* softmax_out, blt_tensor* grad_in) {
+    BLT_REQUIRE(grad_out != NULL && softmax_out != NULL && grad_in != NULL,
+                "blt_softmax_backward: grad_out, softmax_out, grad_in must not be NULL");
+    BLT_REQUIRE(grad_out->dtype == BLT_DTYPE_FP32 && softmax_out->dtype == BLT_DTYPE_FP32 &&
+                grad_in->dtype == BLT_DTYPE_FP32, "blt_softmax_backward: all tensors must be FP32");
+    BLT_REQUIRE(grad_out->numel == softmax_out->numel && grad_out->numel == grad_in->numel,
+                "blt_softmax_backward: element counts must match");
+ 
+    const float* dy = (const float*)grad_out->data;
+    const float* y = (const float*)softmax_out->data;
+    float* dx = (float*)grad_in->data;
+ 
+    size_t last_dim = softmax_out->ndim == 0 ? 0 : softmax_out->shape[softmax_out->ndim - 1];
+    BLT_REQUIRE(last_dim != 0, "blt_softmax_backward: softmax_out must have a non-zero last dimension");
+    size_t rows = softmax_out->numel / last_dim;
+ 
+    for (size_t row = 0; row < rows; row++) {
+        size_t base = row * last_dim;
+        float dot = 0.0f;
+        for (size_t j = 0; j < last_dim; j++) {
+            dot += dy[base + j] * y[base + j];
+        }
+        for (size_t j = 0; j < last_dim; j++) {
+            dx[base + j] = y[base + j] * (dy[base + j] - dot);
+        }
+    }
+}
+
+
 
 //----------------------------------------------------------------
 // RoPE (Rotary Position Embedding)
@@ -96,6 +126,54 @@ void blt_rope_apply_cpu(const blt_tensor* x, const blt_tensor* cos, const blt_te
                 float x1 = xv[2 * i + 1];
                 ov[2 * i]     = x0 * c[i] - x1 * s[i];
                 ov[2 * i + 1] = x1 * c[i] + x0 * s[i];
+            }
+        }
+    }
+}
+
+
+
+// RoPE is a per pair rotation:
+// out0 =  x0*cos - x1*sin
+// out1 =  x1*cos + x0*sin
+// the jacobian is an orthogonal 2x2 rotation matrix, so the backward pass is just the inverse rotation
+// so just flip the sign of sin (sign of sin is a funny saying):
+//   grad_x0 =  grad_out0*cos + grad_out1*sin
+//   grad_x1 = -grad_out0*sin + grad_out1*cos
+// which is exactly forward rope applied with sin negated
+ 
+void blt_rope_apply_backward_cpu(const blt_tensor* grad_out, const blt_tensor* cos, const blt_tensor* sin,
+                              blt_tensor* grad_in) {
+    blt_check_nd_fp32(grad_out, 3, (const size_t[]){0, 0, 0}, "blt_rope_apply_backward: grad_out must be 3D FP32");
+    blt_check_nd_fp32(cos, 2, (const size_t[]){grad_out->shape[0], grad_out->shape[2] / 2},
+                       "blt_rope_apply_backward: cos shape mismatch");
+    blt_check_nd_fp32(sin, 2, (const size_t[]){grad_out->shape[0], grad_out->shape[2] / 2},
+                       "blt_rope_apply_backward: sin shape mismatch");
+    blt_check_nd_fp32(grad_in, 3, (const size_t[]){grad_out->shape[0], grad_out->shape[1], grad_out->shape[2]},
+                       "blt_rope_apply_backward: grad_in shape mismatch");
+ 
+    size_t seq_len = grad_out->shape[0];
+    size_t num_heads = grad_out->shape[1];
+    size_t head_dim = grad_out->shape[2];
+    size_t half = head_dim / 2;
+ 
+    const float* god = (const float*)grad_out->data;
+    const float* cd = (const float*)cos->data;
+    const float* sd = (const float*)sin->data;
+    float* gid = (float*)grad_in->data;
+ 
+    for (size_t t = 0; t < seq_len; t++) {
+        for (size_t h = 0; h < num_heads; h++) {
+            const float* gov = god + (t * num_heads + h) * head_dim;
+            float* giv = gid + (t * num_heads + h) * head_dim;
+            const float* c = cd + t * half;
+            const float* s = sd + t * half;
+            for (size_t i = 0; i < half; i++) {
+                float g0 = gov[2 * i];
+                float g1 = gov[2 * i + 1];
+                // inverse rotation is forward rotation with sin negated
+                giv[2 * i]     = g0 * c[i] + g1 * s[i];
+                giv[2 * i + 1] = g1 * c[i] - g0 * s[i];
             }
         }
     }

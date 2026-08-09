@@ -25,11 +25,15 @@ void blt_swiglu_backward_cpu(const blt_tensor* grad_out, const blt_tensor* gate,
 
 // linear algebra ops
 void blt_matmul_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out);
+void blt_matmul_backward_cpu(const blt_tensor* a, const blt_tensor* b, const blt_tensor* grad_out,
+                          blt_tensor* grad_a, blt_tensor* grad_b);
 
 // reduction ops
 void blt_softmax_cpu(const blt_tensor* in, blt_tensor* out);
+void blt_softmax_backward_cpu(const blt_tensor* grad_out, const blt_tensor* softmax_out, blt_tensor* grad_in);
 void blt_rope_precompute_cpu(size_t max_seq_len, const blt_rope_config* config, blt_tensor* cos_out, blt_tensor* sin_out);
 void blt_rope_apply_cpu(const blt_tensor* x, const blt_tensor* cos, const blt_tensor* sin, blt_tensor* out);
+void blt_rope_apply_backward_cpu(const blt_tensor* grad_out, const blt_tensor* cos, const blt_tensor* sin, blt_tensor* grad_in);
 void blt_layernorm_forward_cpu(const blt_tensor* x, const blt_tensor* weight, const blt_tensor* bias,blt_tensor* out, float eps);
 void blt_layernorm_backward_cpu(const blt_tensor* grad_out, const blt_tensor* x,const blt_tensor* weight, blt_tensor* grad_x,
                             blt_tensor* grad_weight, blt_tensor* grad_bias, float eps);
@@ -123,12 +127,20 @@ void blt_softmax(const blt_tensor* in, blt_tensor* out) {
     BLT_DISPATCH(in, blt_softmax_cpu(in, out), BLT_CUDA_NOT_IMPLEMENTED("blt_softmax"));
 }
 
+void blt_softmax_backward(const blt_tensor* grad_out, const blt_tensor* softmax_out, blt_tensor* grad_in){
+    BLT_DISPATCH(grad_out, blt_softmax_backward_cpu(grad_out, softmax_out, grad_in), BLT_CUDA_NOT_IMPLEMENTED("blt_softmax_backward"));
+}
+
 void blt_rope_precompute(size_t max_seq_len, const blt_rope_config* config, blt_tensor* cos_out, blt_tensor* sin_out) {
     BLT_DISPATCH(cos_out, blt_rope_precompute_cpu(max_seq_len, config, cos_out, sin_out), BLT_CUDA_NOT_IMPLEMENTED("blt_rope_precompute"));
 }
 
 void blt_rope_apply(const blt_tensor* x, const blt_tensor* cos, const blt_tensor* sin, blt_tensor* out) {
     BLT_DISPATCH(x, blt_rope_apply_cpu(x, cos, sin, out), BLT_CUDA_NOT_IMPLEMENTED("blt_rope_apply"));
+}
+
+void blt_rope_apply_backward(const blt_tensor* grad_out, const blt_tensor* cos, const blt_tensor* sin, blt_tensor* grad_in){
+    BLT_DISPATCH(grad_out, blt_rope_apply_backward_cpu(grad_out, cos, sin, grad_in), BLT_CUDA_NOT_IMPLEMENTED("blt_rope_apply_backward"));
 }
 
 void blt_layernorm_forward(const blt_tensor* x, const blt_tensor* weight, const blt_tensor* bias,blt_tensor* out, float eps){
@@ -153,4 +165,9 @@ void blt_rmsnorm_backward(const blt_tensor* grad_out, const blt_tensor* x, const
 
 void blt_matmul(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
     BLT_DISPATCH(a, blt_matmul_cpu(a, b, out), BLT_CUDA_NOT_IMPLEMENTED("blt_matmul"));
+}
+
+void blt_matmul_backward(const blt_tensor* a, const blt_tensor* b, const blt_tensor* grad_out,
+                        blt_tensor* grad_a, blt_tensor* grad_b){
+    BLT_DISPATCH(a, blt_matmul_backward_cpu(a, b, grad_out, grad_a, grad_b), BLT_CUDA_NOT_IMPLEMENTED("blt_matmul_backward"));
 }
