@@ -104,47 +104,44 @@ main: $(BIN_DIR)/main$(EXE_EXT)
 # ============================================================================
 # BUILD RULES
 # ============================================================================
-# Create dir
-$(OBJ_DIR):
-	@$(MKDIR) $@
 
-$(BIN_DIR):
-	@$(MKDIR) $@
-
-# Helper rule to create target dir
+# Order only dependency pattern for dir creation
 ifeq ($(DETECTED_OS),Windows)
-    # Helper to convert forward slashes to backslashes
-    define MAKE_PARENT_DIR
-	@if not exist "$(subst /,\,$(patsubst %/,%,$(dir $@)))" $(MKDIR) "$(subst /,\,$(patsubst %/,%,$(dir $@)))"
-    endef
+define CREATE_DIR
+	@if not exist "$(subst /,\,$1)" mkdir "$(subst /,\,$1)"
+endef
 else
-    define MAKE_PARENT_DIR
-	@$(MKDIR) $(dir $@)
-    endef
+define CREATE_DIR
+	@mkdir -p $1
+endef
 endif
 
+# Target to ensure target dir exists
+%/:
+	$(call CREATE_DIR,$@)
+
+.PRECIOUS: %/
+
 # Compile src to obj files
-$(OBJ_DIR)/$(SRC_DIR)/%.o: $(SRC_DIR)/%.c
+$(OBJ_DIR)/$(SRC_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR)/
 	@echo [CC] $< -> $@
-	$(MAKE_PARENT_DIR)
+	$(call CREATE_DIR,$(dir $@))
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 # Compile test to obj files
-$(OBJ_DIR)/$(TESTS_DIR)/%.o: $(TESTS_DIR)/%.c
+$(OBJ_DIR)/$(TESTS_DIR)/%.o: $(TESTS_DIR)/%.c | $(OBJ_DIR)/
 	@echo [CC] $< -> $@
-	$(MAKE_PARENT_DIR)
+	$(call CREATE_DIR,$(dir $@))
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 # Link test exe
-$(BIN_DIR)/test_main$(EXE_EXT): $(TEST_OBJS)
+$(BIN_DIR)/test_main$(EXE_EXT): $(TEST_OBJS) | $(BIN_DIR)/
 	@echo [LD] Linking test executable: $@
-	$(MAKE_PARENT_DIR)
 	@$(CC) $(CFLAGS) $(TEST_OBJS) -o $@ $(LDLIBS)
 
 # Link main exe
-$(BIN_DIR)/main$(EXE_EXT): $(RUN_DIR)/main.c $(CORE_OBJS)
+$(BIN_DIR)/main$(EXE_EXT): $(RUN_DIR)/main.c $(CORE_OBJS) | $(BIN_DIR)/
 	@echo [LD] Linking main executable: $@
-	$(MAKE_PARENT_DIR)
 	@$(CC) $(CFLAGS) $(RUN_DIR)/main.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
 
