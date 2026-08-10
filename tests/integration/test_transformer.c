@@ -203,7 +203,7 @@ int run_phase2_transformer_block_parity_test(void) {
     size_t offset_after = arena->offset;
 
     // confirm the block allocated stayed inside the arenas bump offset
-    printf("[phase2] transformer block arena footprint: %zu -> %zu bytes (capacity %zu)\n",
+    printf("    [transformer parity] block arena footprint: %zu -> %zu bytes (capacity %zu)\n",
            offset_before, offset_after, arena->capacity);
     TEST_ASSERT(offset_after <= arena->capacity);
     TEST_ASSERT(offset_after >= offset_before);

@@ -5,10 +5,6 @@
 
 #include "blt/core/allocator.h"
 #include "blt/core/backend.h"
-#include "blt/ops/matmul.h"
-#include "blt/ops/softmax.h"
-#include "blt/models/attention.h"
-#include "blt/models/transformer.h"
 
 #include "test_helpers.h"
 #include "test_suite.h"
@@ -36,13 +32,16 @@ int main(void) {
         {"softmax parity", run_softmax_test},
         {"cross entropy backend", run_cross_entropy_tests},
         {"rope backend", run_rope_backend_test},
+        {"optimizer backend", run_optim_backend_tests},
         {"entropy model", run_entropy_model_tests},
         {"patcher model", run_patcher_model_tests},
         {"byte embedding model", run_byte_embedding_model_tests},
         {"attention model", run_attention_model_tests},
         {"attention backward model", run_attention_backward_model_tests},
-        {"phase1 parity", run_phase1_tests},
-        {"phase2 parity", run_phase2_tests},
+        {"entropy LM model", run_entropy_lm_tests},
+        {"backend parity", run_phase1_tests},
+        {"transformer parity", run_phase2_tests},
+        {"entropy lm overfit", run_overfit_entropy_lm_tests},
     };
 
     int passed = 0;

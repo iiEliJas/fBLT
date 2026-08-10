@@ -13,16 +13,19 @@ SRCS := \
     $(SRC_DIR)/backend_cpu/elementwise_cpu.c \
     $(SRC_DIR)/backend_cpu/linalg_cpu.c \
     $(SRC_DIR)/backend_cpu/reductions_cpu.c \
+    $(SRC_DIR)/backend_cpu/optim_cpu.c \
     $(SRC_DIR)/models/entropy.c \
     $(SRC_DIR)/models/byte_embedding.c \
     $(SRC_DIR)/models/patcher.c \
     $(SRC_DIR)/models/attention.c \
     $(SRC_DIR)/models/transformer.c \
+    $(SRC_DIR)/models/entropy_lm.c \
     $(wildcard $(TESTS_DIR)/unit/*/*.c) \
     $(TESTS_DIR)/test_helpers.c \
     $(TESTS_DIR)/test_main.c \
     $(TESTS_DIR)/integration/test_backend.c \
-    $(TESTS_DIR)/integration/test_transformer.c
+    $(TESTS_DIR)/integration/test_transformer.c \
+    $(TESTS_DIR)/integration/test_entropy_lm.c
 
 all: $(BUILD_DIR)/test_main
 

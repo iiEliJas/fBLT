@@ -180,6 +180,12 @@
   - Input: gradient respect to output, original input, and output gradient tensor.
   - Output: computes backward gradient for `x` and writes into `grad_x`.
 
+### blt/ops/optim.h
+- `blt_sgd_step(blt_tensor* param, const blt_tensor* grad, float lr)`
+  - Input: `param` tensor to update in place, `grad` tensor (same shape/dtype as `param`), and learning rate `lr`.
+  - Output: none; updates `param` in place.
+  - Behavior: elementwise `param -= lr * grad`. CPU-only, stateless (no momentum/second-moment buffers) — the minimal Phase 1a optimizer. Requires `param` and `grad` to be FP32 and elementwise-compatible (validated via `blt_check_elementwise_fp32`) and `param->backend == BLT_BACKEND_CPU`.
+
 
 
 ------------------------------------------------------------------------------------------------------------
@@ -267,7 +273,50 @@
   - Input: input sequence tensor, transformer weights, output tensor, transformer config, and scratch arena.
   - Output: writes a single transformer block forward pass result into `output`.
   - Behavior: performs pre-norm self-attention with residual, followed by pre-norm FFN with residual. The `arena` is used for intermediate tensors and is not reset by the function.
-  
+
+### blt/model/entropy_lm.h
+Assembly of already-implemented pieces (byte embedding, RoPE-enabled transformer stack, cross-entropy) into one callable "tiny causal byte LM": embedding → N transformer layers → LM head → shifted next-byte cross-entropy loss.
+- `blt_entropy_lm_config` struct
+  - Fields:
+    - `size_t embed_dim`: transformer hidden width.
+    - `size_t num_layers`: number of stacked transformer blocks.
+    - `size_t hidden_dim`: FFN intermediate width.
+    - `size_t num_heads`: attention heads; `embed_dim` must be divisible by `num_heads`.
+    - `size_t max_seq_len`: upper bound used to size the shared RoPE cache.
+    - `float rope_theta`: RoPE base (e.g. 500000.0f).
+- `blt_transformer_layer_storage` struct
+  - Fields: `blt_tensor norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w` — owned storage for one transformer layer's weights.
+- `blt_entropy_lm` struct
+  - Fields:
+    - `blt_entropy_lm_config config`
+    - `blt_tensor embedding_weight`: `[256, embed_dim]`.
+    - `blt_tensor lm_head_weight`: `[embed_dim, 256]`.
+    - `blt_tensor rope_cos_cache`, `rope_sin_cache`: `[max_seq_len, head_dim/2]`, precomputed once at model-init time.
+    - `blt_transformer_config layer_config`: single shared config for every layer (`norm_type = BLT_NORM_RMSNORM`, `activation_type = BLT_ACTIVATION_SWIGLU`, `use_rope = true`).
+    - `blt_transformer_layer_storage* layer_storage`: owned weight storage, `[num_layers]`.
+    - `blt_transformer_weights* layer_weights`: const-pointer views into `layer_storage`, `[num_layers]` — what's actually passed to `blt_transformer_forward`.
+- `blt_transformer_layer_grad` struct
+  - Fields: `blt_tensor norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w` — gradient counterpart of `blt_transformer_layer_storage`.
+- `blt_entropy_lm_grad` struct
+  - Fields:
+    - `blt_tensor embedding_grad`: `[256, embed_dim]`.
+    - `blt_transformer_layer_grad* layer_grads`: `[num_layers]`.
+    - `blt_tensor lm_head_grad`: `[embed_dim, 256]`.
+- `blt_entropy_lm_create(blt_arena* arena, const blt_entropy_lm_config* config)`
+  - Input: arena for storage and model config.
+  - Output: allocated model with every weight tensor zero-initialized, including the shared RoPE cache (which is precomputed here via `blt_rope_precompute`, sized to `max_seq_len`, and shared by pointer across every layer's `attn_config`). Caller fills weight data afterward.
+- `blt_entropy_lm_grad_create(blt_arena* arena, const blt_entropy_lm* model)`
+  - Input: arena for storage and the model to mirror.
+  - Output: allocated, zero-initialized gradient struct matching `model`'s shapes. `blt_entropy_lm_backward` accumulates (scatter-adds, for the embedding table) or overwrites (every other weight) into this struct.
+- `blt_entropy_lm_forward(const blt_entropy_lm* model, const blt_tensor* bytes_in, blt_tensor* logits_out, blt_tensor* loss_out, blt_arena* arena)`
+  - Input: model, `bytes_in` `[seq_len]` UINT8 (`seq_len >= 2` and `<= config.max_seq_len`), caller-allocated `logits_out` `[seq_len, 256]` FP32, caller-allocated scalar `loss_out`, and scratch arena.
+  - Output: writes the full `[seq_len, 256]` logits into `logits_out` and the shifted next-byte cross-entropy loss into `loss_out`.
+  - Behavior: embedding → N transformer layers → matmul against `lm_head_weight` → logits → cross-entropy against shifted targets (`targets[t] = bytes_in[t+1]`, so the loss is computed over `seq_len - 1` positions). Builds a `seq_len`-sized view over the model's precomputed RoPE cache for this call, since `blt_multihead_attention` validates the cache shape as exactly `[seq_len, head_dim/2]`.
+- `blt_entropy_lm_backward(const blt_entropy_lm* model, const blt_tensor* bytes_in, blt_entropy_lm_grad* grad_out, blt_arena* arena)`
+  - Input: model, `bytes_in` (same as forward), caller-allocated `grad_out` (see `blt_entropy_lm_grad_create`), and scratch arena.
+  - Output: writes gradients for every learnable weight into `grad_out`.
+  - Behavior: recomputes the forward pass internally (caching each layer's intermediates, since `blt_transformer_forward` doesn't expose them — the same recompute pattern `blt_multihead_attention_backward` uses), then mirrors the forward call order in reverse: cross-entropy → LM head matmul → transformer layers (reverse) → embedding, calling each op's existing backward (`blt_rmsnorm_backward`, `blt_multihead_attention_backward`, `blt_swiglu_backward`, `blt_matmul_backward`, `blt_cross_entropy_backward`, `blt_byte_embedding_backward`) rather than introducing new math.
+
 
 
 ------------------------------------------------------------------------------------------------------------
@@ -302,3 +351,13 @@
   - Dispatches to the CPU matmul implementation; raises a fatal error for CUDA unless CUDA support is enabled.
 - `blt_softmax(...)`
   - Dispatches to the CPU softmax implementation; raises a fatal error for CUDA unless CUDA support is enabled.
+
+### src/model/entropy_lm.c
+- `blt_sgd_step(...)`
+  - Plain elementwise `param -= lr * grad`, CPU-only, no optimizer state.
+- `blt_entropy_lm_create(...)` / `blt_entropy_lm_grad_create(...)`
+  - Allocate the model's/gradient's weight tensors (embedding, per-layer transformer weights, LM head) and precompute the shared RoPE cache once.
+- `blt_entropy_lm_forward(...)`
+  - Embedding → N `blt_transformer_forward` calls → LM head matmul → shifted-target `blt_cross_entropy_forward`.
+- `blt_entropy_lm_backward(...)`
+  - Recomputes each layer's forward pass with caching (mirroring `blt_multihead_attention_backward`'s own recompute pattern, since `blt_transformer_forward` doesn't expose intermediates), then walks the graph in reverse using each op's existing backward.

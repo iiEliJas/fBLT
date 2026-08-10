@@ -33,7 +33,7 @@ int run_patcher_model_tests(void) {
 
     // Optionally print the patches for verification
     for (size_t i = 0; i < num_patches; ++i) {
-        printf("Patch %zu: start_idx=%zu, length=%zu, peak_entropy=%.2f\n", 
+        printf("    Patch %zu: start_idx=%zu, length=%zu, peak_entropy=%.2f\n", 
                i, patches_out[i].start_idx, patches_out[i].length, patches_out[i].peak_entropy);
     }
 
