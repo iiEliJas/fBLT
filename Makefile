@@ -20,16 +20,17 @@ ifeq ($(OS),Windows_NT)
     DETECTED_OS := Windows
     RM := del /Q
     RM_DIR := rmdir /S /Q
-    MKDIR := mkdir
-    SEP := \\
     EXE_EXT := .exe
+    # Windows command to create parent directory
+    MKDIR_P = @if not exist "$(subst /,\,$(dir $@))" cmd /c "mkdir $(subst /,\,$(dir $@))"
+    MKDIR_BIN = @if not exist "$(BIN_DIR)" cmd /c "mkdir $(BIN_DIR)"
 else
     DETECTED_OS := Linux
     RM := rm -f
     RM_DIR := rm -rf
-    MKDIR := mkdir -p
-    SEP := /
     EXE_EXT :=
+    MKDIR_P = @mkdir -p $(dir $@)
+    MKDIR_BIN = @mkdir -p $(BIN_DIR)
 endif
 
 
@@ -65,22 +66,17 @@ TEST_SRCS := \
 # ============================================================================
 # OBJECT FILES
 # ============================================================================
-# Object files for core src
 CORE_OBJS := $(addprefix $(OBJ_DIR)/,$(CORE_SRCS:.c=.o))
-
-# Object files for tests
 TEST_OBJS := $(addprefix $(OBJ_DIR)/,$(TEST_SRCS:.c=.o)) $(CORE_OBJS)
 
 
 # ============================================================================
 # TARGETS
 # ============================================================================
-.PHONY: all test main clean info
+.PHONY: all test main clean info help
 
-# Default target
 all: test
 
-# Info target
 info:
 	@echo "================================"
 	@echo "Detected OS: $(DETECTED_OS)"
@@ -92,56 +88,40 @@ info:
 	@echo "BIN_DIR: $(BIN_DIR)"
 	@echo "================================"
 
-# Test exe
 test: $(BIN_DIR)/test_main$(EXE_EXT)
 	@echo [TEST] Running tests...
 	@./$(BIN_DIR)/test_main$(EXE_EXT)
 
-# Main exe
 main: $(BIN_DIR)/main$(EXE_EXT)
 	@echo [MAIN] Built successfully: $(BIN_DIR)/main$(EXE_EXT)
+
 
 # ============================================================================
 # BUILD RULES
 # ============================================================================
 
-# Order only dependency pattern for dir creation
-ifeq ($(DETECTED_OS),Windows)
-define CREATE_DIR
-	@if not exist "$(subst /,\,$1)" mkdir "$(subst /,\,$1)"
-endef
-else
-define CREATE_DIR
-	@mkdir -p $1
-endef
-endif
-
-# Target to ensure target dir exists
-%/:
-	$(call CREATE_DIR,$@)
-
-.PRECIOUS: %/
-
 # Compile src to obj files
-$(OBJ_DIR)/$(SRC_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR)/
-	@echo [CC] $< -> $@
-	$(call CREATE_DIR,$(dir $@))
+$(OBJ_DIR)/$(SRC_DIR)/%.o: $(SRC_DIR)/%.c
+	@echo "[CC] $< -> $@"
+	$(MKDIR_P)
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 # Compile test to obj files
-$(OBJ_DIR)/$(TESTS_DIR)/%.o: $(TESTS_DIR)/%.c | $(OBJ_DIR)/
-	@echo [CC] $< -> $@
-	$(call CREATE_DIR,$(dir $@))
+$(OBJ_DIR)/$(TESTS_DIR)/%.o: $(TESTS_DIR)/%.c
+	@echo "[CC] $< -> $@"
+	$(MKDIR_P)
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 # Link test exe
-$(BIN_DIR)/test_main$(EXE_EXT): $(TEST_OBJS) | $(BIN_DIR)/
+$(BIN_DIR)/test_main$(EXE_EXT): $(TEST_OBJS)
 	@echo [LD] Linking test executable: $@
+	$(MKDIR_BIN)
 	@$(CC) $(CFLAGS) $(TEST_OBJS) -o $@ $(LDLIBS)
 
 # Link main exe
-$(BIN_DIR)/main$(EXE_EXT): $(RUN_DIR)/main.c $(CORE_OBJS) | $(BIN_DIR)/
+$(BIN_DIR)/main$(EXE_EXT): $(RUN_DIR)/main.c $(CORE_OBJS)
 	@echo [LD] Linking main executable: $@
+	$(MKDIR_BIN)
 	@$(CC) $(CFLAGS) $(RUN_DIR)/main.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
 
@@ -164,7 +144,6 @@ endif
 # ============================================================================
 help:
 	@echo --- BLT Project Makefile ---
-	@echo ---
 	@echo - Available targets:
 	@echo -  make test       - Build and run test executable
 	@echo -  make main       - Build main executable (run/main.c)
@@ -172,5 +151,4 @@ help:
 	@echo -  make clean      - Remove all generated files
 	@echo -  make info       - Display build configuration
 	@echo -  make help       - Show this message
-	@echo ---
 	@echo Platform detected: $(DETECTED_OS)
