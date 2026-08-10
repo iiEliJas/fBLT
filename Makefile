@@ -111,36 +111,40 @@ $(OBJ_DIR):
 $(BIN_DIR):
 	@$(MKDIR) $@
 
-
+# Helper rule to create target dir
 ifeq ($(DETECTED_OS),Windows)
     # Helper to convert forward slashes to backslashes
-    MKDIR_P = $(shell if not exist "$(subst /,\,$(patsubst %/,%,$(dir $@)))" mkdir "$(subst /,\,$(patsubst %/,%,$(dir $@)))")
+    define MAKE_PARENT_DIR
+	@if not exist "$(subst /,\,$(patsubst %/,%,$(dir $@)))" $(MKDIR) "$(subst /,\,$(patsubst %/,%,$(dir $@)))"
+    endef
 else
-    MKDIR_P = mkdir -p $(dir $@)
+    define MAKE_PARENT_DIR
+	@$(MKDIR) $(dir $@)
+    endef
 endif
 
 # Compile src to obj files
 $(OBJ_DIR)/$(SRC_DIR)/%.o: $(SRC_DIR)/%.c
 	@echo [CC] $< -> $@
-	@$(MKDIR_P)
+	$(MAKE_PARENT_DIR)
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 # Compile test to obj files
 $(OBJ_DIR)/$(TESTS_DIR)/%.o: $(TESTS_DIR)/%.c
 	@echo [CC] $< -> $@
-	@$(MKDIR_P)
+	$(MAKE_PARENT_DIR)
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 # Link test exe
 $(BIN_DIR)/test_main$(EXE_EXT): $(TEST_OBJS)
 	@echo [LD] Linking test executable: $@
-	@if not exist "$(BIN_DIR)" $(MKDIR) "$(BIN_DIR)"
+	$(MAKE_PARENT_DIR)
 	@$(CC) $(CFLAGS) $(TEST_OBJS) -o $@ $(LDLIBS)
 
 # Link main exe
 $(BIN_DIR)/main$(EXE_EXT): $(RUN_DIR)/main.c $(CORE_OBJS)
 	@echo [LD] Linking main executable: $@
-	@if not exist "$(BIN_DIR)" $(MKDIR) "$(BIN_DIR)"
+	$(MAKE_PARENT_DIR)
 	@$(CC) $(CFLAGS) $(RUN_DIR)/main.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
 
