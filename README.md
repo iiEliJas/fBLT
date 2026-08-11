@@ -1,80 +1,118 @@
-# FBLT 
-## Fast-Byte-Latent-Transformer
+# FBLT
 
-A minimal C/CUDA implementation of a byte-level, tokenizer-free language model.
+Fast Byte Latent Transformer in pure C. A byte-level language model with no tokenizer, built for code completion and small LLMs.
 
-**Status: Active Work in Progress (approx. 50% complete).**
+**Status: ~50% done.** Core infrastructure, operators, and components are done. Missing training loop, CUDA kernels, and inference speedups.
 
-This project implements the architecture described in two Meta papers:
+Based on two papers from Meta:
+- [Byte Latent Transformer](https://arxiv.org/abs/2412.09871) - Direct byte modeling with entropy-based dynamic patching. Matches token-based LLM scaling, no vocabulary needed.
+- [Fast Byte Latent Transformer](https://arxiv.org/abs/2605.08044) - Faster inference via diffusion decoding and self-speculation.
 
-* [Byte Latent Transformer (BLT)](https://arxiv.org/abs/2412.09871)
-* [Fast-BLT](https://arxiv.org/abs/2605.08044)
+## Why no tokenizer?
 
-It is designed primarily for byte-level code completion and small general LLM use cases.
+Tokenizers have limitations. They force a fixed vocabulary on your data before you even start training. This causes problems:
 
-## Architecture
+- Sensitivity to noise and out-of-domain text
+- Weird multilingual and low-resource behavior
+- Lost character information your model could have learned
+- Compute/quality tradeoff baked in at the tokenizer level
 
-FBLT drops the traditional fixed subword vocabulary (tokenizer). Instead, it uses dynamic patching based on data entropy to group bytes together. The network operates strictly on two tiers: bytes and patches.
+FBLT works directly on bytes. The trick: entropy-based patching. High-entropy (hard to predict) bytes get short patches and more compute. Predictable bytes get long patches and run cheap. This gives you adaptive compute allocation without any tokenizer baggage.
 
-The data flow is structured as follows:
+Result: better scaling, robustness, and no vocabulary constraints.
 
-1. **Entropy Model:** Analyzes raw bytes to predict per-byte entropy.
+## How it works
 
+Five-stage pipeline:
 
-2. **Patcher:** Uses entropy thresholds to dynamically segment the byte stream into variable-length patches.
+1. **Entropy Model** - Small byte-level LM that predicts per-byte entropy. Just guides patching, trained first.
 
+2. **Patcher** - Uses entropy thresholds to slice the byte stream into variable-length patches. Simple rule-based, no learning.
 
-3. **Local Encoder:** Compresses these byte patches into single embeddings. It utilizes hash n-gram embedding tables to recognize recurring byte sequences without a fixed vocabulary.
+3. **Local Encoder** - Tiny transformer that compresses byte patches into embeddings. Uses hash n-gram embeddings (rolling polynomial hash) to recognize byte patterns without a vocabulary table.
 
+4. **Patch Transformer** - The actual big model. Does block-causal attention over patches (sequence is 4-8x shorter than bytes). This is where compute happens.
 
-4. **Patch Transformer:** The core global model. It performs long-range, block-causal reasoning over the patch embeddings rather than individual bytes, saving compute.
+5. **Local Decoder** - Tiny transformer that expands patches back to bytes, autoregressively. Can draft multiple bytes and verify in one go (self-speculation).
 
+## Design
 
-5. **Local Decoder:** Autoregressively expands the patch context back into concrete next-byte predictions. It leverages Fast-BLT's self-speculation to speed up inference on predictable sequences.
+Pure C + CUDA.
 
+**One interface, two backends.** Every op (matmul, attention, ...) lives in a header. Implemented once for CPU, once for CUDA. Model code never knows the difference.
 
+**CPU is the ground truth.** Every new op gets a simple C implementation first. CUDA versions validate against it.
 
-## Implementation Details
+**Config, not code.** All the BLT paper ablations (hash sizes, cross-attention placement, layer splits) are JSON config values. No recompiling to try things.
 
-The codebase is written in pure C and CUDA. It is built around a single interface with two backends (CPU and CUDA).
+## Build
 
-* **Agnostic API:** Model code calls standard operators (e.g., `blt_matmul`, `blt_rmsnorm_forward`) and never explicitly references CPU or CUDA.
-
-
-* **CPU Ground Truth:** Every operator has a CPU reference implementation for numerical correctness.
-
-
-* **Config-driven:** Ablation parameters like hash n-gram sizes, cross-attention placement, and layer splits are driven entirely by config files.
-
-
-
-## Build Instructions
-
-The project uses CMake. The CPU backend is always built, while the CUDA backend is enabled via a CMake flag.
+Use make.
 
 ```bash
-# CPU debug build
-cmake -B build-debug -DBLT_WITH_CUDA=OFF -DCMAKE_BUILD_TYPE=Debug -DBLT_ASAN=ON
-cmake --build build-debug
-
-# CUDA release build
-cmake -B build-cuda -DBLT_WITH_CUDA=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build build-cuda
-
+make test       # build + run tests
+make main       # build main executable
+make info       # show build config
+make clean      # remove obj/, bin/
+make help       # show all targets
 ```
 
-## Repository Structure
+Default is `gcc -O2 -std=c99 -Wall -Wextra`. Change it:
 
-* `include/blt/`: Public headers defining the core tensor API, operators, and models.
+```bash
+make CC=clang CFLAGS="-O3 -std=c99 -Wall"
+```
 
+CUDA isn't wired up to the Makefile yet.
 
-* `src/core/`: Memory arenas (`blt_arena`), tensor metadata, and backend dispatch logic.
+## Layout
 
+```
+include/blt/            Public headers
+  ├── core/             Tensor, memory, backend dispatch
+  ├── ops/              op signatures
+  └── models/           Model component signatures
 
-* `src/backend_cpu/`: Plain C implementations for all forward/backward operators.
+src/
+  ├── core/             Implementation
+  ├── backend_cpu/      CPU ops
+  ├── models/           Model components
 
+tests/
+  ├── unit/             op tests
+  ├── integration/      Full pipeline tests
+  ├── test_main.c       Entry point
+  └── test_helpers.c    Asserts and utilities
 
-* `src/backend_cuda/`: CUDA implementations for operators.
+run/                    Entry points
+configs/                Model configs (JSON)
+```
 
+## What's done, what's next
 
-* `src/model/`: Backend-agnostic BLT architecture modules (entropy, patcher, encoder, decoder).
+**DONE:**
+- Tensor and memory system (arena allocator, shapes, strides)
+- Backend dispatch (CPU/CUDA abstraction)
+- Basic ops (elementwise, reductions, matmul, etc.) on CPU
+- Entropy model (byte-level LM for patching)
+- Patcher (entropy thresholds, monotonicity constraints)
+- Attention (causal, cross-attention, custom masks)
+- Full test harness (unit, integration, golden files)
+
+**TODO:**
+- Hash n-gram embeddings (rolling poly hash, tables)
+- Local encoder + decoder (interleaved attention + transformers)
+- Patch transformer (global model, block-causal)
+- End-to-end forward pass validation
+- Config file plumbing
+- CUDA kernels
+- Training loop
+- Inference/generation
+- Self-speculation (BLT-S) and diffusion decoding (BLT-D)
+- Benchmarking tools
+- Multi-GPU
+
+## Docs
+
+- `API_REFERENCE.md` - Tensor and op API
+- `TEST_API_REFERENCE.md` - Writing tests
