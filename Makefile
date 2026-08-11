@@ -78,15 +78,15 @@ TEST_OBJS := $(addprefix $(OBJ_DIR)/,$(TEST_SRCS:.c=.o)) $(CORE_OBJS)
 all: test
 
 info:
-	@echo "================================"
-	@echo "Detected OS: $(DETECTED_OS)"
-	@echo "================================"
-	@echo "CC: $(CC)"
-	@echo "CFLAGS: $(CFLAGS)"
-	@echo "LDLIBS: $(LDLIBS)"
-	@echo "OBJ_DIR: $(OBJ_DIR)"
-	@echo "BIN_DIR: $(BIN_DIR)"
-	@echo "================================"
+	@echo ================================
+	@echo Detected OS: $(DETECTED_OS)
+	@echo ================================
+	@echo CC: $(CC)
+	@echo CFLAGS: $(CFLAGS)
+	@echo LDLIBS: $(LDLIBS)
+	@echo OBJ_DIR: $(OBJ_DIR)
+	@echo BIN_DIR: $(BIN_DIR)
+	@echo ================================
 
 test: $(BIN_DIR)/test_main$(EXE_EXT)
 	@echo [TEST] Running tests...

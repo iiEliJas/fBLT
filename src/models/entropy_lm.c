@@ -176,10 +176,16 @@ blt_entropy_lm_grad* blt_entropy_lm_grad_create(blt_arena* arena, const blt_entr
 
 //----------------------------------------------------------------------
 // LM forward path
-
-// embedding -> N transformer layers -> matmul against lm_head_weight ->
-// logits -> cross-entropy against shifted targets
-// Shifted target handling: targets[t] = bytes[t+1], so the loss operates over seq_len-1 positions
+//
+// Pipeline steps:
+// 1. Embedding Lookup:     x = Embedding(bytes_in) [seq_len, embed_dim]
+// 2. Transformer Context:  x = Transformer(x)       [seq_len, embed_dim]
+// 3. LM Projection:        Z = x * W_head           [seq_len, 256]
+// 4. Shifted Loss:         L = CrossEntropy(Z[0..N-2], bytes_in[1..N-1])
+//
+// Shifted target handling: target[t] = bytes[t+1]
+// -> the prediction distribution at index t predicts the byte at position t+1
+// the loss operates over (seq_len - 1) positions
 
 void blt_entropy_lm_forward(
     const blt_entropy_lm* model,
@@ -203,26 +209,42 @@ void blt_entropy_lm_forward(
     blt_transformer_config layer_cfg = make_seq_layer_config(model, seq_len, &rope_cos_view, &rope_sin_view);
  
 
-    // ----------------
-    // Embedding
+    // -----------------------------------------------------------------
+    // STEP 1: Byte Embedding Lookup
+    // Maps discrete byte values x_t in range [0, 255] to continuous vector
+    // representations e_t of dimension (embed_dim) using embedding matrix 
+    // W_emb of size (256 x embed_dim):
+    //     e_t = W_emb[x_t]
+    // Output tensor shape: [seq_len, embed_dim]
+    // -----------------------------------------------------------------
     blt_byte_embedding emb = { .weight = model->embedding_weight, .embed_dim = embed_dim };
     size_t x_shape[2] = { seq_len, embed_dim };
     blt_tensor x = blt_tensor_create(arena, x_shape, 2, BLT_DTYPE_FP32);
     blt_byte_embedding_forward(&emb, bytes_in, &x);
     
 
-    // ----------------
-    // N transformer layers
+    // -----------------------------------------------------------------
+    // STEP 2: Transformer Layer
+    // Updates byte representations through N Transformer layers.
+    // At step t, the output vector h_t encodes the history of past bytes
+    // (x_1, ..., x_t) with causal self-attention:
+    //     h_t = Transformer(e_1, ..., e_t)
+    // Output tensor shape remains: [seq_len, embed_dim]
+    // -----------------------------------------------------------------
     for (size_t l = 0; l < model->config.num_layers; ++l) {
         blt_tensor next = blt_tensor_create(arena, x_shape, 2, BLT_DTYPE_FP32);
         blt_transformer_forward(&x, &model->layer_weights[l], &next, &layer_cfg, arena);
-        x = next;
+        x = next;  // h_t hidden state sequence
     }
  
 
-    // ----------------
-    // LM head
-    // logits = x @ lm_head_weight
+    // -----------------------------------------------------------------
+    // STEP 3: Linear projection to unnormalized logits
+    // Projects hidden context vectors h_t to raw prediction scores (logits)
+    // z_t across the 256 possible bytes in vocabulary V:
+    //     z_t = h_t * W_head  where W_head is size (embed_dim x 256)
+    // Output tensor shape: [seq_len, 256]
+    // -----------------------------------------------------------------
     size_t logits_shape[2] = { seq_len, 256 };
     blt_tensor logits_full = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
     blt_matmul(&x, &model->lm_head_weight, &logits_full);
@@ -232,17 +254,32 @@ void blt_entropy_lm_forward(
     memcpy(logits_out->data, logits_full.data, blt_tensor_bytes(&logits_full));
  
 
-    // ----------------
-    // Shifted target cross_entropy loss
-    // logits[0, ..., seq_len-2] predict bytes[1, ..., seq_len-1]
+    // -----------------------------------------------------------------
+    // STEP 4: Shifted Target Cross-Entropy Loss
+    // Evaluates auto-regressive prediction quality.
+    //
+    // For position t in range [0, seq_len - 2]:
+    //   - Inputs:  logits z_t predicting byte at position (t + 1)
+    //   - Target:  true byte value y_t = bytes_in[t + 1]
+    //
+    // Converts logits to probabilities with Softmax:
+    //     p(v | past bytes) = exp(z_t,v) / SUM_k(exp(z_t,k))
+    //
+    // Computes negative log-likelyhood loss (Cross-Entropy):
+    //     Loss = - (1 / (N - 1)) * SUM_t(log(p(x_(t+1) | past bytes)))
+    // -----------------------------------------------------------------
+    
+    // Slice logits for positions 0 to (seq_len - 2)
     blt_tensor shifted_logits;
     blt_tensor_view_2d(&shifted_logits, logits_full.data, seq_len - 1, 256, x.backend);
  
+    // Slice target byte IDs for positions 1 to (seq_len - 1)
     blt_tensor shifted_targets;
     size_t elem_size = blt_dtype_sizeof(bytes_in->dtype);
     view_1d(&shifted_targets, (char*)bytes_in->data + elem_size, seq_len - 1,
             bytes_in->dtype, bytes_in->backend);
  
+    // Compute cross-entropy loss over shifted sequence
     blt_cross_entropy_forward(&shifted_logits, &shifted_targets, loss_out);
 }
  

@@ -2,10 +2,14 @@
 #include "blt/core/backend.h"
 
 
-/*
-    Starts a new patch when the entropy exceeds the threshold, and closes the current patch when the entropy falls below the threshold
-    It also tracks the peak entropy value for each patch
-*/
+
+//----------------------------------------------------------------
+// Patcher
+//
+// Starts a new patch when the entropy exceeds the threshold, and closes the current patch when the entropy falls below the threshold
+// It also tracks the peak entropy value for each patch
+//----------------------------------------------------------------
+
 size_t blt_segment_patches(const blt_tensor* entropy, blt_patch_info* patches_out, size_t max_patches, const blt_entropy_config* config){
     blt_check_nd_fp32(entropy, 1, (const size_t[]){0}, "Entropy tensor must be 1D");
     BLT_REQUIRE(entropy->numel != 0, "Entropy tensor must not be empty");
@@ -40,7 +44,7 @@ size_t blt_segment_patches(const blt_tensor* entropy, blt_patch_info* patches_ou
         }
     }
 
-    // Close the final patch
+    // Close final patch
     if(patch_count < max_patches){
         patches_out[patch_count].start_idx = current_patch_start;
         patches_out[patch_count].length = seq_len - current_patch_start;

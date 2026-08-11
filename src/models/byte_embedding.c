@@ -17,12 +17,20 @@ blt_byte_embedding blt_byte_embedding_create(blt_arena* arena, size_t embed_dim)
 
 
 //----------------------------------------------------------------
-// Forward pass for byte embedding
-// For each byte in bytes_in, look up its row in the embedding table and copy
-// it into the corresponding row of out. No computation, just a gather.
+// Forward Pass for Byte Embedding
+//
+// For position i in [0, seq_len-1]:
+//     out[i, :] = weight[bytes_in[i], :]
+//
+// Shape mapping:
+//   bytes_in:    [seq_len]                 (UINT8)
+//   emb->weight: [256, embed_dim]          (FP32)
+//   out:         [seq_len, embed_dim]      (FP32)
+//----------------------------------------------------------------
 
 void blt_byte_embedding_forward(const blt_byte_embedding* emb, const blt_tensor* bytes_in,
                                  blt_tensor* out) {
+    // ---- 1. Input Validation ----
     BLT_REQUIRE(bytes_in->dtype == BLT_DTYPE_UINT8, "bytes_in must be a UINT8 tensor");
     BLT_REQUIRE(bytes_in->ndim == 1, "bytes_in must be a 1D tensor of shape [seq_len]");
 
@@ -38,10 +46,14 @@ void blt_byte_embedding_forward(const blt_byte_embedding* emb, const blt_tensor*
     const float* weight_data = (const float*)emb->weight.data;
     float* out_data = (float*)out->data;
 
+    // ---- 2. Gather Operation ----
+    // Direct lookup: copy embedding row (byte_val) directly to output row i
     for (size_t i = 0; i < seq_len; ++i) {
         uint8_t byte_val = bytes_data[i];
+        
         const float* row_in = weight_data + (size_t)byte_val * embed_dim;
         float* row_out = out_data + i * embed_dim;
+        
         for (size_t d = 0; d < embed_dim; ++d) {
             row_out[d] = row_in[d];
         }
@@ -51,12 +63,21 @@ void blt_byte_embedding_forward(const blt_byte_embedding* emb, const blt_tensor*
 
 
 //----------------------------------------------------------------
-// Backward pass for byte embedding
-// Scatter-adds grad_out rows into grad_weight at the row indexed by the
-// corresponding input byte value. grad_weight must be zeroed by the caller before accumulating across a batch
+// Backward Pass for Byte Embedding
+//
+// Scatter-Add
+// For position i in [0, seq_len-1]:
+//     grad_weight[bytes_in[i], :] += grad_out[i, :]
+//
+// Shape mapping:
+//   bytes_in:    [seq_len]                 (UINT8)
+//   grad_out:    [seq_len, embed_dim]      (FP32)
+//   grad_weight: [256, embed_dim]          (FP32, pre-zeroed)
+//----------------------------------------------------------------
 
 void blt_byte_embedding_backward(const blt_byte_embedding* emb, const blt_tensor* bytes_in,
                                   const blt_tensor* grad_out, blt_tensor* grad_weight) {
+    // ---- 1. Input Validation ----
     BLT_REQUIRE(bytes_in->dtype == BLT_DTYPE_UINT8, "bytes_in must be a UINT8 tensor");
     BLT_REQUIRE(bytes_in->ndim == 1, "bytes_in must be a 1D tensor of shape [seq_len]");
 
@@ -77,10 +98,14 @@ void blt_byte_embedding_backward(const blt_byte_embedding* emb, const blt_tensor
     const float* grad_out_data = (const float*)grad_out->data;
     float* grad_weight_data = (float*)grad_weight->data;
 
+    // ---- 2. Scatter-Add Accumulation ----
+    // For each token accumulate grad_out[i, :] into grad_weight[byte_val, :]
     for (size_t i = 0; i < seq_len; ++i) {
         uint8_t byte_val = bytes_data[i];
+        
         const float* row_grad = grad_out_data + i * embed_dim;
         float* row_target = grad_weight_data + (size_t)byte_val * embed_dim;
+        
         for (size_t d = 0; d < embed_dim; ++d) {
             row_target[d] += row_grad[d];
         }

@@ -15,7 +15,7 @@
 
 
 //----------------------------------------------------------------
-// Helper: Validate inputs and config for multihead attention
+// Validation
 
 static void validate_attention_call(
     const blt_tensor* input, const blt_tensor* weight_qkv, const blt_tensor* weight_proj,
@@ -56,7 +56,7 @@ static void validate_attention_call(
 
 
 //----------------------------------------------------------------
-// Helper: Compute softmax of a row in-place, with optional causal masking
+// Helper: Compute softmax of a row in-place with causal masking
 
 static void causal_softmax_row_inplace(float* row, size_t seq_len, size_t row_idx, bool is_causal, float scale) {
     float max_val = -INFINITY;
@@ -175,19 +175,38 @@ static void attention_head(const float* qkv_data, size_t head_idx, size_t seq_le
 
 
 //----------------------------------------------------------------
-// Main: Multihead attention function
+// Multihead attention function
+//
+// Pipeline:
+// 1. QKV Projection:    QKV = Input * W_qkv          [seq_len, 3 * embed_dim]
+// 2. RoPE Rotation:     Q_rot, K_rot = RoPE(Q, K)    [apply positional encodings]
+// 3. Scaled Attention:  Scores = (Q * K^T) / sqrt(d_k)
+//                       Attn   = Softmax(Mask(Scores))
+//                       Head   = Attn * V            [seq_len, embed_dim]
+// 4. Output Projection: Output = Combined * W_proj   [seq_len, embed_dim]
 
-void blt_multihead_attention(const blt_tensor* input, const blt_tensor* weight_qkv,
-                              const blt_tensor* weight_proj, blt_tensor* output,
-                              const blt_attention_config* config, blt_arena* arena) {
+void blt_multihead_attention(
+    const blt_tensor* input, 
+    const blt_tensor* weight_qkv,
+    const blt_tensor* weight_proj, 
+    blt_tensor* output,
+    const blt_attention_config* config, 
+    blt_arena* arena
+) {
     size_t seq_len, head_dim;
     validate_attention_call(input, weight_qkv, weight_proj, output, config, arena, &seq_len, &head_dim);
  
     size_t embed_dim = config->embed_dim;
     size_t num_heads = config->num_heads;
+    
+    // Scale factor for scaled dot-product attention: 1 / sqrt(head_dim)
     float scale = 1.0f / sqrtf((float)head_dim);
  
-    // ---- Arena allocations ----
+    // -----------------------------------------------------------------
+    // STEP 0: Arena Memory Allocations
+    // Allocates workspace buffers for intermediate QKV projections,
+    // concatenated multi-head outputs, and temporary attention matrices
+    // -----------------------------------------------------------------
     size_t qkv_numel = seq_len * 3 * embed_dim;
     size_t combined_numel = seq_len * embed_dim;
     size_t scores_numel = seq_len * seq_len;
@@ -201,19 +220,31 @@ void blt_multihead_attention(const blt_tensor* input, const blt_tensor* weight_q
  
     memset(combined_data, 0, combined_numel * sizeof(float));
  
-    // ---- Step 1: QKV projection ----
+
+    // -----------------------------------------------------------------
+    // STEP 1: Linear QKV Projection
+    // Projects input X [seq_len, embed_dim] to QKV tensor [seq_len, 3 * embed_dim]:
+    //     QKV = X * W_qkv
+    // -----------------------------------------------------------------
     blt_tensor qkv_tensor;
     blt_tensor_view_2d(&qkv_tensor, qkv_data, seq_len, 3 * embed_dim, input->backend);
     blt_matmul(input, weight_qkv, &qkv_tensor);
  
-    // ---- Step 2: RoPE
+
+    // -----------------------------------------------------------------
+    // STEP 2: Rotary Position Embedding (RoPE)
+    // Applies position-dependent rotation matrices to Query and Key vectors:
+    //     Q_rotated = RoPE(Q, cos, sin)
+    //     K_rotated = RoPE(K, cos, sin)
+    // Uses cached trigonometric tables if available
+    // -----------------------------------------------------------------
     if (config->use_rope) {
         size_t half = head_dim / 2;
  
         const blt_tensor* rope_cos_t;
         const blt_tensor* rope_sin_t;
-        blt_tensor computed_cos_t, computed_sin_t;   // only used in the fallback path
- 
+        blt_tensor computed_cos_t, computed_sin_t;   // fallback
+
         bool have_cache = (config->rope_cos_cache != NULL && config->rope_sin_cache != NULL);
  
         if (have_cache) {
@@ -246,23 +277,40 @@ void blt_multihead_attention(const blt_tensor* input, const blt_tensor* weight_q
         BLT_REQUIRE(q_head_buf && k_head_buf && q_rot_buf && k_rot_buf,
                     "blt_multihead_attention: failed to allocate RoPE temporary buffers from arena");
  
+        // Rotates Q and K for every head in-place
         apply_rope_to_all_heads(qkv_data, seq_len, embed_dim, num_heads, head_dim,
                                  rope_cos_t, rope_sin_t,
                                  q_head_buf, q_rot_buf, k_head_buf, k_rot_buf, input->backend);
     }
  
-    // ---- Step 3: per-head attention ----
+
+    // -----------------------------------------------------------------
+    // STEP 3: Per-Head Scaled Dot-Product Attention
+    // For each head h in [0, num_heads - 1]:
+    //   a. Compute raw dot-product scores: S_ij = Q_i * K_j
+    //   b. Scale scores: S_ij = S_ij / sqrt(head_dim)
+    //   c. Apply causal mask (set S_ij = -infinity for j > i)
+    //   d. Softmax along rows to get weights: A_ij = exp(S_ij) / SUM_k(exp(S_ik))
+    //   e. Aggregate values: Head_out_i = SUM_j (A_ij * V_j)
+    // Writes head outputs into combined_data [seq_len, embed_dim]
+    // -----------------------------------------------------------------
     for (size_t head = 0; head < num_heads; ++head) {
         attention_head(qkv_data, head, seq_len, embed_dim, head_dim,
                         config->is_causal, scale, scores_buf, combined_data);
     }
  
-    // ---- Step 4: output projection ----
+
+    // -----------------------------------------------------------------
+    // STEP 4: Output Linear Projection
+    // Projects linked multi-head outputs back to the model dimension:
+    //     Output = Combined * W_proj
+    // Output tensor shape: [seq_len, embed_dim]
+    // -----------------------------------------------------------------
     blt_tensor combined_tensor;
     blt_tensor_view_2d(&combined_tensor, combined_data, seq_len, embed_dim, input->backend);
     blt_matmul(&combined_tensor, weight_proj, output);
- 
-    // Arena cleanup remains the caller's responsibility (blt_arena_reset).
+    
+    // Arena cleanup is the callers responsibility
 }
 
 
@@ -363,7 +411,7 @@ static void attn_bwd_recompute_forward(
         }
     }
  
-    // Per-head softmax attention weights + combined output (same math as forward).
+    // Per-head softmax attention weights + combined output (same math as forward)
     size_t qkv_stride = 3 * embed_dim;
     for (size_t head = 0; head < num_heads; head++) {
         size_t q_offset = head * head_dim;

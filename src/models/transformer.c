@@ -63,7 +63,7 @@ static void validate_transformer_call(
 
 
 //--------------------------------
-// Norm / activation dispatch — config-driven, not branched per model
+// Norm
 
 static void apply_norm1(const blt_tensor* input, const blt_transformer_weights* w,
                          const blt_transformer_config* config, blt_tensor* out) {
@@ -83,7 +83,7 @@ static void apply_norm2(const blt_tensor* input, const blt_transformer_weights* 
     }
 }
  
-// FFN: up (and gate, for SwiGLU) projection -> activation -> down projection.
+// FFN: up (and gate, for SwiGLU) projection -> activation -> down projection
 static void apply_ffn(const blt_tensor* norm_attn, const blt_transformer_weights* w,
                        const blt_transformer_config* config, blt_arena* arena,
                        size_t seq_len, size_t hidden_dim, blt_tensor* ffn_out) {
@@ -106,8 +106,19 @@ static void apply_ffn(const blt_tensor* norm_attn, const blt_transformer_weights
 
 
 
-//--------------------------------
-// Main Transformer Forward Pass
+//----------------------------------------------------------------
+// Transformer Block Forward Pass
+//
+// Transformer Layer:
+// 1. Attention Sub-layer:
+//      Norm1_out     = Norm1(Input)                     [seq_len, embed_dim]
+//      Attn_out      = MultiHeadAttention(Norm1_out)    [seq_len, embed_dim]
+//      Attn_residual = Input + Attn_out                 [seq_len, embed_dim]
+//
+// 2. Feed-Forward (FFN) Sub-layer:
+//      Norm2_out     = Norm2(Attn_residual)             [seq_len, embed_dim]
+//      FFN_out       = FFN(Norm2_out)                   [seq_len, embed_dim]
+//      Output        = Attn_residual + FFN_out          [seq_len, embed_dim]
 
 void blt_transformer_forward(
     const blt_tensor* input,
@@ -122,21 +133,37 @@ void blt_transformer_forward(
  
     size_t embed_shape[2] = { seq_len, embed_dim };
  
-    // Step 1: pre-norm + attention, with residual.
+    
+    // -----------------------------------------------------------------
+    // STEP 1: Multi-Head Attention Sub-Layer with Pre-Norm & Residual
+    // -----------------------------------------------------------------
+    
+    // Apply pre-layer normalization (RMSNorm or LayerNorm)
     blt_tensor norm_input = blt_tensor_create(arena, embed_shape, 2, BLT_DTYPE_FP32);
     apply_norm1(input, weights, config, &norm_input);
  
+    // Multi-Head Attention forward pass
     blt_tensor attn_out = blt_tensor_create(arena, embed_shape, 2, BLT_DTYPE_FP32);
     blt_multihead_attention(&norm_input, weights->attn_qkv_w, weights->attn_proj_w,
                              &attn_out, &config->attn_config, arena);
  
+    // Add residual connection: Attn_residual = Input + Attn_out
     blt_tensor attn_residual = blt_tensor_create(arena, embed_shape, 2, BLT_DTYPE_FP32);
     blt_add(input, &attn_out, &attn_residual);
  
-    // Step 2: pre-norm + FFN, with residual.
+
+    // -----------------------------------------------------------------
+    // STEP 2: Feed-Forward Network (FFN) Sub-Layer with Pre-Norm & Residual
+    // -----------------------------------------------------------------
+    
+    // Apply second pre-layer normalization
     blt_tensor norm_attn = blt_tensor_create(arena, embed_shape, 2, BLT_DTYPE_FP32);
     apply_norm2(&attn_residual, weights, config, &norm_attn);
  
+    // Feed-Forward Network forward pass (Up-projection -> Activation -> Down-projection)
+    // Writes intermediate result into output
     apply_ffn(&norm_attn, weights, config, arena, seq_len, hidden_dim, output);
+
+    // Add second residual connection: Output = Attn_residual + FFN_out
     blt_add(&attn_residual, output, output);
 }
