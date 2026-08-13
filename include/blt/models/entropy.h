@@ -2,10 +2,10 @@
 #define BLT_MODELS_ENTROPY_H
 
 #include "blt/core/tensor.h"
+#include "blt/models/patcher.h"
 
 // Config for entropy calculation
 typedef struct {
-    float threshold;      // entropy spike threshold to trigger a new patch
     size_t vocab_size;
     bool use_log2;        // calculate entropy in bits (log2) or nats (ln)
 } blt_entropy_config;

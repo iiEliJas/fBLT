@@ -194,7 +194,6 @@
 ### blt/models/entropy.h
 - `blt_entropy_config` struct
   - Fields:
-    - `float threshold`: entropy threshold used to trigger a new patch.
     - `size_t vocab_size`: size of the probability distribution vocabulary.
     - `bool use_log2`: whether entropy should use base-2 logarithms.
 - `blt_compute_entropy(probs, entropy_out, config)`
@@ -202,13 +201,24 @@
   - Output: writes per-row entropy values into `entropy_out`.
 
 ### blt/models/patcher.h
+- `blt_patch_rule` enum
+  - `BLT_PATCH_RULE_GLOBAL`: use only the global threshold rule
+  - `BLT_PATCH_RULE_MONOTONIC`: use only the monotonic threshold rule
+  - `BLT_PATCH_RULE_BOTH`: use both rules
 - `blt_patch_info` struct
   - Fields:
     - `size_t start_idx`: starting index of the patch in the entropy sequence.
     - `size_t length`: number of elements in the patch.
     - `float peak_entropy`: maximum entropy value observed in the patch.
-- `blt_segment_patches(entropy, patches_out, max_patches, config)`
-  - Input: 1D entropy tensor, output patch buffer, maximum patch count, and entropy config.
+- `blt_patcher_config` struct
+  - Fields:
+    - `float threshold_global`: global patch rule value (e.g. 1.34f)
+    - `float threshold_monotonic`: monotonic rule value (e.g. 0.5f)
+    - `size_t max_patch_length`: maximum number of bytes per patch
+    - `blt_patch_rule rule`: which rule to use
+    - `bool reset_on_newline`: starts a new patch after `\n`    
+- `blt_segment_patches(entropy, bytes, patches_out, max_patches, config)`
+  - Input: 1D entropy tensor, uint8_t bytes array, output patch buffer, maximum patch count, and patcher config.
   - Output: returns the number of produced patches and fills `patches_out` with patch metadata.
 
 ## blt/models/byte_embedding.h

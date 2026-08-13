@@ -21,13 +21,9 @@ int run_byte_embedding_model_tests(void);
 int run_patcher_model_tests(void);
 int run_attention_model_tests(void);
 int run_attention_backward_model_tests(void);
-int run_entropy_lm_tests(void);
+int run_elm_model_tests(void);
 
-int run_phase2_attention_parity_test(void);
-int run_phase2_attention_backward_parity_test(void);
-int run_phase2_transformer_block_parity_test(void);
-
-int run_phase2_tests(void);
-int run_phase1_tests(void);
-int run_overfit_entropy_lm_tests(void);
+int run_transformer_parity_tests(void);
+int run_patcher_parity_tests(void);
+int run_elm_overfit_tests(void);
 #endif // BLT_TEST_SUITE_H

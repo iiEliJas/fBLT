@@ -37,7 +37,7 @@ endif
 # ============================================================================
 # SOURCE FILES
 # ============================================================================
-# Core src
+
 CORE_SRCS := \
     $(SRC_DIR)/core/tensor.c \
     $(SRC_DIR)/core/allocator.c \
@@ -53,14 +53,11 @@ CORE_SRCS := \
     $(SRC_DIR)/models/transformer.c \
     $(SRC_DIR)/models/entropy_lm.c
 
-# Test src
 TEST_SRCS := \
     $(wildcard $(TESTS_DIR)/unit/*/*.c) \
+	$(wildcard $(TESTS_DIR)/parity/*.c) \
     $(TESTS_DIR)/test_helpers.c \
-    $(TESTS_DIR)/test_main.c \
-    $(TESTS_DIR)/integration/test_backend.c \
-    $(TESTS_DIR)/integration/test_transformer.c \
-    $(TESTS_DIR)/integration/test_entropy_lm.c
+    $(TESTS_DIR)/test_main.c
 
 
 # ============================================================================
@@ -73,7 +70,7 @@ TEST_OBJS := $(addprefix $(OBJ_DIR)/,$(TEST_SRCS:.c=.o)) $(CORE_OBJS)
 # ============================================================================
 # TARGETS
 # ============================================================================
-.PHONY: all test main clean info help
+.PHONY: all test main bench clean info help
 
 all: test
 
@@ -94,6 +91,9 @@ test: $(BIN_DIR)/test_main$(EXE_EXT)
 
 main: $(BIN_DIR)/main$(EXE_EXT)
 	@echo [MAIN] Built successfully: $(BIN_DIR)/main$(EXE_EXT)
+
+bench: $(BIN_DIR)/bench_patcher$(EXE_EXT)
+	@echo [BENCH] Built successfully: $(BIN_DIR)/bench$(EXE_EXT)
 
 
 # ============================================================================
@@ -124,6 +124,12 @@ $(BIN_DIR)/main$(EXE_EXT): $(RUN_DIR)/main.c $(CORE_OBJS)
 	$(MKDIR_BIN)
 	@$(CC) $(CFLAGS) $(RUN_DIR)/main.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
+# Link bench exe
+$(BIN_DIR)/bench_patcher$(EXE_EXT): $(TESTS_DIR)/bench/bench_patcher.c $(CORE_OBJS)
+	@echo [LD] Linking bench executable: $@
+	$(MKDIR_BIN)
+	@$(CC) $(CFLAGS) $(TESTS_DIR)/bench/bench_patcher.c $(CORE_OBJS) -o $@ $(LDLIBS)
+
 
 # ============================================================================
 # CLEAN
@@ -147,6 +153,7 @@ help:
 	@echo - Available targets:
 	@echo -  make test       - Build and run test executable
 	@echo -  make main       - Build main executable (run/main.c)
+	@echo -  make bench      - Build benchmark executable
 	@echo -  make all        - Same as 'make test'
 	@echo -  make clean      - Remove all generated files
 	@echo -  make info       - Display build configuration

@@ -38,10 +38,10 @@ int main(void) {
         {"byte embedding model", run_byte_embedding_model_tests},
         {"attention model", run_attention_model_tests},
         {"attention backward model", run_attention_backward_model_tests},
-        {"entropy LM model", run_entropy_lm_tests},
-        {"backend parity", run_phase1_tests},
-        {"transformer parity", run_phase2_tests},
-        {"entropy lm overfit", run_overfit_entropy_lm_tests},
+        {"entropy LM model", run_elm_model_tests},
+        {"patcher parity", run_patcher_parity_tests},
+        {"transformer parity", run_transformer_parity_tests},
+        {"entropy LM overfit", run_elm_overfit_tests},
     };
 
     int passed = 0;
