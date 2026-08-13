@@ -145,9 +145,9 @@ int run_patcher_parity_tests(void) {
     blt_tensor bytes_tensor = {0};
 
     // Load probabilities, entropy, AND the generated uint8 byte stream
-    if (!load_binary_tensor("data/phase1_probs.bin", arena, &probs) ||
-        !load_binary_tensor("data/phase1_entropy.bin", arena, &expected_entropy) ||
-        !load_binary_tensor_uint8("data/phase1_bytes.bin", arena, &bytes_tensor)) {
+    if (!load_binary_tensor("data/patcher_probs.bin", arena, &probs) ||
+        !load_binary_tensor("data/patcher_entropy.bin", arena, &expected_entropy) ||
+        !load_binary_tensor_uint8("data/patcher_bytes.bin", arena, &bytes_tensor)) {
         blt_arena_destroy(arena);
         return 0;
     }
@@ -204,7 +204,7 @@ int run_patcher_parity_tests(void) {
     size_t expected_starts[1024];
     size_t expected_lengths[1024];
     size_t expected_count = 0;
-    if (!load_patch_boundaries("data/phase1_patch_boundaries.txt", expected_starts, expected_lengths, 1024, &expected_count)) {
+    if (!load_patch_boundaries("data/patcher_boundaries.txt", expected_starts, expected_lengths, 1024, &expected_count)) {
         blt_arena_destroy(arena);
         return 0;
     }

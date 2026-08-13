@@ -1,38 +1,12 @@
-import argparse
-import struct
+import torch as torch_patcher
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+from golden import write_tensor_fp32, write_tensor_uint8, create_parser as create_parser_base
 
-try:
-    import torch
-except ImportError:
-    raise ImportError("PyTorch is required to run this script. Install it with pip install torch.")
 
-def write_tensor_fp32(path: Path, tensor: torch.Tensor) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tensor = tensor.detach().cpu().contiguous().to(torch.float32)
-    shape = tuple(tensor.shape)
-    values = tensor.view(-1).tolist()
-
-    with path.open("wb") as fh:
-        fh.write(struct.pack("<I", len(shape)))
-        for dim in shape:
-            fh.write(struct.pack("<I", dim))
-        for value in values:
-            fh.write(struct.pack("<f", float(value)))
-
-def write_tensor_uint8(path: Path, tensor: torch.Tensor) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tensor = tensor.detach().cpu().contiguous().to(torch.uint8)
-    shape = tuple(tensor.shape)
-    values = tensor.view(-1).tolist()
-
-    with path.open("wb") as fh:
-        fh.write(struct.pack("<I", len(shape)))
-        for dim in shape:
-            fh.write(struct.pack("<I", dim))
-        fh.write(bytes(values))
-
-def build_patches(entropy: torch.Tensor, bytes_array: torch.Tensor, args):
+def build_patches(entropy, bytes_array, args):
+    """Build patches based on entropy thresholding."""
     patch_starts = []
     patch_lengths = []
     patch_peak_entropies = []
@@ -49,14 +23,11 @@ def build_patches(entropy: torch.Tensor, bytes_array: torch.Tensor, args):
         val = float(entropy[idx].item())
         boundary = False
         
-        # Rule 1: Newline Context Reset
         if args.reset_on_newline and bytes_array[idx].item() == 0x0A:
             boundary = True
-        # Rule 2: Max Length Cap
         elif current_len >= args.max_patch_length:
             boundary = True
         else:
-            # Rule 3 & 4: Entropy Threshold Rules
             global_rule = val > args.threshold_global
             monotonic_rule = (idx > current_start) and ((val - float(entropy[idx-1].item())) > args.threshold_monotonic)
             
@@ -67,7 +38,6 @@ def build_patches(entropy: torch.Tensor, bytes_array: torch.Tensor, args):
             elif args.rule == 'both':
                 boundary = global_rule or monotonic_rule
 
-        # Save patch if boundary triggered
         if boundary:
             patch_starts.append(current_start)
             patch_lengths.append(current_len)
@@ -80,7 +50,6 @@ def build_patches(entropy: torch.Tensor, bytes_array: torch.Tensor, args):
             if val > current_peak:
                 current_peak = val
 
-    # Flush final patch
     patch_starts.append(current_start)
     patch_lengths.append(current_len)
     patch_peak_entropies.append(current_peak)
@@ -88,48 +57,61 @@ def build_patches(entropy: torch.Tensor, bytes_array: torch.Tensor, args):
     return patch_starts, patch_lengths, patch_peak_entropies
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Dump entropy reference data for Phase 1/2 tests.")
-    parser.add_argument("--output-dir", type=Path, default=Path("data"), help="Directory to write reference files")
+def generate_golden_patcher_files(output_dir: str = "data", 
+                                   threshold_global: float = 0.6,
+                                   threshold_monotonic: float = 0.4,
+                                   max_patch_length: int = 5,
+                                   rule: str = 'both',
+                                   reset_on_newline: bool = True,
+                                   seed: int = 0) -> None:
+    """Generate golden files for patcher."""
+    torch_patcher.manual_seed(seed)
     
-    # Matching the exact config defaults found in the C tests
-    parser.add_argument("--threshold-global", type=float, default=0.6, help="Global patch threshold")
-    parser.add_argument("--threshold-monotonic", type=float, default=0.4, help="Monotonic patch threshold")
-    parser.add_argument("--max-patch-length", type=int, default=5, help="Maximum length of a patch")
-    parser.add_argument("--rule", type=str, choices=['global', 'monotonic', 'both'], default='both', help="Patching rule to apply")
-    parser.add_argument("--reset-on-newline", action='store_true', default=True, help="Reset patches on newline bytes")
-    parser.add_argument("--seed", type=int, default=0, help="Random seed for reproducibility")
-    args = parser.parse_args()
-
-    torch.manual_seed(args.seed)
+    probs = torch_patcher.softmax(torch_patcher.randn(512, 256, dtype=torch_patcher.float32), dim=-1)
+    entropy = -torch_patcher.sum(probs * torch_patcher.log2(probs + 1e-9), dim=-1)
     
-    # 1. Generate probabilities and calculate entropy
-    probs = torch.softmax(torch.randn(512, 256, dtype=torch.float32), dim=-1)
-    entropy = -torch.sum(probs * torch.log2(probs + 1e-9), dim=-1)
-    
-    # 2. Generate random bytes and inject newlines (0x0A) to test the structural reset rule
-    bytes_array = torch.randint(0, 256, (512,), dtype=torch.uint8)
-    newline_indices = torch.randint(1, 511, (15,))
+    bytes_array = torch_patcher.randint(0, 256, (512,), dtype=torch_patcher.uint8)
+    newline_indices = torch_patcher.randint(1, 511, (15,))
     bytes_array[newline_indices] = 0x0A
 
-    # 3. Simulate patching rules
+    class Args:
+        pass
+    args = Args()
+    args.threshold_global = threshold_global
+    args.threshold_monotonic = threshold_monotonic
+    args.max_patch_length = max_patch_length
+    args.rule = rule
+    args.reset_on_newline = reset_on_newline
+
     patch_starts, patch_lengths, patch_peak_entropies = build_patches(entropy, bytes_array, args)
 
-    # 4. Export all binaries
-    output_dir = args.output_dir
-    write_tensor_fp32(output_dir / "phase1_probs.bin", probs)
-    write_tensor_fp32(output_dir / "phase1_entropy.bin", entropy)
-    write_tensor_uint8(output_dir / "phase1_bytes.bin", bytes_array)
+    output_dir = Path(output_dir)
+    write_tensor_fp32(output_dir / "patcher_probs.bin", probs)
+    write_tensor_fp32(output_dir / "patcher_entropy.bin", entropy)
+    write_tensor_uint8(output_dir / "patcher_bytes.bin", bytes_array)
 
-    with (output_dir / "phase1_patch_boundaries.txt").open("w", encoding="utf-8") as fh:
+    with (output_dir / "patcher_boundaries.txt").open("w", encoding="utf-8") as fh:
         fh.write("# start length peak_entropy\n")
         for start, length, peak in zip(patch_starts, patch_lengths, patch_peak_entropies):
             fh.write(f"{start} {length} {peak:.6f}\n")
 
-    print(f"Wrote {output_dir / 'phase1_probs.bin'}")
-    print(f"Wrote {output_dir / 'phase1_entropy.bin'}")
-    print(f"Wrote {output_dir / 'phase1_bytes.bin'}")
-    print(f"Wrote {output_dir / 'phase1_patch_boundaries.txt'}")
 
-if __name__ == "__main__":
-    main()
+def main_patcher():
+    parser = create_parser_base("Generate golden files for patcher")
+    parser.add_argument("--threshold-global", type=float, default=0.6, help="Global patch threshold")
+    parser.add_argument("--threshold-monotonic", type=float, default=0.4, help="Monotonic patch threshold")
+    parser.add_argument("--max-patch-length", type=int, default=5, help="Maximum length of a patch")
+    parser.add_argument("--rule", type=str, choices=['global', 'monotonic', 'both'], default='both', help="Patching rule")
+    parser.add_argument("--reset-on-newline", action='store_true', default=True, help="Reset patches on newline")
+    parser.add_argument("--seed", type=int, default=0, help="Random seed")
+    args = parser.parse_args()
+
+    generate_golden_patcher_files(
+        str(args.output_dir),
+        threshold_global=args.threshold_global,
+        threshold_monotonic=args.threshold_monotonic,
+        max_patch_length=args.max_patch_length,
+        rule=args.rule,
+        reset_on_newline=args.reset_on_newline,
+        seed=args.seed
+    )

@@ -30,10 +30,10 @@ int run_attention_parity_test(void) {
     blt_tensor expected_out = {0};
 
     int ok = 1;
-    ok &= load_binary_tensor("data/phase2_attn_input.bin", arena, &input);
-    ok &= load_binary_tensor("data/phase2_attn_qkv_w.bin", arena, &qkv_w);
-    ok &= load_binary_tensor("data/phase2_attn_proj_w.bin", arena, &proj_w);
-    ok &= load_binary_tensor("data/phase2_attn_expected_out.bin", arena, &expected_out);
+    ok &= load_binary_tensor("data/attn_input.bin", arena, &input);
+    ok &= load_binary_tensor("data/attn_qkv_w.bin", arena, &qkv_w);
+    ok &= load_binary_tensor("data/attn_proj_w.bin", arena, &proj_w);
+    ok &= load_binary_tensor("data/attn_expected_out.bin", arena, &expected_out);
     if (!ok) {
         blt_arena_destroy(arena);
         return 0;
@@ -79,13 +79,13 @@ int run_attention_backward_parity_test(void) {
     blt_tensor expected_grad_proj_w = {0};
  
     int ok = 1;
-    ok &= load_binary_tensor("data/phase2_attn_input.bin", arena, &input);
-    ok &= load_binary_tensor("data/phase2_attn_qkv_w.bin", arena, &qkv_w);
-    ok &= load_binary_tensor("data/phase2_attn_proj_w.bin", arena, &proj_w);
-    ok &= load_binary_tensor("data/phase2_attn_grad_out.bin", arena, &grad_out);
-    ok &= load_binary_tensor("data/phase2_attn_expected_grad_input.bin", arena, &expected_grad_input);
-    ok &= load_binary_tensor("data/phase2_attn_expected_grad_qkv_w.bin", arena, &expected_grad_qkv_w);
-    ok &= load_binary_tensor("data/phase2_attn_expected_grad_proj_w.bin", arena, &expected_grad_proj_w);
+    ok &= load_binary_tensor("data/attn_input.bin", arena, &input);
+    ok &= load_binary_tensor("data/attn_qkv_w.bin", arena, &qkv_w);
+    ok &= load_binary_tensor("data/attn_proj_w.bin", arena, &proj_w);
+    ok &= load_binary_tensor("data/attn_grad_out.bin", arena, &grad_out);
+    ok &= load_binary_tensor("data/attn_expected_grad_input.bin", arena, &expected_grad_input);
+    ok &= load_binary_tensor("data/attn_expected_grad_qkv_w.bin", arena, &expected_grad_qkv_w);
+    ok &= load_binary_tensor("data/attn_expected_grad_proj_w.bin", arena, &expected_grad_proj_w);
     if (!ok) {
         blt_arena_destroy(arena);
         return 0;
@@ -145,16 +145,16 @@ int run_transformer_block_parity_test(void) {
     blt_tensor expected_out = {0};
 
     int ok = 1;
-    ok &= load_binary_tensor("data/phase2_block_input.bin", arena, &input);
-    ok &= load_binary_tensor("data/phase2_block_norm1_weight.bin", arena, &norm1_weight);
-    ok &= load_binary_tensor("data/phase2_block_norm1_bias.bin", arena, &norm1_bias);
-    ok &= load_binary_tensor("data/phase2_block_attn_qkv_w.bin", arena, &attn_qkv_w);
-    ok &= load_binary_tensor("data/phase2_block_attn_proj_w.bin", arena, &attn_proj_w);
-    ok &= load_binary_tensor("data/phase2_block_norm2_weight.bin", arena, &norm2_weight);
-    ok &= load_binary_tensor("data/phase2_block_norm2_bias.bin", arena, &norm2_bias);
-    ok &= load_binary_tensor("data/phase2_block_ffn_up_w.bin", arena, &ffn_up_w);
-    ok &= load_binary_tensor("data/phase2_block_ffn_down_w.bin", arena, &ffn_down_w);
-    ok &= load_binary_tensor("data/phase2_block_expected_out.bin", arena, &expected_out);
+    ok &= load_binary_tensor("data/transformer_input.bin", arena, &input);
+    ok &= load_binary_tensor("data/transformer_norm1_weight.bin", arena, &norm1_weight);
+    ok &= load_binary_tensor("data/transformer_norm1_bias.bin", arena, &norm1_bias);
+    ok &= load_binary_tensor("data/transformer_attn_qkv_w.bin", arena, &attn_qkv_w);
+    ok &= load_binary_tensor("data/transformer_attn_proj_w.bin", arena, &attn_proj_w);
+    ok &= load_binary_tensor("data/transformer_norm2_weight.bin", arena, &norm2_weight);
+    ok &= load_binary_tensor("data/transformer_norm2_bias.bin", arena, &norm2_bias);
+    ok &= load_binary_tensor("data/transformer_ffn_up_w.bin", arena, &ffn_up_w);
+    ok &= load_binary_tensor("data/transformer_ffn_down_w.bin", arena, &ffn_down_w);
+    ok &= load_binary_tensor("data/transformer_expected_out.bin", arena, &expected_out);
     if (!ok) {
         blt_arena_destroy(arena);
         return 0;
