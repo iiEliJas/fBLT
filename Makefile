@@ -70,7 +70,7 @@ TEST_OBJS := $(addprefix $(OBJ_DIR)/,$(TEST_SRCS:.c=.o)) $(CORE_OBJS)
 # ============================================================================
 # TARGETS
 # ============================================================================
-.PHONY: all test main bench clean info help
+.PHONY: all test main bench threshold clean info help
 
 all: test
 
@@ -94,6 +94,9 @@ main: $(BIN_DIR)/main$(EXE_EXT)
 
 bench: $(BIN_DIR)/bench_patcher$(EXE_EXT)
 	@echo [BENCH] Built successfully: $(BIN_DIR)/bench$(EXE_EXT)
+
+threshold: $(BIN_DIR)/calibrate_threshold$(EXE_EXT)
+	@echo [MAIN] Built successfully: $(BIN_DIR)/calibrate_threshold$(EXE_EXT)
 
 
 # ============================================================================
@@ -130,6 +133,12 @@ $(BIN_DIR)/bench_patcher$(EXE_EXT): $(TESTS_DIR)/bench/bench_patcher.c $(CORE_OB
 	$(MKDIR_BIN)
 	@$(CC) $(CFLAGS) $(TESTS_DIR)/bench/bench_patcher.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
+# Link calibrate_threshold exe
+$(BIN_DIR)/calibrate_threshold$(EXE_EXT): $(RUN_DIR)/calibrate_threshold.c $(CORE_OBJS)
+	@echo [LD] Linking main executable: $@
+	$(MKDIR_BIN)
+	@$(CC) $(CFLAGS) $(RUN_DIR)/calibrate_threshold.c $(CORE_OBJS) -o $@ $(LDLIBS)
+
 
 # ============================================================================
 # CLEAN
@@ -151,11 +160,12 @@ endif
 help:
 	@echo --- BLT Project Makefile ---
 	@echo - Available targets:
-	@echo -  make test       - Build and run test executable
-	@echo -  make main       - Build main executable (run/main.c)
-	@echo -  make bench      - Build benchmark executable
+	@echo -  make test       - Build and run test exe
+	@echo -  make main       - Build main exe
+	@echo -  make bench      - Build benchmark exe
+	@echo -  make threshold  - Build calibrate_threshold exe
 	@echo -  make all        - Same as 'make test'
 	@echo -  make clean      - Remove all generated files
-	@echo -  make info       - Display build configuration
+	@echo -  make info       - Display build config
 	@echo -  make help       - Show this message
 	@echo Platform detected: $(DETECTED_OS)

@@ -1,5 +1,5 @@
 build/
-data/bench_patcher.bin
+data/dummy_entropy.bin
 obj/
 *.exe
 *.o

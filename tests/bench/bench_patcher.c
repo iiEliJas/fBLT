@@ -118,11 +118,6 @@ int main(int argc, char** argv){
     blt_tensor entropy_tensor = blt_tensor_create(arena, entropy_shape, 1, BLT_DTYPE_FP32);
     float* entropy_data = (float*)entropy_tensor.data;
 
-    if (!entropy_data){
-        fprintf(stderr, "Error: allocation failed\n");
-        fclose(f);
-        return 1;
-    }
 
     if (fread(entropy_data, sizeof(float), file_size / sizeof(float), f) != file_size / sizeof(float)){
         fprintf(stderr, "Error: read failed\n");
