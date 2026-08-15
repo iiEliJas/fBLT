@@ -16,7 +16,7 @@ int run_byte_embedding_model_tests(void) {
     }
 
     size_t embed_dim = 4;
-    blt_byte_embedding emb = blt_byte_embedding_create(arena, embed_dim);
+    blt_byte_embedding emb = blt_byte_embedding_create(arena, 256, embed_dim);
 
     // Set rows for byte values 0, 1, and 65 ('A')
     float* weight_data = (float*)emb.weight.data;

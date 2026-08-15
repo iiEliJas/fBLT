@@ -5,14 +5,15 @@
 #include "blt/core/allocator.h"
 
 typedef struct {
-    blt_tensor weight; // [256, embed_dim] FP32
+    size_t vocab_size; // 256 or 257 (with MASK token)
+    blt_tensor weight; // [vocab_size, embed_dim] FP32
     size_t embed_dim;
 } blt_byte_embedding;
 
 
 
 // Allocates and zero-initializes the embedding table. Caller fills weight->data
-blt_byte_embedding blt_byte_embedding_create(blt_arena* arena, size_t embed_dim);
+blt_byte_embedding blt_byte_embedding_create(blt_arena* arena, size_t vocab_size, size_t embed_dim);
 
 // bytes_in: 1D UINT8 tensor [seq_len] (raw byte values 0-255)
 // out: 2D FP32 tensor [seq_len, embed_dim]

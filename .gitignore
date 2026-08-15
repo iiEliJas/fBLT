@@ -6,4 +6,5 @@ obj/
 *.obj
 __pycache__/
 .venv
+.continue/
 

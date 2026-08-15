@@ -3,17 +3,17 @@
 
 
 //--------------------------------------------------------------
-// Allocates the [256, embed_dim] FP32 embedding table via the arena.
+// Allocates the [vocab_size, embed_dim] FP32 embedding table via the arena.
 // Caller is responsible for filling the weight->data (random init, or loads pretrained) separately
 
-blt_byte_embedding blt_byte_embedding_create(blt_arena* arena, size_t embed_dim) {
+blt_byte_embedding blt_byte_embedding_create(blt_arena* arena, size_t vocab_size, size_t embed_dim) {
     blt_byte_embedding emb;
-    const size_t shape[2] = {256, embed_dim};
+    const size_t shape[2] = {vocab_size, embed_dim};
+    emb.vocab_size = vocab_size;
     emb.weight = blt_tensor_create(arena, shape, 2, BLT_DTYPE_FP32);
     emb.embed_dim = embed_dim;
     return emb;
 }
-
 
 
 //----------------------------------------------------------------
@@ -24,13 +24,14 @@ blt_byte_embedding blt_byte_embedding_create(blt_arena* arena, size_t embed_dim)
 //
 // Shape mapping:
 //   bytes_in:    [seq_len]                 (UINT8)
-//   emb->weight: [256, embed_dim]          (FP32)
+//   emb->weight: [vocab_size, embed_dim]   (FP32)
 //   out:         [seq_len, embed_dim]      (FP32)
 //----------------------------------------------------------------
 
 void blt_byte_embedding_forward(const blt_byte_embedding* emb, const blt_tensor* bytes_in,
                                  blt_tensor* out) {
-    // ---- 1. Input Validation ----
+    // ----------------
+    // Validation
     BLT_REQUIRE(bytes_in->dtype == BLT_DTYPE_UINT8, "bytes_in must be a UINT8 tensor");
     BLT_REQUIRE(bytes_in->ndim == 1, "bytes_in must be a 1D tensor of shape [seq_len]");
 
@@ -46,11 +47,15 @@ void blt_byte_embedding_forward(const blt_byte_embedding* emb, const blt_tensor*
     const float* weight_data = (const float*)emb->weight.data;
     float* out_data = (float*)out->data;
 
-    // ---- 2. Gather Operation ----
-    // Direct lookup: copy embedding row (byte_val) directly to output row i
+    // ----------------
+    // Gather
+    // Direct lookup: copy embedding row directly to output row i
     for (size_t i = 0; i < seq_len; ++i) {
         uint8_t byte_val = bytes_data[i];
-        
+        BLT_REQUIRE(byte_val < emb->vocab_size,
+            "Byte value %u out of bounds for vocab size %zu",
+            byte_val, emb->vocab_size);
+                
         const float* row_in = weight_data + (size_t)byte_val * embed_dim;
         float* row_out = out_data + i * embed_dim;
         
@@ -77,7 +82,8 @@ void blt_byte_embedding_forward(const blt_byte_embedding* emb, const blt_tensor*
 
 void blt_byte_embedding_backward(const blt_byte_embedding* emb, const blt_tensor* bytes_in,
                                   const blt_tensor* grad_out, blt_tensor* grad_weight) {
-    // ---- 1. Input Validation ----
+    // ----------------
+    // Validation
     BLT_REQUIRE(bytes_in->dtype == BLT_DTYPE_UINT8, "bytes_in must be a UINT8 tensor");
     BLT_REQUIRE(bytes_in->ndim == 1, "bytes_in must be a 1D tensor of shape [seq_len]");
 
@@ -88,25 +94,26 @@ void blt_byte_embedding_backward(const blt_byte_embedding* emb, const blt_tensor
 
     BLT_REQUIRE(grad_weight->dtype == BLT_DTYPE_FP32, "grad_weight must be a FP32 tensor");
     BLT_REQUIRE(grad_weight->ndim == 2, "grad_weight must be a 2D tensor of shape [256, embed_dim]");
-    BLT_REQUIRE(grad_weight->shape[0] == 256, "grad_weight.shape[0] must be 256");
+    BLT_REQUIRE(grad_weight->shape[0] == emb->vocab_size, "grad_weight.shape[0] must be vocab_size");
     BLT_REQUIRE(grad_weight->shape[1] == emb->embed_dim, "grad_weight.shape[1] must match emb->embed_dim");
 
     const size_t seq_len = bytes_in->shape[0];
-    const size_t embed_dim = emb->embed_dim;
 
     const uint8_t* bytes_data = (const uint8_t*)bytes_in->data;
     const float* grad_out_data = (const float*)grad_out->data;
     float* grad_weight_data = (float*)grad_weight->data;
 
-    // ---- 2. Scatter-Add Accumulation ----
+    // ----------------
+    // Scatter-Add
     // For each token accumulate grad_out[i, :] into grad_weight[byte_val, :]
     for (size_t i = 0; i < seq_len; ++i) {
         uint8_t byte_val = bytes_data[i];
+        BLT_REQUIRE(byte_val < emb->vocab_size, "Byte value out of bounds for vocab size");
         
-        const float* row_grad = grad_out_data + i * embed_dim;
-        float* row_target = grad_weight_data + (size_t)byte_val * embed_dim;
+        const float* row_grad = grad_out_data + i * emb->embed_dim;
+        float* row_target = grad_weight_data + (size_t)byte_val * emb->embed_dim;
         
-        for (size_t d = 0; d < embed_dim; ++d) {
+        for (size_t d = 0; d < emb->embed_dim; ++d) {
             row_target[d] += row_grad[d];
         }
     }

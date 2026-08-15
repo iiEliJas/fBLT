@@ -217,7 +217,7 @@ void blt_entropy_lm_forward(
     //     e_t = W_emb[x_t]
     // Output tensor shape: [seq_len, embed_dim]
     // -----------------------------------------------------------------
-    blt_byte_embedding emb = { .weight = model->embedding_weight, .embed_dim = embed_dim };
+    blt_byte_embedding emb = { .vocab_size = model->embedding_weight.shape[0], .weight = model->embedding_weight, .embed_dim = embed_dim };
     size_t x_shape[2] = { seq_len, embed_dim };
     blt_tensor x = blt_tensor_create(arena, x_shape, 2, BLT_DTYPE_FP32);
     blt_byte_embedding_forward(&emb, bytes_in, &x);
@@ -437,7 +437,7 @@ void blt_entropy_lm_backward(
 
     // ----------------
     // Recompute forward with caching
-    blt_byte_embedding emb = { .weight = model->embedding_weight, .embed_dim = embed_dim };
+    blt_byte_embedding emb = { .vocab_size = model->embedding_weight.shape[0], .weight = model->embedding_weight, .embed_dim = embed_dim };
     size_t x_shape[2] = { seq_len, embed_dim };
     blt_tensor x0 = blt_tensor_create(arena, x_shape, 2, BLT_DTYPE_FP32);
     blt_byte_embedding_forward(&emb, bytes_in, &x0);
