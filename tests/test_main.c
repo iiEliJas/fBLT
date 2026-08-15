@@ -38,6 +38,7 @@ int main(void) {
         {"patcher model", run_patcher_model_tests},
         {"byte embedding model", run_byte_embedding_model_tests},
         {"attention model", run_attention_model_tests},
+        {"attention masked model", run_attention_masked_model_tests},
         {"attention backward model", run_attention_backward_model_tests},
         {"entropy LM model", run_elm_model_tests},
 

@@ -56,19 +56,41 @@ static void validate_attention_call(
 
 
 //----------------------------------------------------------------
+// Helper: Builds attention mask
+
+static const float* build_mask(const blt_attention_config* config, size_t seq_len, blt_arena* arena) {
+    if (config->mask_config == NULL) {
+        return NULL;
+    }
+
+    BLT_REQUIRE(config->mask_config->seq_len_q == seq_len && config->mask_config->seq_len_kv == seq_len,
+                "blt_multihead_attention: mask_config seq_len_q/seq_len_kv must match input seq_len ");
+    
+    blt_tensor mask_tensor = {0};
+    blt_build_attention_mask(config->mask_config, &mask_tensor, arena);
+
+    return (const float*)mask_tensor.data;
+}
+
+
+
+//----------------------------------------------------------------
 // Helper: Compute softmax of a row in-place with causal masking
 
-static void causal_softmax_row_inplace(float* row, size_t seq_len, size_t row_idx, bool is_causal, float scale) {
+static void softmax_row_inplace(float* row, size_t seq_len, size_t row_idx, bool is_causal, const float* mask_row, float scale) {
     float max_val = -INFINITY;
  
     for (size_t col = 0; col < seq_len; ++col) {
-        if (is_causal && col > row_idx) {
+        if (mask_row != NULL) {
+            row[col] = row[col] * scale + mask_row[col];
+        } else if (is_causal && col > row_idx) {
             row[col] = -INFINITY;
         } else {
             row[col] *= scale;
-            if (isfinite(row[col]) && row[col] > max_val) {
-                max_val = row[col];
-            }
+        }
+
+        if (isfinite(row[col]) && row[col] > max_val) {
+            max_val = row[col];
         }
     }
  
@@ -132,33 +154,35 @@ static void apply_rope_to_all_heads(
 // Helper: Process a single attention head
 
 static void attention_head(const float* qkv_data, size_t head_idx, size_t seq_len, size_t embed_dim,
-                            size_t head_dim, bool is_causal, float scale, float* scores_buf,
-                            float* combined_out) {
+                        size_t head_dim, bool is_causal, const float* mask, float scale,
+                        float* scores_buf, float* combined_out) {
     size_t qkv_stride = 3 * embed_dim;
     size_t q_offset = head_idx * head_dim;
     size_t k_offset = embed_dim + head_idx * head_dim;
     size_t v_offset = 2 * embed_dim + head_idx * head_dim;
- 
+    
     for (size_t i = 0; i < seq_len; ++i) {
         const float* q_i = qkv_data + i * qkv_stride + q_offset;
         float* scores_i = scores_buf + i * seq_len;
- 
+        
         for (size_t j = 0; j < seq_len; ++j) {
             const float* k_j = qkv_data + j * qkv_stride + k_offset;
             scores_i[j] = blt_vec_dot(q_i, k_j, head_dim);
         }
- 
-        causal_softmax_row_inplace(scores_i, seq_len, i, is_causal, scale);
+
+        const float* mask_row = mask ? (mask + i * seq_len) : NULL;
+        softmax_row_inplace(scores_i, seq_len, i, is_causal, mask_row, scale);
     }
- 
+    
+
     for (size_t i = 0; i < seq_len; ++i) {
         float* out_i = combined_out + i * embed_dim + q_offset;
         const float* scores_i = scores_buf + i * seq_len;
- 
+
         for (size_t d = 0; d < head_dim; ++d) {
             out_i[d] = 0.0f;
         }
- 
+
         for (size_t j = 0; j < seq_len; ++j) {
             float weight = scores_i[j];
             if (weight == 0.0f) {
@@ -215,8 +239,7 @@ void blt_multihead_attention(
     float* qkv_data = (float*)blt_arena_alloc(arena, qkv_numel * sizeof(float), sizeof(float));
     float* combined_data = (float*)blt_arena_alloc(arena, combined_numel * sizeof(float), sizeof(float));
     float* scores_buf = (float*)blt_arena_alloc(arena, scores_numel * sizeof(float), sizeof(float));
-    BLT_REQUIRE(qkv_data && combined_data && scores_buf,
-                "blt_multihead_attention: failed to allocate temporary buffers from arena");
+    BLT_REQUIRE(qkv_data && combined_data && scores_buf, "blt_multihead_attention: failed to allocate temporary buffers from arena");
  
     memset(combined_data, 0, combined_numel * sizeof(float));
  
@@ -282,6 +305,9 @@ void blt_multihead_attention(
                                  rope_cos_t, rope_sin_t,
                                  q_head_buf, q_rot_buf, k_head_buf, k_rot_buf, input->backend);
     }
+
+    // build_mask returns a pointer to a precomputed mask, or NULL if the mask is not needed
+    const float* mask_data = build_mask(config, seq_len, arena);
  
 
     // -----------------------------------------------------------------
@@ -296,7 +322,7 @@ void blt_multihead_attention(
     // -----------------------------------------------------------------
     for (size_t head = 0; head < num_heads; ++head) {
         attention_head(qkv_data, head, seq_len, embed_dim, head_dim,
-                        config->is_causal, scale, scores_buf, combined_data);
+                        config->is_causal, mask_data, scale, scores_buf, combined_data);
     }
  
 
@@ -332,32 +358,32 @@ static void attn_bwd_recompute_forward(
     const blt_tensor* input, const blt_tensor* weight_qkv, const blt_attention_config* config,
     blt_arena* arena, size_t seq_len, size_t embed_dim, size_t num_heads, size_t head_dim, float scale,
     attn_bwd_forward_cache* cache, const blt_tensor** out_rope_cos, const blt_tensor** out_rope_sin) {
- 
+
     size_t qkv_numel = seq_len * 3 * embed_dim;
     size_t combined_numel = seq_len * embed_dim;
     size_t weights_numel = num_heads * seq_len * seq_len;
- 
+
     cache->qkv_data = (float*)blt_arena_alloc(arena, qkv_numel * sizeof(float), sizeof(float));
     cache->combined_data = (float*)blt_arena_alloc(arena, combined_numel * sizeof(float), sizeof(float));
     cache->weights_all = (float*)blt_arena_alloc(arena, weights_numel * sizeof(float), sizeof(float));
     BLT_REQUIRE(cache->qkv_data && cache->combined_data && cache->weights_all,
                 "blt_multihead_attention_backward: failed to allocate forward-recompute buffers");
     memset(cache->combined_data, 0, combined_numel * sizeof(float));
- 
+
     blt_tensor qkv_tensor;
     blt_tensor_view_2d(&qkv_tensor, cache->qkv_data, seq_len, 3 * embed_dim, input->backend);
     blt_matmul(input, weight_qkv, &qkv_tensor);
- 
+
     *out_rope_cos = NULL;
     *out_rope_sin = NULL;
- 
+
     if (config->use_rope) {
         size_t half = head_dim / 2;
- 
+
         const blt_tensor* rope_cos_t;
         const blt_tensor* rope_sin_t;
         static blt_tensor computed_cos_t, computed_sin_t;
- 
+
         bool have_cache = (config->rope_cos_cache != NULL && config->rope_sin_cache != NULL);
         if (have_cache) {
             rope_cos_t = config->rope_cos_cache;
@@ -376,7 +402,7 @@ static void attn_bwd_recompute_forward(
         }
         *out_rope_cos = rope_cos_t;
         *out_rope_sin = rope_sin_t;
- 
+
         size_t head_numel = seq_len * head_dim;
         float* q_head_buf = (float*)blt_arena_alloc(arena, head_numel * sizeof(float), sizeof(float));
         float* k_head_buf = (float*)blt_arena_alloc(arena, head_numel * sizeof(float), sizeof(float));
@@ -384,75 +410,56 @@ static void attn_bwd_recompute_forward(
         float* k_rot_buf = (float*)blt_arena_alloc(arena, head_numel * sizeof(float), sizeof(float));
         BLT_REQUIRE(q_head_buf && k_head_buf && q_rot_buf && k_rot_buf,
                     "blt_multihead_attention_backward: failed to allocate RoPE temp buffers");
- 
+
         size_t qkv_stride = 3 * embed_dim;
         for (size_t head = 0; head < num_heads; head++) {
             size_t q_offset = head * head_dim;
             size_t k_offset = embed_dim + head * head_dim;
- 
+
             for (size_t i = 0; i < seq_len; i++) {
                 memcpy(q_head_buf + i * head_dim, cache->qkv_data + i * qkv_stride + q_offset, head_dim * sizeof(float));
                 memcpy(k_head_buf + i * head_dim, cache->qkv_data + i * qkv_stride + k_offset, head_dim * sizeof(float));
             }
- 
+
             blt_tensor q_head_t, q_rot_t, k_head_t, k_rot_t;
             blt_tensor_view_3d(&q_head_t, q_head_buf, seq_len, 1, head_dim, input->backend);
             blt_tensor_view_3d(&q_rot_t, q_rot_buf, seq_len, 1, head_dim, input->backend);
             blt_tensor_view_3d(&k_head_t, k_head_buf, seq_len, 1, head_dim, input->backend);
             blt_tensor_view_3d(&k_rot_t, k_rot_buf, seq_len, 1, head_dim, input->backend);
- 
+
             blt_rope_apply(&q_head_t, rope_cos_t, rope_sin_t, &q_rot_t);
             blt_rope_apply(&k_head_t, rope_cos_t, rope_sin_t, &k_rot_t);
- 
+
             for (size_t i = 0; i < seq_len; i++) {
                 memcpy(cache->qkv_data + i * qkv_stride + q_offset, q_rot_buf + i * head_dim, head_dim * sizeof(float));
                 memcpy(cache->qkv_data + i * qkv_stride + k_offset, k_rot_buf + i * head_dim, head_dim * sizeof(float));
             }
         }
     }
- 
-    // Per-head softmax attention weights + combined output (same math as forward)
+
+    const float* mask_data = build_mask(config, seq_len, arena);
+
+    // Per-head softmax attention weights + combined output
     size_t qkv_stride = 3 * embed_dim;
     for (size_t head = 0; head < num_heads; head++) {
         size_t q_offset = head * head_dim;
         size_t k_offset = embed_dim + head * head_dim;
         size_t v_offset = 2 * embed_dim + head * head_dim;
         float* W = cache->weights_all + head * seq_len * seq_len;
- 
+
         for (size_t i = 0; i < seq_len; i++) {
             const float* q_i = cache->qkv_data + i * qkv_stride + q_offset;
             float* w_i = W + i * seq_len;
- 
-            float max_val = -INFINITY;
+
             for (size_t j = 0; j < seq_len; j++) {
-                if (config->is_causal && j > i) {
-                    w_i[j] = -INFINITY;
-                    continue;
-                }
                 const float* k_j = cache->qkv_data + j * qkv_stride + k_offset;
-                float score = blt_vec_dot(q_i, k_j, head_dim) * scale;
-                w_i[j] = score;
-                if (score > max_val) {
-                    max_val = score;
-                }
+                w_i[j] = blt_vec_dot(q_i, k_j, head_dim);
             }
- 
-            float sum = 0.0f;
-            for (size_t j = 0; j < seq_len; j++) {
-                if (isfinite(w_i[j])) {
-                    w_i[j] = expf(w_i[j] - max_val);
-                    sum += w_i[j];
-                } else {
-                    w_i[j] = 0.0f;
-                }
-            }
-            if (sum > 0.0f) {
-                for (size_t j = 0; j < seq_len; j++) {
-                    w_i[j] /= sum;
-                }
-            }
+
+            const float* mask_row = mask_data ? (mask_data + i * seq_len) : NULL;
+            softmax_row_inplace(w_i, seq_len, i, config->is_causal, mask_row, scale);
         }
- 
+
         for (size_t i = 0; i < seq_len; i++) {
             float* out_i = cache->combined_data + i * embed_dim + q_offset;
             const float* w_i = W + i * seq_len;

@@ -263,6 +263,7 @@
     - `float rope_theta`: base for rotary position embedding
     - `const blt_tensor* rope_cos_cache`: precomputed cos table for RoPE (optional)
     - `const blt_tensor* rope_sin_cache`: precomputed sin table for RoPE (optional)
+    - `const blt_mask_config* mask_config`: config for masking attention weights (optional)
 - `blt_multihead_attention(input, weight_qkv, weight_proj, output, config, arena)`
   - Input: input sequence tensor, QKV projection weights, output projection weights, output tensor, and attention config
   - Output: writes the multi-head self-attention result into `output`.

@@ -19,6 +19,7 @@ int run_entropy_model_tests(void);
 int run_byte_embedding_model_tests(void);
 int run_patcher_model_tests(void);
 int run_attention_model_tests(void);
+int run_attention_masked_model_tests(void);
 int run_attention_backward_model_tests(void);
 int run_elm_model_tests(void);
 

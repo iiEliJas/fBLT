@@ -2,6 +2,7 @@
 #define BLT_MODELS_ATTENTION_H
 
 #include "blt/core/tensor.h"
+#include "blt/ops/mask_builder.h"
 #include "blt/core/allocator.h"
 
 
@@ -14,6 +15,7 @@ typedef struct {
     float rope_theta;    // base for rotary position embedding (500000.0f)
     const blt_tensor* rope_cos_cache;   // precomputed cos table for RoPE (optional)
     const blt_tensor* rope_sin_cache;   // precomputed sin table for RoPE (optional)
+    const blt_mask_config* mask_config; // overrides is_causal (if mask_config != NULL)
 } blt_attention_config;
 
 
