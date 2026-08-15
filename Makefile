@@ -46,6 +46,7 @@ CORE_SRCS := \
     $(SRC_DIR)/backend_cpu/linalg_cpu.c \
     $(SRC_DIR)/backend_cpu/reductions_cpu.c \
     $(SRC_DIR)/backend_cpu/optim_cpu.c \
+ 	$(SRC_DIR)/backend_cpu/mask_builder_cpu.c \
     $(SRC_DIR)/models/entropy.c \
     $(SRC_DIR)/models/byte_embedding.c \
     $(SRC_DIR)/models/patcher.c \

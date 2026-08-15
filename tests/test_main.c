@@ -32,7 +32,8 @@ int main(void) {
         {"cross entropy backend", run_cross_entropy_tests},
         {"rope backend", run_rope_backend_test},
         {"optimizer backend", run_optim_backend_tests},
-        
+        {"mask builder backend", run_mask_builder_backend_tests},
+    
         {"entropy model", run_entropy_model_tests},
         {"patcher model", run_patcher_model_tests},
         {"byte embedding model", run_byte_embedding_model_tests},

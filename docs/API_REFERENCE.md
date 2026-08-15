@@ -186,6 +186,21 @@
   - Output: none; updates `param` in place.
   - Behavior: elementwise `param -= lr * grad`. CPU-only, stateless (no momentum/second-moment buffers) — the minimal Phase 1a optimizer. Requires `param` and `grad` to be FP32 and elementwise-compatible (validated via `blt_check_elementwise_fp32`) and `param->backend == BLT_BACKEND_CPU`.
 
+## blt/ops/mask_builder.h
+- `blt_mask_config` struct
+  - Fields:
+      - `size_t seq_len_q`: Query sequence length
+      - `size_t seq_len_kv`: Key/Value sequence length
+      - `size_t sliding_window`: 0 for full causal attention, otherwise sliding window size
+      - `const size_t* doc_boundaries`: Array of indices where new documents start
+      - `size_t num_docs`: Number of documents
+      - `const size_t* query_group_ids`: Group ID for each query position
+      - `const size_t* kv_group_ids`: Group ID for each KV position
+      - `bool bidirectional_within_group`: If true, attend to all positions in group; if false, causal within group
+      - `bool is_causal`: Apply causal mask
+- `blt_build_attention_mask(config, out_mask, arena)`
+    - Input: `blt_mask_config` struct defining attention constraints, output tensor, and arena for storage
+    - Output: Writes a 2D FP32 mask tensor of shape `[seq_len_q, seq_len_kv]` to `out_mask`. Uses `0` for allowed attention and `-INFINITY` for masked attention
 
 
 ------------------------------------------------------------------------------------------------------------
@@ -218,37 +233,38 @@
     - `blt_patch_rule rule`: which rule to use
     - `bool reset_on_newline`: starts a new patch after `\n`    
 - `blt_segment_patches(entropy, bytes, patches_out, max_patches, config)`
-  - Input: 1D entropy tensor, uint8_t bytes array, output patch buffer, maximum patch count, and patcher config.
-  - Output: returns the number of produced patches and fills `patches_out` with patch metadata.
+  - Input: 1D entropy tensor, uint8_t bytes array, output patch buffer, maximum patch count, and patcher config
+  - Output: returns the number of produced patches and fills `patches_out` with patch metadata
 
 ## blt/models/byte_embedding.h
 - `blt_byte_embedding` struct
   - Fields:
-    - `blt_tensor weight`: embedding table of shape `[256, embed_dim]` in FP32.
-    - `size_t embed_dim`: dimension of the embedding vectors.
-- `blt_byte_embedding_create(arena, embed_dim)`
-  - Input: arena for storage and embedding dimension.
-  - Output: allocated and zero-initialized embedding table; caller fills `weight->data`.
+    - `size_t vocab_size`: embedding vocabulary - 256 or 257 (for the MASK token)
+    - `blt_tensor weight`: embedding table of shape `[256, embed_dim]` in FP32
+    - `size_t embed_dim`: dimension of the embedding vectors
+- `blt_byte_embedding_create(arena, vocab_size, embed_dim)`
+  - Input: arena for storage, size_t vocab size and embedding dimension
+  - Output: allocated and zero-initialized embedding table; caller fills `weight->data`
 - `blt_byte_embedding_forward(emb, bytes_in, out)`
-  - Input: embedding struct, 1D UINT8 tensor of raw byte values `[seq_len]`, and output tensor.
-  - Output: writes the corresponding 2D FP32 embeddings `[seq_len, embed_dim]` into `out`.
+  - Input: embedding struct, 1D UINT8 tensor of raw byte values `[seq_len]`, and output tensor
+  - Output: writes the corresponding 2D FP32 embeddings `[seq_len, embed_dim]` into `out`
 - `blt_byte_embedding_backward(emb, bytes_in, grad_out, grad_weight)`
-  - Input: embedding struct, 1D UINT8 tensor of raw byte values `[seq_len]`, gradient output tensor, and gradient weight tensor.
-  - Output: scatter-adds `grad_out` rows into `grad_weight` at the row indexed by the corresponding input byte value. `grad_weight` must be zeroed by the caller before accumulating across a batch.
+  - Input: embedding struct, 1D UINT8 tensor of raw byte values `[seq_len]`, gradient output tensor, and gradient weight tensor
+  - Output: scatter-adds `grad_out` rows into `grad_weight` at the row indexed by the corresponding input byte value. `grad_weight` must be zeroed by the caller before accumulating across a batch
 
 ### blt/models/attention.h
 - `blt_attention_config` struct
   - Fields:
-    - `size_t embed_dim`: total embedding dimension.
-    - `size_t num_heads`: number of attention heads.
-    - `size_t head_dim`: dimension per head; if zero, it may be inferred from `embed_dim / num_heads`.
-    - `bool is_causal`: whether causal masking should be applied.
+    - `size_t embed_dim`: total embedding dimension
+    - `size_t num_heads`: number of attention heads
+    - `size_t head_dim`: dimension per head; if zero, it may be inferred from `embed_dim / num_heads`
+    - `bool is_causal`: whether causal masking should be applied
     - `bool use_rope`: use rotary position embedding
     - `float rope_theta`: base for rotary position embedding
     - `const blt_tensor* rope_cos_cache`: precomputed cos table for RoPE (optional)
     - `const blt_tensor* rope_sin_cache`: precomputed sin table for RoPE (optional)
 - `blt_multihead_attention(input, weight_qkv, weight_proj, output, config, arena)`
-  - Input: input sequence tensor, QKV projection weights, output projection weights, output tensor, and attention config.
+  - Input: input sequence tensor, QKV projection weights, output projection weights, output tensor, and attention config
   - Output: writes the multi-head self-attention result into `output`.
 - `blt_multihead_attention_backward(input, weight_qkv, weight_proj, grad_out, grad_input, grad_weight_qkv, grad_weight_proj, config, arena)`
   - Input: input sequence tensor, QKV projection weights, output projection weights, gradient output tensor, gradient input tensor, gradient QKV weights tensor, gradient output projection weights tensor, and attention config.

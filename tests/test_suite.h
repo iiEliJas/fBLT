@@ -13,6 +13,7 @@ int run_softmax_backend_tests(void);
 int run_cross_entropy_tests(void);
 int run_rope_backend_test(void);
 int run_optim_backend_tests(void);
+int run_mask_builder_backend_tests(void);
 
 int run_entropy_model_tests(void);
 int run_byte_embedding_model_tests(void);
