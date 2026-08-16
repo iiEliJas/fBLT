@@ -2,7 +2,7 @@
 # CONFIGURATION
 # ============================================================================
 CC ?= gcc
-CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Iinclude -Itests
+CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Iinclude -Itests -D_POSIX_C_SOURCE=200809L
 LDLIBS ?= -lm
 
 # Directories
