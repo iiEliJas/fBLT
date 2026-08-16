@@ -47,12 +47,11 @@ int run_attention_parity_test(void) {
     blt_tensor output = blt_tensor_create(arena, out_shape, 2, BLT_DTYPE_FP32);
 
     // same config as generated
-    blt_attention_config config = {
-        .embed_dim = embed_dim,
-        .num_heads = 4,
-        .head_dim = 0,   // inferred as embed_dim / num_heads
-        .is_causal = true,
-    };
+    blt_attention_config config = {0};
+    config.embed_dim = embed_dim;
+    config.num_heads = 4;
+    config.head_dim = 0;  // inferred as embed_dim / num_heads
+    config.is_causal = true;
 
     blt_multihead_attention(&input, &qkv_w, &proj_w, &output, &config, arena);
 
@@ -104,12 +103,11 @@ int run_attention_backward_parity_test(void) {
     blt_tensor grad_weight_proj = blt_tensor_create(arena, proj_shape, 2, BLT_DTYPE_FP32);
  
     // same config as the forward parity test (run_phase2_attention_parity_test)
-    blt_attention_config config = {
-        .embed_dim = embed_dim,
-        .num_heads = 4,
-        .head_dim = 0,   // inferred as embed_dim / num_heads
-        .is_causal = true,
-    };
+    blt_attention_config config = {0};
+    config.embed_dim = embed_dim;
+    config.num_heads = 4;
+    config.head_dim = 0;  // inferred as embed_dim / num_heads
+    config.is_causal = true;
  
     blt_multihead_attention_backward(&input, &qkv_w, &proj_w, &grad_out,
                                       &grad_input, &grad_weight_qkv, &grad_weight_proj,

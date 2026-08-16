@@ -69,6 +69,7 @@ blt_entropy_lm* blt_entropy_lm_create(blt_arena* arena, const blt_entropy_lm_con
     blt_rope_precompute(config->max_seq_len, &rope_cfg, &model->rope_cos_cache, &model->rope_sin_cache);
  
     // shared transformer config for every layer
+    model->layer_config = (blt_transformer_config){0}; // zero out
     model->layer_config.attn_config.embed_dim = embed_dim;
     model->layer_config.attn_config.num_heads = config->num_heads;
     model->layer_config.attn_config.head_dim = head_dim;

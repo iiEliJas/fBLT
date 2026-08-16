@@ -103,9 +103,7 @@ static int test_hash_rolling_correctness(void) {
 
 static int test_boundary_omission() {
     blt_arena* arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
-    if (!arena) {
-        return 0;
-    }
+    TEST_ASSERT(arena != NULL);
 
     blt_hash_ngram_config config;
     memset(&config, 0, sizeof(config));
@@ -153,6 +151,7 @@ static int test_boundary_omission() {
         TEST_ASSERT(out_data[1 * config.embed_dim + e] == emb_data[1 * config.embed_dim + e]);
     }
 
+    blt_arena_destroy(arena);
     return 1;
 }
 
@@ -183,6 +182,7 @@ static blt_hash_ngram_config make_test_config(size_t embed_dim) {
 
 static int test_forward_long_sequence(void) {
     const size_t embed_dim = 4;
+
     blt_arena* arena = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
     TEST_ASSERT(arena != NULL);
  
@@ -240,6 +240,7 @@ static int test_forward_long_sequence(void) {
 
 static int test_backward_basic(void) {
     const size_t embed_dim = 4;
+    
     blt_arena* arena = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
     TEST_ASSERT(arena != NULL);
  
