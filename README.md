@@ -1,6 +1,6 @@
 # FBLT
 
-Fast Byte Latent Transformer in pure C. A byte-level language model with no tokenizer, built for code completion and small LLMs.
+Fast Byte Latent Transformer in pure C and CUDA. A byte-level language model with no tokenizer, built for code completion and small LLMs.
 
 **Status: ~50% done.** Core infrastructure, operators, and components are done. Missing training loop, CUDA kernels, and inference speedups.
 
@@ -10,14 +10,9 @@ Based on two papers from Meta:
 
 ## Why no tokenizer?
 
-Tokenizers have limitations. They force a fixed vocabulary on your data before you even start training. This causes problems:
+Tokenizers fix a vocabulary before training, which causes noise sensitivity, poor multilingual/low-resource behavior, and lost character information. The compute/quality tradeoff is baked in at the tokenizer level.
 
-- Sensitivity to noise and out-of-domain text
-- Weird multilingual and low-resource behavior
-- Lost character information your model could have learned
-- Compute/quality tradeoff baked in at the tokenizer level
-
-FBLT works directly on bytes. The trick: entropy-based patching. High-entropy (hard to predict) bytes get short patches and more compute. Predictable bytes get long patches and run cheap. This gives you adaptive compute allocation without any tokenizer baggage.
+FBLT works directly on bytes. **Entropy-based patching** allocates compute dynamically: predictable bytes get long patches (cheap), hard-to-predict bytes get short patches (more compute).
 
 Result: better scaling, robustness, and no vocabulary constraints.
 
@@ -25,29 +20,25 @@ Result: better scaling, robustness, and no vocabulary constraints.
 
 Five-stage pipeline:
 
-1. **Entropy Model** - Small byte-level LM that predicts per-byte entropy. Just guides patching, trained first.
+1. **Entropy Model** - small byte-level LM that predicts per-byte entropy to guide patching
 
-2. **Patcher** - Uses entropy thresholds to slice the byte stream into variable-length patches. Simple rule-based, no learning.
+2. **Patcher** - slices the byte stream into variable-length patches using entropy thresholds (rule-based, no learning)
 
-3. **Local Encoder** - Tiny transformer that compresses byte patches into embeddings. Uses hash n-gram embeddings (rolling polynomial hash) to recognize byte patterns without a vocabulary table.
+3. **Local Encoder** -  tiny transformer that compresses byte patches into embeddings, using hash n-gram embeddings to recognize byte patterns without a vocabulary
 
-4. **Patch Transformer** - The actual big model. Does block-causal attention over patches (sequence is 4-8x shorter than bytes). This is where compute happens.
+4. **Patch Transformer** - the main model. Block-causal attention over patches (4-8x shorter than the raw byte sequence).
 
-5. **Local Decoder** - Tiny transformer that expands patches back to bytes, autoregressively. Can draft multiple bytes and verify in one go (self-speculation).
+5. **Local Decoder** - tiny transformer that expands patches back to bytes autoregressively, with optional self-speculation
 
 ## Design
 
 Pure C + CUDA.
 
-**One interface, two backends.** Every op (matmul, attention, ...) lives in a header. Implemented once for CPU, once for CUDA. Model code never knows the difference.
-
-**CPU is the ground truth.** Every new op gets a simple C implementation first. CUDA versions validate against it.
-
-**Config, not code.** All the BLT paper ablations (hash sizes, cross-attention placement, layer splits) are JSON config values. No recompiling to try things.
+- **One interface, two backends.** Every op lives in a header, implemented once for CPU and once for CUDA. Model code is backend-agnostic.
+- **CPU is the ground truth.** Each op gets a C implementation first. CUDA versions validate against it.
+- **Config-driven.** All architecture knobs are JSON config values. (hash sizes, cross-attention placement, layer splits)
 
 ## Build
-
-Use make.
 
 ```bash
 make test       # build + run tests
@@ -90,27 +81,25 @@ configs/                Model configs (JSON)
 
 ## What's done, what's next
 
-**DONE:**
+**Done:**
 - Tensor and memory system (arena allocator, shapes, strides)
 - Backend dispatch (CPU/CUDA abstraction)
-- Basic ops (elementwise, reductions, matmul, etc.) on CPU
-- Entropy model (byte-level LM for patching)
-- Patcher (entropy thresholds, monotonicity constraints)
+- Core ops on CPU (elementwise, matmul, softmax, attention, etc.)
+- Entropy model, patcher
 - Attention (causal, cross-attention, custom masks)
 - Full test harness (unit, integration, golden files)
 
-**TODO:**
-- Hash n-gram embeddings (rolling poly hash, tables)
-- Local encoder + decoder (interleaved attention + transformers)
-- Patch transformer (global model, block-causal)
-- End-to-end forward pass validation
+**Todo:**
+- Hash n-gram embeddings
+- Local encoder + decoder
+- Patch transformer (global model)
+- End-to-end forward pass
 - Config file plumbing
 - CUDA kernels
 - Training loop
 - Inference/generation
 - Self-speculation (BLT-S) and diffusion decoding (BLT-D)
-- Benchmarking tools
-- Multi-GPU
+- Benchmarking, multi-GPU
 
 ## Docs
 
