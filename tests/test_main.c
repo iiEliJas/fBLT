@@ -41,6 +41,7 @@ int main(void) {
         {"attention masked model", run_attention_masked_model_tests},
         {"attention backward model", run_attention_backward_model_tests},
         {"entropy LM model", run_elm_model_tests},
+        {"hash ngram model", run_hash_ngram_model_tests},
 
         {"matmul parity", run_matmul_parity_test},
         {"softmax parity", run_softmax_parity_test},

@@ -52,7 +52,8 @@ CORE_SRCS := \
     $(SRC_DIR)/models/patcher.c \
     $(SRC_DIR)/models/attention.c \
     $(SRC_DIR)/models/transformer.c \
-    $(SRC_DIR)/models/entropy_lm.c
+    $(SRC_DIR)/models/entropy_lm.c \
+	$(SRC_DIR)/models/hash_ngram.c 
 
 TEST_SRCS := \
     $(wildcard $(TESTS_DIR)/unit/*/*.c) \

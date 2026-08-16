@@ -344,6 +344,54 @@ Assembly of already-implemented pieces (byte embedding, RoPE-enabled transformer
   - Output: writes gradients for every learnable weight into `grad_out`.
   - Behavior: recomputes the forward pass internally (caching each layer's intermediates, since `blt_transformer_forward` doesn't expose them — the same recompute pattern `blt_multihead_attention_backward` uses), then mirrors the forward call order in reverse: cross-entropy → LM head matmul → transformer layers (reverse) → embedding, calling each op's existing backward (`blt_rmsnorm_backward`, `blt_multihead_attention_backward`, `blt_swiglu_backward`, `blt_matmul_backward`, `blt_cross_entropy_backward`, `blt_byte_embedding_backward`) rather than introducing new math.
 
+### blt/models/hash_ngram.h
+- `BLT_MAX_NGRAM_SIZES` macro
+  - Maximum number of different n-gram sizes supported (currently 6).
+- `blt_hash_ngram_config` struct
+  - Fields:
+    - `size_t ngram_sizes[BLT_MAX_NGRAM_SIZES]`: Array of active n-gram sizes (e.g., {3, 4, 5, 6, 7, 8}).
+    - `size_t num_ngram_sizes`: Number of active entries in `ngram_sizes`.
+    - `size_t per_ngram_vocab`: Size of each hash embedding table (acts as modulus for the rolling hash).
+    - `uint64_t hash_prime`: Base prime for the rolling polynomial hash.
+    - `bool normalize`: If true, divides the output by `(num_ngram_sizes + 1)`.
+    - `size_t embed_dim`: Dimensionality of the embeddings.
+- `blt_hash_ngram_weights` struct
+  - Fields:
+    - `blt_tensor tables[BLT_MAX_NGRAM_SIZES]`: Array of tensors, each `[per_ngram_vocab, embed_dim]` FP32.
+    - `size_t num_tables`: Number of active tables (matches `num_ngram_sizes`).
+- `blt_rolling_hash_state` struct
+  - Stateful rolling hash to compute polynomial hashes in O(1) per position.
+  - Fields:
+    - `uint64_t current_hash`: The hash value of the current window.
+    - `uint64_t prime`: The base prime for the polynomial hash.
+    - `uint64_t modulus`: The modulus (typically the vocab size).
+    - `uint64_t prime_pow_n`: Precomputed `prime^n % modulus`.
+    - `uint8_t window[8]`: Circular buffer of the last `n` bytes.
+    - `size_t window_start`: Index of the oldest byte in the circular buffer.
+    - `size_t n`: The n-gram size.
+    - `size_t positions_seen`: How many bytes have been fed so far.
+- `blt_rolling_hash_init(state, n, prime, modulus)`
+  - Input: pointer to `blt_rolling_hash_state`, n-gram size `n`, base `prime`, and `modulus`.
+  - Output: None. Initializes the state and precomputes `prime^n % modulus`.
+  - Behavior: Validates that `n` is in `[1, 8]` and `prime * modulus` does not overflow `uint64`.
+- `blt_rolling_hash_update(state, new_byte)`
+  - Input: pointer to `blt_rolling_hash_state` and a `uint8_t` byte.
+  - Output: Returns the hash of the current n-gram if `positions_seen >= n`. Returns `UINT64_MAX` if not enough bytes have been seen yet.
+  - Behavior: Uses a circular buffer to track the last `n` bytes and updates the hash in O(1) time using the rolling polynomial method: `H_new = (H_old * prime + b_new - b_outgoing * prime^n) mod modulus`.
+- `blt_hash_ngram_create(arena, config)`
+  - Input: arena for storage and `blt_hash_ngram_config`.
+  - Output: Returns an allocated `blt_hash_ngram_weights` struct.
+  - Behavior: Allocates embedding tables and initializes them with small uniform random values in `[-0.02, 0.02]` to break symmetry.
+- `blt_hash_ngram_forward(weights, config, bytes_in, byte_emb, out, arena)`
+  - Input: `weights`, `config`, `bytes_in` (1D UINT8 `[seq_len]`), `byte_emb` (2D FP32 `[seq_len, embed_dim]`), and `arena`.
+  - Output: `out` (2D FP32 `[seq_len, embed_dim]`). Contains `byte_emb` + n-gram embeddings.
+  - Behavior: For each position `i`, adds the hash table lookups for all active n-gram sizes to the base byte embedding. Positions `i < n-1` receive no contribution from the size-`n` table. If `normalize` is true, scales the final output by `1 / (num_ngram_sizes + 1)`.
+- `blt_hash_ngram_backward(weights, config, bytes_in, grad_out, grad_byte_emb, grad_tables, arena)`
+  - Input: `weights` (unused but kept for API symmetry), `config`, `bytes_in`, `grad_out` (2D FP32 `[seq_len, embed_dim]`), and `arena`.
+  - Output: `grad_byte_emb` (2D FP32 `[seq_len, embed_dim]`) and `grad_tables` (array of 2D FP32 `[per_ngram_vocab, embed_dim]`).
+  - Behavior: Computes gradients w.r.t the base byte embeddings and the hash tables. Scales gradients by `1 / (num_ngram_sizes + 1)` if `normalize` is true. Scatter-adds gradients into `grad_tables` (which MUST be zero-initialized by the caller). To avoid aliasing issues if `grad_byte_emb` and `grad_out` point to the same memory, the scatter-add is executed strictly before overwriting `grad_byte_emb`.
+
+
 
 
 ------------------------------------------------------------------------------------------------------------
