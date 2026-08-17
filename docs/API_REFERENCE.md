@@ -83,7 +83,7 @@
   - Output: pointer to aligned memory inside the arena, or aborts on failure.
 - `blt_tensor_create(blt_arena* arena, const size_t* shape, size_t ndim, blt_dtype dtype)`
   - Input: arena for storage, shape, rank, and element type.
-  - Output: a zero-initialized tensor with allocated storage.
+  - Output: blt_tensor - a zero-initialized tensor with allocated storage.
 
 
 

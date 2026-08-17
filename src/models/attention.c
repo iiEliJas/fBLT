@@ -644,5 +644,5 @@ void blt_multihead_attention_backward(const blt_tensor* input, const blt_tensor*
     blt_tensor_view_2d(&grad_qkv_tensor, grad_qkv_data, seq_len, 3 * embed_dim, input->backend);
     blt_matmul_backward(input, weight_qkv, &grad_qkv_tensor, grad_input, grad_weight_qkv);
  
-    // Arena cleanup remains the caller's responsibility (blt_arena_reset).
+    // Arena cleanup is callers responsibility
 }

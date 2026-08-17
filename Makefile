@@ -47,10 +47,12 @@ CORE_SRCS := \
     $(SRC_DIR)/backend_cpu/reductions_cpu.c \
     $(SRC_DIR)/backend_cpu/optim_cpu.c \
  	$(SRC_DIR)/backend_cpu/mask_builder_cpu.c \
+ 	$(SRC_DIR)/backend_cpu/patch_pool_cpu.c \
     $(SRC_DIR)/models/entropy.c \
     $(SRC_DIR)/models/byte_embedding.c \
     $(SRC_DIR)/models/patcher.c \
     $(SRC_DIR)/models/attention.c \
+	$(SRC_DIR)/models/cross_attention.c \
     $(SRC_DIR)/models/transformer.c \
     $(SRC_DIR)/models/entropy_lm.c \
 	$(SRC_DIR)/models/hash_ngram.c 
@@ -72,7 +74,7 @@ TEST_OBJS := $(addprefix $(OBJ_DIR)/,$(TEST_SRCS:.c=.o)) $(CORE_OBJS)
 # ============================================================================
 # TARGETS
 # ============================================================================
-.PHONY: all test main bench threshold clean info help
+.PHONY: all test main bench threshold sandbox clean info help
 
 all: test
 
@@ -99,6 +101,10 @@ bench: $(BIN_DIR)/bench_patcher$(EXE_EXT)
 
 threshold: $(BIN_DIR)/calibrate_threshold$(EXE_EXT)
 	@echo [MAIN] Built successfully: $(BIN_DIR)/calibrate_threshold$(EXE_EXT)
+
+sandbox: $(BIN_DIR)/sandbox$(EXE_EXT)
+	@echo [MAIN] Built successfully: $(BIN_DIR)/sandbox$(EXE_EXT)
+	@./$(BIN_DIR)/sandbox$(EXE_EXT)
 
 
 # ============================================================================
@@ -140,6 +146,12 @@ $(BIN_DIR)/calibrate_threshold$(EXE_EXT): $(RUN_DIR)/calibrate_threshold.c $(COR
 	@echo [LD] Linking main executable: $@
 	$(MKDIR_BIN)
 	@$(CC) $(CFLAGS) $(RUN_DIR)/calibrate_threshold.c $(CORE_OBJS) -o $@ $(LDLIBS)
+
+# Link sandbox exe
+$(BIN_DIR)/sandbox$(EXE_EXT): $(RUN_DIR)/sandbox.c $(CORE_OBJS)
+	@echo [LD] Linking main executable: $@
+	$(MKDIR_BIN)
+	@$(CC) $(CFLAGS) $(RUN_DIR)/sandbox.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
 
 # ============================================================================

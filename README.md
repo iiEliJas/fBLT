@@ -79,7 +79,7 @@ run/                    Entry points
 configs/                Model configs (JSON)
 ```
 
-## What's done, what's next
+## TODO
 
 **Done:**
 - Tensor and memory system (arena allocator, shapes, strides)
@@ -88,9 +88,9 @@ configs/                Model configs (JSON)
 - Entropy model, patcher
 - Attention (causal, cross-attention, custom masks)
 - Full test harness (unit, integration, golden files)
+- Hash n-gram embeddings
 
 **Todo:**
-- Hash n-gram embeddings
 - Local encoder + decoder
 - Patch transformer (global model)
 - End-to-end forward pass
