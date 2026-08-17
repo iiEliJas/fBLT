@@ -21,6 +21,9 @@ int run_patcher_model_tests(void);
 int run_attention_model_tests(void);
 int run_attention_masked_model_tests(void);
 int run_attention_backward_model_tests(void);
+int run_cross_attention_model_tests(void);
+int run_cross_attention_masked_model_tests(void);
+int run_cross_attention_backward_model_tests(void);
 int run_elm_model_tests(void);
 int run_hash_ngram_model_tests(void);
 
