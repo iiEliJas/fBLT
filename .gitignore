@@ -1,4 +1,5 @@
 build/
+bin/
 data/dummy_entropy.bin
 obj/
 *.exe

@@ -58,6 +58,7 @@ int main(void) {
         {"transformer parity", run_transformer_parity_tests},
         {"entropy LM overfit", run_elm_overfit_tests},
         {"local encoder overfit", run_lencoder_overfit_test},
+        {"local encoder parity", run_local_encoder_parity},
     };
 
     int passed = 0;
