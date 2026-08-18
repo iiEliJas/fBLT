@@ -42,46 +42,33 @@ typedef struct {
 
 
 
-/*
- * blt_cross_attention_forward(query_in, kv_in, weights, output, config, arena)
- *   Input:  query_in [num_patches, embed_dim] FP32 — P_{l-1},
- *           kv_in    [seq_len, embed_dim]    FP32 — h_{l-1} (byte states),
- *           weights  separate W_q/W_k/W_v/W_o (Q and K/V come from different
- *                    input tensors, so no combined QKV matrix is possible),
- *           config   with mask_config != NULL.
- *   Output: output [num_patches, embed_dim] — PRE-RESIDUAL cross-attn result.
- *   Steps:  Q = query_in @ W_q; K = kv_in @ W_k; V = kv_in @ W_v; per head:
- *           scores = Q_h K_h^T / sqrt(head_dim) + block mask; softmax;
- *           attn_h = probs @ V_h; concat heads; output = attn @ W_o.
- *   arena is used for all intermediates and is not reset by the function.
- */
-void blt_cross_attention_forward(const blt_tensor* query_in, const blt_tensor* kv_in,
-                                const blt_cross_attention_weights* weights, blt_tensor* output,
-                                const blt_cross_attention_config* config, blt_arena* arena);
-
-
-/*
- * blt_cross_attention_backward(query_in, kv_in, weights, grad_out,
- *                              grad_query_in, grad_kv_in, grad_weights,
- *                              config, arena)
- *   Input:  same query_in/kv_in/weights/config as forward,
- *           grad_out [num_patches, embed_dim] FP32.
- *   Output: grad_query_in [num_patches, embed_dim]  (overwritten),
- *           grad_kv_in    [seq_len, embed_dim]      (overwritten),
- *           grad_weights  four [embed_dim, embed_dim] tensors (overwritten).
- *   Behavior: exact reverse of forward. Recomputes and caches the forward
- *   intermediates (Q, K, V, per-head attention probs) — the same recompute
- *   pattern as blt_multihead_attention_backward — then walks back through
- *   blt_matmul_backward / blt_softmax_backward. The only structural
- *   difference from self-attention backward is the two gradient sinks
- *   (grad_query_in and grad_kv_in) instead of one.
- */
-void blt_cross_attention_backward(const blt_tensor* query_in, const blt_tensor* kv_in, 
-                                const blt_cross_attention_weights* weights, const blt_tensor* grad_out, 
-                                blt_tensor* grad_query_in, blt_tensor* grad_kv_in,
-                                blt_cross_attention_grad* grad_weights, const blt_cross_attention_config* config,
+// Input:     query_in [num_patches, embed_dim] (P_{l-1}), kv_in [seq_len, embed_dim] (h_l),
+//            projection weights, target output tensor, config, arena.
+// Output:    output [num_patches, embed_dim] containing pre-residual cross-attn result.
+// Behavior: Projects Q from query_in and K,V from kv_in, computes scaled dot-product
+//            attention with block-diagonal patch masking, and applies output projection.
+void blt_cross_attention_forward(const blt_tensor* query_in,
+                                const blt_tensor* kv_in,
+                                const blt_cross_attention_weights* weights,
+                                blt_tensor* output,
+                                const blt_cross_attention_config* config,
                                 blt_arena* arena);
 
+
+// Input:     Forward pass inputs, grad_out [num_patches, embed_dim] (dL/dOutput), arena.
+// Output:    grad_query_in [num_patches, embed_dim], grad_kv_in [seq_len, embed_dim],
+//            and grad_weights struct (all overwritten).
+// Behavior: Recomputes forward intermediates (Q, K, V, attention probabilities), then
+//            propagates gradients backward into query, key/value, and weight matrices.
+void blt_cross_attention_backward(const blt_tensor* query_in,
+                                 const blt_tensor* kv_in,
+                                 const blt_cross_attention_weights* weights,
+                                 const blt_tensor* grad_out,
+                                 blt_tensor* grad_query_in,
+                                 blt_tensor* grad_kv_in,
+                                 blt_cross_attention_grad* grad_weights,
+                                 const blt_cross_attention_config* config,
+                                 blt_arena* arena);
 
 
 #endif //BLT_CROSS_ATTENTION_H

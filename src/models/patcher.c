@@ -4,22 +4,27 @@
 #include <string.h>
 
 
-// Returns non-zero if a patch boundary should be placed at index i.
+
+//-----------------------------------------------------
+// Checks all patch rules
+//
+// Returns non-zero if a patch boundary should be placed at index i
+
 static int blt_patch_boundary(size_t i, size_t patch_start, size_t patch_len,
                                const float* entropy_data, const uint8_t* bytes,
                                const blt_patcher_config* config)
 {
-    // Rule 1: Structural Context Reset
+    // Rule 1: Structural context reset
     if (bytes && config->reset_on_newline && bytes[i] == 0x0A) {
         return 1;
     }
 
-    // Rule 2: Maximum Patch Length Constraint
+    // Rule 2: Max patch length
     if (patch_len >= config->max_patch_length) {
         return 1;
     }
 
-    // Rules 3 & 4: Entropy-based threshold conditions
+    // Rules 3 & 4: Entropy-based threshold
     float current_entropy = entropy_data[i];
 
     switch (config->rule) {
@@ -40,8 +45,13 @@ static int blt_patch_boundary(size_t i, size_t patch_start, size_t patch_len,
     }
 }
 
+
+
+//-----------------------------------------------------
 // Appends the in-progress patch to the output array
+//
 // Returns 1 on success, 0 if max_patches was already reached
+
 static int blt_patch_emit(blt_patch_info* patches_out, size_t max_patches, size_t* patch_count,
                            size_t start_idx, size_t length, float peak_entropy)
 {
@@ -68,11 +78,9 @@ static int blt_patch_emit(blt_patch_info* patches_out, size_t max_patches, size_
 //      2. Max Length:    patch_length >= max_patch_length
 //      3. Global Rule:   H_i > threshold_global
 //      4. Relative Delta: (H_i - H_{i-1}) > threshold_monotonic
-//-----------------------------------------------------
 
 size_t blt_segment_patches(const blt_tensor* entropy, const uint8_t* bytes, blt_patch_info* patches_out,
-                            size_t max_patches, const blt_patcher_config* config
-){
+                            size_t max_patches, const blt_patcher_config* config){
     // Validation
     blt_check_nd_fp32(entropy, 1, (const size_t[]){0}, "Entropy tensor must be 1D");
     BLT_REQUIRE(entropy->numel != 0, "Entropy tensor must not be empty");

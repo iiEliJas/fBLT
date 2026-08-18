@@ -84,7 +84,7 @@ static int run_mask_builder_doc_boundary_test(void) {
     }
 
     // Two documents: doc 0 = positions [0, 3), doc 1 = positions [3, 6).
-    size_t doc_boundaries[2] = {0, 3};
+    size_t doc_boundaries[1] = {3};
 
     blt_mask_config config = {0};
     config.seq_len_q = 6;

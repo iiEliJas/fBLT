@@ -202,6 +202,22 @@
     - Input: `blt_mask_config` struct defining attention constraints, output tensor, and arena for storage
     - Output: Writes a 2D FP32 mask tensor of shape `[seq_len_q, seq_len_kv]` to `out_mask`. Uses `0` for allowed attention and `-INFINITY` for masked attention
 
+### blt/ops/patch_pool.h
+- `blt_patch_pool_type` enum
+  - `BLT_POOL_MEAN` = 0: Mean pooling; averages byte representations within each patch boundary.
+  - `BLT_POOL_MAX` = 1: Max pooling; selects per-channel maximum byte representation within each patch.
+- `blt_patch_pool_forward(byte_hidden, patches, num_patches, pool_type, out)`
+  - Input: `byte_hidden` tensor `[seq_len, embed_dim]` (FP32), `patches` metadata array `[num_patches]`, count `num_patches`, `pool_type` strategy, and target output tensor `out`.
+  - Output: Writes pooled patch representations into `out` `[num_patches, embed_dim]` (FP32).
+  - Behavior: Computes row-wise patch features (mean or per-channel max) over contiguous byte spans defined by `patches`. Validates that patch spans cover valid ranges in `seq_len`.
+- `blt_patch_pool_backward(grad_out, byte_hidden, patches, num_patches, pool_type, grad_byte_hidden)`
+  - Input: `grad_out` `[num_patches, embed_dim]`, original `byte_hidden` `[seq_len, embed_dim]`, `patches` metadata, `num_patches`, `pool_type`, and `grad_byte_hidden` `[seq_len, embed_dim]`.
+  - Output: Accumulates input gradients into `grad_byte_hidden` (must be zero-initialized prior to call).
+  - Behavior: For `MEAN`, scatters `grad_out[j] / patch.length` across all constituent bytes in patch $j$. For `MAX`, recomputes the per-channel argmax using `byte_hidden` and routes the total channel gradient exclusively to the argmax byte position.
+- `blt_patch_build_group_ids(patches, num_patches, seq_len, query_group_ids_out, kv_group_ids_out)`
+  - Input: `patches` metadata array `[num_patches]`, `num_patches`, `seq_len` (total bytes), caller-allocated `query_group_ids_out` `[num_patches]`, and `kv_group_ids_out` `[seq_len]`.
+  - Output: Fills `query_group_ids_out` with query patch indices ($0 \dots \text{num\_patches}-1$) and `kv_group_ids_out` with parent patch indices for each byte position.
+  - Behavior: Maps queries and key/value positions into patch groups for block-diagonal cross-attention masks. Asserts that input patches form a contiguous tiling over `[0, seq_len)`.
 
 ------------------------------------------------------------------------------------------------------------
 ## Model APIs
@@ -382,16 +398,89 @@ Assembly of already-implemented pieces (byte embedding, RoPE-enabled transformer
   - Input: arena for storage and `blt_hash_ngram_config`.
   - Output: Returns an allocated `blt_hash_ngram_weights` struct.
   - Behavior: Allocates embedding tables and initializes them with small uniform random values in `[-0.02, 0.02]` to break symmetry.
-- `blt_hash_ngram_forward(weights, config, bytes_in, byte_emb, out, arena)`
-  - Input: `weights`, `config`, `bytes_in` (1D UINT8 `[seq_len]`), `byte_emb` (2D FP32 `[seq_len, embed_dim]`), and `arena`.
+- `blt_hash_ngram_forward(weights, config, bytes_in, byte_emb, out)`
+  - Input: `weights`, `config`, `bytes_in` (1D UINT8 `[seq_len]`), `byte_emb` (2D FP32 `[seq_len, embed_dim]`).
   - Output: `out` (2D FP32 `[seq_len, embed_dim]`). Contains `byte_emb` + n-gram embeddings.
   - Behavior: For each position `i`, adds the hash table lookups for all active n-gram sizes to the base byte embedding. Positions `i < n-1` receive no contribution from the size-`n` table. If `normalize` is true, scales the final output by `1 / (num_ngram_sizes + 1)`.
-- `blt_hash_ngram_backward(weights, config, bytes_in, grad_out, grad_byte_emb, grad_tables, arena)`
-  - Input: `weights` (unused but kept for API symmetry), `config`, `bytes_in`, `grad_out` (2D FP32 `[seq_len, embed_dim]`), and `arena`.
+- `blt_hash_ngram_backward(config, bytes_in, grad_out, grad_byte_emb, grad_tables)`
+  - Input: `config`, `bytes_in`, `grad_out` (2D FP32 `[seq_len, embed_dim]`).
   - Output: `grad_byte_emb` (2D FP32 `[seq_len, embed_dim]`) and `grad_tables` (array of 2D FP32 `[per_ngram_vocab, embed_dim]`).
   - Behavior: Computes gradients w.r.t the base byte embeddings and the hash tables. Scales gradients by `1 / (num_ngram_sizes + 1)` if `normalize` is true. Scatter-adds gradients into `grad_tables` (which MUST be zero-initialized by the caller). To avoid aliasing issues if `grad_byte_emb` and `grad_out` point to the same memory, the scatter-add is executed strictly before overwriting `grad_byte_emb`.
 
+### blt/models/cross_attention.h
+- `blt_cross_attention_config` struct
+  - Fields:
+    - `size_t embed_dim`: Shared hidden width ($h_E$) for query and key/value inputs.
+    - `size_t num_heads`: Number of cross-attention heads ($U_E$).
+    - `size_t head_dim`: Per-head dimension; if 0, inferred as `embed_dim / num_heads`.
+    - `const blt_mask_config* mask_config`: REQUIRED pointer to block-diagonal patch mask config.
+- `blt_cross_attention_weights` struct
+  - Fields:
+    - `const blt_tensor* weight_q`: Projection weights for Q of shape `[embed_dim, embed_dim]`.
+    - `const blt_tensor* weight_k`: Projection weights for K of shape `[embed_dim, embed_dim]`.
+    - `const blt_tensor* weight_v`: Projection weights for V of shape `[embed_dim, embed_dim]`.
+    - `const blt_tensor* weight_proj`: Output projection weights of shape `[embed_dim, embed_dim]`.
+- `blt_cross_attention_grad` struct
+  - Fields:
+    - `blt_tensor grad_weight_q`: Gradient tensor for Q projection of shape `[embed_dim, embed_dim]`.
+    - `blt_tensor grad_weight_k`: Gradient tensor for K projection of shape `[embed_dim, embed_dim]`.
+    - `blt_tensor grad_weight_v`: Gradient tensor for V projection of shape `[embed_dim, embed_dim]`.
+    - `blt_tensor grad_weight_proj`: Gradient tensor for output projection of shape `[embed_dim, embed_dim]`.
+- `blt_cross_attention_forward(query_in, kv_in, weights, output, config, arena)`
+  - Input: `query_in` `[num_patches, embed_dim]` ($P_{l-1}$), `kv_in` `[seq_len, embed_dim]` ($h_l$), `weights`, output tensor `output`, `config` (with non-NULL `mask_config`), and scratch `arena`.
+  - Output: Writes pre-residual cross-attention output into `output` `[num_patches, embed_dim]`.
+  - Behavior: Projects queries from `query_in` and keys/values from `kv_in`, computes scaled dot-product attention per head using block-diagonal patch masking, concatenates heads, and applies output projection ($W_o$). Intermediates are allocated from `arena`.
+- `blt_cross_attention_backward(query_in, kv_in, weights, grad_out, grad_query_in, grad_kv_in, grad_weights, config, arena)`
+  - Input: Same `query_in`, `kv_in`, `weights`, `config`, and `arena` as forward, plus `grad_out` `[num_patches, embed_dim]` ($dL/d\text{Output}$).
+  - Output: Writes input gradients into `grad_query_in` `[num_patches, embed_dim]`, `grad_kv_in` `[seq_len, embed_dim]`, and weight gradients into `grad_weights` (all overwritten).
+  - Behavior: Recomputes forward intermediates ($Q$, $K$, $V$, per-head attention probabilities) into `arena`, then computes reverse-pass gradients for query inputs, key/value inputs, and projection weights via `blt_matmul_backward` and `blt_softmax_backward`.
 
+### blt/models/local_encoder.h
+- `blt_local_encoder_config` struct
+  - Fields:
+    - `size_t embed_dim`: Transformer hidden width ($h_E$).
+    - `size_t num_layers`: Number of byte transformer layers ($l_E$, default: 1).
+    - `size_t hidden_dim`: Intermediate hidden width for FFN projections.
+    - `size_t num_heads`: Number of byte self-attention heads.
+    - `size_t cross_attn_heads`: Number of cross-attention heads ($U_E$).
+    - `size_t local_window`: Sliding window size ($w_E$) for byte self-attention (0 = full causal).
+    - `bool cross_attn_all_layers`: If `false`, cross-attention fires only after the final layer.
+    - `blt_patch_pool_type pool_type`: Initialization strategy for initial patch representations $P_0$ (default: MEAN).
+    - `blt_hash_ngram_config ngram_config`: Hash n-gram config; `ngram_config.embed_dim` must match `embed_dim`.
+    - `float rope_theta`: Base frequency for Rotary Position Embeddings.
+    - `size_t max_seq_len`: Maximum sequence length used to size the shared RoPE cache.
+- `blt_local_encoder_layer_storage` struct
+  - Fields: `norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w`, `cross_norm_weight`, `cross_weight_q`, `cross_weight_k`, `cross_weight_v`, `cross_weight_proj` — owned storage for layer weights.
+- `blt_local_encoder` struct
+  - Fields:
+    - `blt_local_encoder_config config`: Encoder configuration parameters.
+    - `blt_tensor byte_embedding_weight`: Byte lookup table `[256, embed_dim]`.
+    - `blt_hash_ngram_weights ngram_weights`: Hash n-gram tables with small-uniform initialization.
+    - `blt_tensor rope_cos_cache`, `rope_sin_cache`: Precomputed RoPE tables `[max_seq_len, head_dim/2]`.
+    - `blt_local_encoder_layer_storage* layers`: Array of per-layer storage blocks `[num_layers]`.
+- `blt_local_encoder_layer_grad` struct
+  - Fields: `norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w`, `cross_norm_weight`, `cross_weight_q`, `cross_weight_k`, `cross_weight_v`, `cross_weight_proj` — gradient storage per layer.
+- `blt_local_encoder_grad` struct
+  - Fields:
+    - `blt_tensor embedding_grad`: Gradient table for byte embeddings `[256, embed_dim]` (scatter-add target).
+    - `blt_hash_ngram_weights ngram_grads`: Gradient tables for n-grams (scatter-add target).
+    - `blt_local_encoder_layer_grad* layer_grads`: Layer gradient structures `[num_layers]` (overwritten).
+- `blt_local_encoder_create(arena, config)`
+  - Input: `arena` for allocations and `config` parameters.
+  - Output: Allocated `blt_local_encoder*` handle with zero-initialized weights and precomputed RoPE caches.
+  - Behavior: Allocates model storage, creates small-uniform n-gram tables, and precomputes RoPE cache once for the entire encoder. Caller populates model weights afterward.
+- `blt_local_encoder_grad_create(arena, model)`
+  - Input: `arena` for storage and reference `model`.
+  - Output: Allocated, zero-initialized `blt_local_encoder_grad*` structure matching `model` shapes.
+  - Behavior: Prepares zero-initialized gradient structures for tracking backpropagation.
+- `blt_local_encoder_forward(model, bytes_in, patches, num_patches, doc_boundaries, num_docs, patch_out, byte_hidden_out, arena)`
+  - Input: `model`, raw input bytes `bytes_in` `[seq_len]` (UINT8), `patches` array `[num_patches]` tiling `[0, seq_len)`, optional `doc_boundaries` array and `num_docs`, caller-allocated `patch_out`, `byte_hidden_out`, and scratch `arena`.
+  - Output: Writes final patch representations $P_{\text{final}}$ into `patch_out` `[num_patches, embed_dim]` and final byte representations $h_{\text{final}}$ into `byte_hidden_out` `[seq_len, embed_dim]`.
+  - Behavior: Embeds bytes + n-grams, constructs $P_0$ via patch pooling, executes $l_E$ transformer layers with sliding-window self-attention, and updates patch representations using block-diagonal cross-attention.
+- `blt_local_encoder_backward(model, bytes_in, patches, num_patches, doc_boundaries, num_docs, grad_patch_out, grad_byte_hidden_out, grad, arena)`
+  - Input: Same forward parameters, plus `grad_patch_out` `[num_patches, embed_dim]` ($dL/dP_{\text{final}}$), optional `grad_byte_hidden_out` `[seq_len, embed_dim]` ($dL/dh_{\text{final}}$), destination gradient handle `grad`, and scratch `arena`.
+  - Output: Populates `grad` struct with parameter gradients.
+  - Behavior: Recomputes forward passes with per-layer caching, then propagates gradients in reverse through cross-attention, byte transformer layers, patch pooling, n-gram tables, and byte embeddings.
 
 
 ------------------------------------------------------------------------------------------------------------

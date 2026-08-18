@@ -36,17 +36,19 @@ int main(void) {
     };
 
     const test_case model_tests[] = {
-        {"entropy model", run_entropy_model_tests},
-        {"patcher model", run_patcher_model_tests},
-        {"byte embedding model", run_byte_embedding_model_tests},
-        {"attention model", run_attention_model_tests},
-        {"attention masked model", run_attention_masked_model_tests},
-        {"attention backward model", run_attention_backward_model_tests},
-        {"cross attention model", run_cross_attention_model_tests},
-        {"cross attention masked model", run_cross_attention_masked_model_tests},
-        {"cross attention backward model", run_cross_attention_backward_model_tests},
-        {"entropy LM model", run_elm_model_tests},
-        {"hash ngram model", run_hash_ngram_model_tests},
+        {"entropy", run_entropy_model_tests},
+        {"patcher", run_patcher_model_tests},
+        {"byte embedding", run_byte_embedding_model_tests},
+        {"attention", run_attention_model_tests},
+        {"attention masked", run_attention_masked_model_tests},
+        {"attention backward", run_attention_backward_model_tests},
+        {"cross attention", run_cross_attention_model_tests},
+        {"cross attention masked", run_cross_attention_masked_model_tests},
+        {"cross attention backward", run_cross_attention_backward_model_tests},
+        {"entropy LM", run_elm_model_tests},
+        {"hash ngram", run_hash_ngram_model_tests},
+        {"local encoder mask", run_lencoder_mask_model_test},
+        {"local encoder smoke", run_local_encoder_smoke_test},
     };
 
     const test_case parity_tests[] = {
@@ -55,6 +57,7 @@ int main(void) {
         {"patcher parity", run_patcher_parity_tests},
         {"transformer parity", run_transformer_parity_tests},
         {"entropy LM overfit", run_elm_overfit_tests},
+        {"local encoder overfit", run_lencoder_overfit_test},
     };
 
     int passed = 0;

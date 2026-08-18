@@ -9,8 +9,7 @@
 
 // -------------------------------------------------------------------
 // Rolling polynomial hash
-// -------------------------------------------------------------------
-
+//
 // Initializes the rolling hash state.
 // We precompute prime^n (mod modulus) to allow O(1) rolling updates later.
 // We validate that prime * modulus does not overflow uint64, ensuring all 
@@ -43,15 +42,9 @@ void blt_rolling_hash_init(blt_rolling_hash_state* state, size_t n, uint64_t pri
 }
 
 
-
+//-------------------------------------------------------------------
 // Feeds a new byte to the rolling hash
-// For an n-gram ending at position i, the polynomial hash is:
-//   H(i) = (b_i * p^(n-1) + b_(i-1) * p^(n-2) + ... + b_(i-n+1) * p^0) mod m
-// When a new byte b_new arrives, we can compute the new hash from the old one:
-//   H_new = (H_old * p + b_new - b_outgoing * p^n) mod m
-// where b_outgoing is the byte that just left the n-gram window.
-// Because (A - B) mod m can be negative in C, we add m before taking modulo:
-//   H_new = (H_old * p + b_new + m - (b_outgoing * p^n) mod m) mod m
+
 uint64_t blt_rolling_hash_update(blt_rolling_hash_state* state, uint8_t new_byte) {
     BLT_REQUIRE(state != NULL, "blt_rolling_hash_update: state is NULL");
 
@@ -96,8 +89,7 @@ uint64_t blt_rolling_hash_update(blt_rolling_hash_state* state, uint8_t new_byte
 
 // -------------------------------------------------------------------
 // Weight creation
-// -------------------------------------------------------------------
-
+//
 // Allocates embedding tables and initializes them with small uniform random values
 // Uses Uniform(-0.02, 0.02) instead of zero
 blt_hash_ngram_weights blt_hash_ngram_create(blt_arena* arena, const blt_hash_ngram_config* config) {
@@ -142,9 +134,8 @@ blt_hash_ngram_weights blt_hash_ngram_create(blt_arena* arena, const blt_hash_ng
 
 // -------------------------------------------------------------------
 // Forward
-// -------------------------------------------------------------------
-
-// Forward pass for the hash n-gram module.
+//
+// Forward pass for the hash n-gram module
 // For each position i, the output is:
 //   out_i = byte_emb_i + sum_{n} Table_n[hash(b_{i-n+1...i})]
 // If normalize is true, the entire sum is divided by (K + 1), where K is num_ngram_sizes.
@@ -228,8 +219,7 @@ void blt_hash_ngram_forward(
 
 // -------------------------------------------------------------------
 // Backward
-// -------------------------------------------------------------------
-
+//
 // Backward pass for gradients
 // Given dL/d_out, we compute gradients
 // 1. dL/d_byte_emb = (1 / (K + 1)) * dL/d_out
@@ -266,9 +256,7 @@ void blt_hash_ngram_backward(
     const float* grad_out_data = (const float*)grad_out->data;
     float* grad_byte_emb_data = (float*)grad_byte_emb->data;
 
-    float scale = config->normalize
-        ? 1.0f / (float)(config->num_ngram_sizes + 1)
-        : 1.0f;
+    float scale = config->normalize ? 1.0f / (float)(config->num_ngram_sizes + 1) : 1.0f;
 
     // Scatter add scaled grad_out into grad_tables
     for (size_t n_idx = 0; n_idx < config->num_ngram_sizes; n_idx++) {

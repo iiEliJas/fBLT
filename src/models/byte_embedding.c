@@ -26,7 +26,6 @@ blt_byte_embedding blt_byte_embedding_create(blt_arena* arena, size_t vocab_size
 //   bytes_in:    [seq_len]                 (UINT8)
 //   emb->weight: [vocab_size, embed_dim]   (FP32)
 //   out:         [seq_len, embed_dim]      (FP32)
-//----------------------------------------------------------------
 
 void blt_byte_embedding_forward(const blt_byte_embedding* emb, const blt_tensor* bytes_in,
                                  blt_tensor* out) {
@@ -78,7 +77,6 @@ void blt_byte_embedding_forward(const blt_byte_embedding* emb, const blt_tensor*
 //   bytes_in:    [seq_len]                 (UINT8)
 //   grad_out:    [seq_len, embed_dim]      (FP32)
 //   grad_weight: [256, embed_dim]          (FP32, pre-zeroed)
-//----------------------------------------------------------------
 
 void blt_byte_embedding_backward(const blt_byte_embedding* emb, const blt_tensor* bytes_in,
                                   const blt_tensor* grad_out, blt_tensor* grad_weight) {

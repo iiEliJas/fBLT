@@ -83,7 +83,7 @@ static void apply_norm2(const blt_tensor* input, const blt_transformer_weights* 
     }
 }
  
-// FFN: up (and gate, for SwiGLU) projection -> activation -> down projection
+// FFN: up projection -> activation -> down projection
 static void apply_ffn(const blt_tensor* norm_attn, const blt_transformer_weights* w,
                        const blt_transformer_config* config, blt_arena* arena,
                        size_t seq_len, size_t hidden_dim, blt_tensor* ffn_out) {
@@ -136,8 +136,7 @@ void blt_transformer_forward(
     
     // -----------------------------------------------------------------
     // STEP 1: Multi-Head Attention Sub-Layer with Pre-Norm & Residual
-    // -----------------------------------------------------------------
-    
+    //
     // Apply pre-layer normalization (RMSNorm or LayerNorm)
     blt_tensor norm_input = blt_tensor_create(arena, embed_shape, 2, BLT_DTYPE_FP32);
     apply_norm1(input, weights, config, &norm_input);
@@ -154,8 +153,7 @@ void blt_transformer_forward(
 
     // -----------------------------------------------------------------
     // STEP 2: Feed-Forward Network (FFN) Sub-Layer with Pre-Norm & Residual
-    // -----------------------------------------------------------------
-    
+    //
     // Apply second pre-layer normalization
     blt_tensor norm_attn = blt_tensor_create(arena, embed_shape, 2, BLT_DTYPE_FP32);
     apply_norm2(&attn_residual, weights, config, &norm_attn);

@@ -55,7 +55,8 @@ CORE_SRCS := \
 	$(SRC_DIR)/models/cross_attention.c \
     $(SRC_DIR)/models/transformer.c \
     $(SRC_DIR)/models/entropy_lm.c \
-	$(SRC_DIR)/models/hash_ngram.c 
+	$(SRC_DIR)/models/hash_ngram.c \
+	$(SRC_DIR)/models/local_encoder.c
 
 TEST_SRCS := \
     $(wildcard $(TESTS_DIR)/unit/*/*.c) \

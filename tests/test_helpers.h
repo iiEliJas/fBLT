@@ -6,12 +6,10 @@
 #include "blt/core/tensor.h"
 #include "blt/core/allocator.h"
 
-// Helper declarations
+// Helper
 int blt_test_load_binary_tensor(const char* path, blt_arena* arena, blt_tensor* out_tensor);
 int blt_test_check_close(const blt_tensor* actual, const blt_tensor* expected, float tol);
 
-
-// Compatibility aliases for existing test entrypoints
 #define load_binary_tensor blt_test_load_binary_tensor
 #define check_close blt_test_check_close
 

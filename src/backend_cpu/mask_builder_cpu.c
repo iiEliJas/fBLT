@@ -14,7 +14,7 @@ static void precompute_doc_ids(const size_t* doc_boundaries, size_t num_docs,
                                 size_t seq_len, size_t* doc_id_out) {
     size_t doc_id = 0;
     for (size_t pos = 0; pos < seq_len; pos++) {
-        while (doc_id + 1 < num_docs && pos >= doc_boundaries[doc_id + 1]) {
+        while (doc_id + 1 < num_docs && pos >= doc_boundaries[doc_id]) {
             doc_id++;
         }
         doc_id_out[pos] = doc_id;
