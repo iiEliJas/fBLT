@@ -4,13 +4,13 @@
 #include "blt/core/tensor.h"
 #include "blt/core/allocator.h"
 #include "blt/models/transformer.h"
+#include "blt/models/transformer_stack.h"
 
-// -----------------------------------------------------------------------
-// blt_entropy_lm — the Phase 1 "tiny causal byte LM": byte embedding ->
-// N transformer layers (RMSNorm + SwiGLU + RoPE) -> LM head -> next-byte
-// cross-entropy loss. This is pure assembly of already-implemented,
-// individually-tested pieces (see API_REFERENCE.md); no new math lives
-// in the model beyond correct wiring and shift-by-one target handling.
+//----------------------------------------------------------------------
+// Entropy LM
+//
+// byte embedding -> N transformer layers (RMSNorm + SwiGLU + RoPE) -> LM head -> 
+// next-byte cross-entropy loss
 // -----------------------------------------------------------------------
 
 typedef struct {
@@ -22,18 +22,6 @@ typedef struct {
     float  rope_theta;      // RoPE base (e.g. 500000.0f)
 } blt_entropy_lm_config;
 
-// Owned storage for one transformer layer's weights. A parallel
-// blt_transformer_weights entry (of const pointers into this struct) is
-// what actually gets passed to blt_transformer_forward.
-typedef struct {
-    blt_tensor norm1_weight;
-    blt_tensor attn_qkv_w;
-    blt_tensor attn_proj_w;
-    blt_tensor norm2_weight;
-    blt_tensor ffn_up_w;
-    blt_tensor ffn_gate_w;
-    blt_tensor ffn_down_w;
-} blt_transformer_layer_storage;
 
 typedef struct {
     blt_entropy_lm_config config;
@@ -41,31 +29,14 @@ typedef struct {
     blt_tensor embedding_weight;   // [256, embed_dim]
     blt_tensor lm_head_weight;     // [embed_dim, 256]
 
-    // RoPE cos/sin tables, precomputed once at model-init time for
-    // max_seq_len and shared (by pointer, via layer_config) across every layer
-    blt_tensor rope_cos_cache;
-    blt_tensor rope_sin_cache;
-
-    blt_transformer_config layer_config;                // shared by every layer
-    blt_transformer_layer_storage* layer_storage;       // owns the tensors, [num_layers]
-    blt_transformer_weights* layer_weights;             // const pointer views into layer_storage, [num_layers]
+    blt_transformer_stack stack;    // N transformer layers with RoPE
 } blt_entropy_lm;
 
-// Gradient part of blt_transformer_layer_storage
-typedef struct {
-    blt_tensor norm1_weight;
-    blt_tensor attn_qkv_w;
-    blt_tensor attn_proj_w;
-    blt_tensor norm2_weight;
-    blt_tensor ffn_up_w;
-    blt_tensor ffn_gate_w;
-    blt_tensor ffn_down_w;
-} blt_transformer_layer_grad;
 
 // Gradient part of blt_entropy_lm, one tensor per weight
 typedef struct {
     blt_tensor embedding_grad;                    // [256, embed_dim]
-    blt_transformer_layer_grad* layer_grads;       // [num_layers]
+    blt_transformer_stack_grad* stack_grad;      // [num_layers]
     blt_tensor lm_head_grad;                       // [embed_dim, 256]
 } blt_entropy_lm_grad;
 
@@ -95,8 +66,6 @@ void blt_entropy_lm_forward(
 );
 
 // Backward pass for the same forward computation above. Recomputes forward internally
-// since blt_transformer_forward does not save its intermediates
-// Every gradient is produced by reusing an already-implemented op backward
 void blt_entropy_lm_backward(
     const blt_entropy_lm* model,
     const blt_tensor* bytes_in,

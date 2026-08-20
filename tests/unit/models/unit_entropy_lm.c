@@ -21,7 +21,7 @@ static void fill_model(blt_entropy_lm* model) {
     fill_deterministic(&model->embedding_weight, 0.0f);
     fill_deterministic(&model->lm_head_weight, 1.0f);
     for (size_t l = 0; l < model->config.num_layers; ++l) {
-        blt_transformer_layer_storage* s = &model->layer_storage[l];
+        blt_transformer_layer_storage* s = &model->stack.layer_storage[l];
         fill_deterministic(&s->norm1_weight, 2.0f + (float)l);
         fill_deterministic(&s->norm2_weight, 3.0f + (float)l);
         fill_deterministic(&s->attn_qkv_w, 4.0f + (float)l);
@@ -150,8 +150,8 @@ static int test_entropy_lm_finite_difference_gradient(void) {
     // scratch again until after the checks below, so this is safe as-is —
     // kept as separate tensors for clarity of what's being compared).
     blt_tensor embedding_grad = grad->embedding_grad;
-    blt_tensor norm1_grad = grad->layer_grads[0].norm1_weight;
-    blt_tensor ffn_down_grad = grad->layer_grads[0].ffn_down_w;
+    blt_tensor norm1_grad = grad->stack_grad->layer_grads[0].norm1_weight;
+    blt_tensor ffn_down_grad = grad->stack_grad->layer_grads[0].ffn_down_w;
 
     // NOTE: forward_loss() below calls blt_arena_reset(scratch), which
     // would invalidate the grad tensors above. Snapshot the specific
@@ -186,7 +186,7 @@ static int test_entropy_lm_finite_difference_gradient(void) {
 
     // -- layer 0 norm1_weight[1] --
     {
-        float* w = (float*)model->layer_storage[0].norm1_weight.data;
+        float* w = (float*)model->stack.layer_storage[0].norm1_weight.data;
         size_t idx = 1;
         float original = w[idx];
         w[idx] = original + eps;
@@ -204,7 +204,7 @@ static int test_entropy_lm_finite_difference_gradient(void) {
 
     // -- layer 0 ffn_down_w[5] --
     {
-        float* w = (float*)model->layer_storage[0].ffn_down_w.data;
+        float* w = (float*)model->stack.layer_storage[0].ffn_down_w.data;
         size_t idx = 5;
         float original = w[idx];
         w[idx] = original + eps;

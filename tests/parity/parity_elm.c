@@ -1,9 +1,3 @@
-// Exit criteria being checked:
-//   - Loss decreases monotone and reaches almost zero within a few hundred steps
-//   - Passes on at least two different small batches (different pattern or
-//     different weight init seed) to rule out a fluke of one input
-//   - Loss visibly decreases on a small code heavy slice too
-
 #include "test_helpers.h"
 #include "test_suite.h"
 
@@ -37,7 +31,7 @@ static void init_model_weights(blt_entropy_lm* model, float seed) {
     fill_deterministic(&model->embedding_weight, seed + 0.0f);
     fill_deterministic(&model->lm_head_weight, seed + 1.0f);
     for (size_t l = 0; l < model->config.num_layers; ++l) {
-        blt_transformer_layer_storage* s = &model->layer_storage[l];
+        blt_transformer_layer_storage* s = &model->stack.layer_storage[l];
         fill_deterministic(&s->norm1_weight, seed + 2.0f + (float)l);
         fill_deterministic(&s->norm2_weight, seed + 3.0f + (float)l);
         fill_deterministic(&s->attn_qkv_w, seed + 4.0f + (float)l);
@@ -59,8 +53,8 @@ static void accumulate_grad(blt_entropy_lm_grad* acc, const blt_entropy_lm_grad*
     blt_add(&acc->embedding_grad, &sample->embedding_grad, &acc->embedding_grad);
     blt_add(&acc->lm_head_grad, &sample->lm_head_grad, &acc->lm_head_grad);
     for (size_t l = 0; l < model->config.num_layers; ++l) {
-        blt_transformer_layer_grad* a = &acc->layer_grads[l];
-        const blt_transformer_layer_grad* s = &sample->layer_grads[l];
+        blt_transformer_layer_grad* a = &acc->stack_grad->layer_grads[l];
+        const blt_transformer_layer_grad* s = &sample->stack_grad->layer_grads[l];
         blt_add(&a->norm1_weight, &s->norm1_weight, &a->norm1_weight);
         blt_add(&a->attn_qkv_w, &s->attn_qkv_w, &a->attn_qkv_w);
         blt_add(&a->attn_proj_w, &s->attn_proj_w, &a->attn_proj_w);
@@ -76,7 +70,7 @@ static void scale_grad(blt_entropy_lm_grad* g, float s, const blt_entropy_lm* mo
     blt_scale(&g->embedding_grad, s);
     blt_scale(&g->lm_head_grad, s);
     for (size_t l = 0; l < model->config.num_layers; ++l) {
-        blt_transformer_layer_grad* lg = &g->layer_grads[l];
+        blt_transformer_layer_grad* lg = &g->stack_grad->layer_grads[l];
         blt_scale(&lg->norm1_weight, s);
         blt_scale(&lg->attn_qkv_w, s);
         blt_scale(&lg->attn_proj_w, s);
@@ -92,8 +86,8 @@ static void apply_sgd_step(blt_entropy_lm* model, const blt_entropy_lm_grad* g, 
     blt_sgd_step(&model->embedding_weight, &g->embedding_grad, lr);
     blt_sgd_step(&model->lm_head_weight, &g->lm_head_grad, lr);
     for (size_t l = 0; l < model->config.num_layers; ++l) {
-        blt_transformer_layer_storage* w = &model->layer_storage[l];
-        const blt_transformer_layer_grad* lg = &g->layer_grads[l];
+        blt_transformer_layer_storage* w = &model->stack.layer_storage[l];
+        const blt_transformer_layer_grad* lg = &g->stack_grad->layer_grads[l];
         blt_sgd_step(&w->norm1_weight, &lg->norm1_weight, lr);
         blt_sgd_step(&w->attn_qkv_w, &lg->attn_qkv_w, lr);
         blt_sgd_step(&w->attn_proj_w, &lg->attn_proj_w, lr);
@@ -123,7 +117,7 @@ static float sum_sq(const blt_tensor* t) {
 static float grad_global_norm(const blt_entropy_lm_grad* g, const blt_entropy_lm* model) {
     float ss = sum_sq(&g->embedding_grad) + sum_sq(&g->lm_head_grad);
     for (size_t l = 0; l < model->config.num_layers; ++l) {
-        const blt_transformer_layer_grad* lg = &g->layer_grads[l];
+        const blt_transformer_layer_grad* lg = &g->stack_grad->layer_grads[l];
         ss += sum_sq(&lg->norm1_weight) + sum_sq(&lg->attn_qkv_w) + sum_sq(&lg->attn_proj_w)
             + sum_sq(&lg->norm2_weight) + sum_sq(&lg->ffn_up_w) + sum_sq(&lg->ffn_gate_w)
             + sum_sq(&lg->ffn_down_w);

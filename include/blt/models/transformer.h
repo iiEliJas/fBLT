@@ -49,6 +49,33 @@ typedef struct {
     const blt_tensor* ffn_gate_w;   // required (non-NULL) when activation_type == BLT_ACTIVATION_SWIGLU
     const blt_tensor* ffn_down_w;
 } blt_transformer_weights;
+
+
+// Owned storage for one transformer layer's weights. A parallel
+// blt_transformer_weights entry (of const pointers into this struct) is
+// what actually gets passed to blt_transformer_forward.
+typedef struct {
+    blt_tensor norm1_weight;
+    blt_tensor attn_qkv_w;
+    blt_tensor attn_proj_w;
+    blt_tensor norm2_weight;
+    blt_tensor ffn_up_w;
+    blt_tensor ffn_gate_w;
+    blt_tensor ffn_down_w;
+} blt_transformer_layer_storage;
+
+
+// Gradient part of blt_transformer_layer_storage
+typedef struct {
+    blt_tensor norm1_weight;
+    blt_tensor attn_qkv_w;
+    blt_tensor attn_proj_w;
+    blt_tensor norm2_weight;
+    blt_tensor ffn_up_w;
+    blt_tensor ffn_gate_w;
+    blt_tensor ffn_down_w;
+} blt_transformer_layer_grad;
+
  
 // Executes a single Transformer block forward pass: pre-norm attention with
 // residual, then pre-norm FFN with residual. Norm and activation are chosen

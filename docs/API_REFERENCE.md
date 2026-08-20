@@ -312,12 +312,92 @@
     - `const blt_tensor* ffn_up_w`: FFN up-projection weights of shape `[embed_dim, hidden_dim]`.
     - `const blt_tensor* ffn_gate_w`: FFN gate projection weights of shape `[embed_dim, hidden_dim]`; required only when `activation_type == BLT_ACTIVATION_SWIGLU`.
     - `const blt_tensor* ffn_down_w`: FFN down-projection weights of shape `[hidden_dim, embed_dim]`.
+- `blt_transformer_layer_storage` struct
+  - Fields: `blt_tensor norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w` - owned storage for one transformer layer's weights.
+- `blt_transformer_layer_grad` struct
+  - Fields: `blt_tensor norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w` — gradient counterpart of `blt_transformer_layer_storage`.
 - `blt_transformer_forward(input, weights, output, config, arena)`
   - Input: input sequence tensor, transformer weights, output tensor, transformer config, and scratch arena.
   - Output: writes a single transformer block forward pass result into `output`.
   - Behavior: performs pre-norm self-attention with residual, followed by pre-norm FFN with residual. The `arena` is used for intermediate tensors and is not reset by the function.
 
-### blt/model/entropy_lm.h
+### blt/models/transformer_stack.h
+- `blt_transformer_stack_config` struct
+  - Fields:
+    - `size_t num_layers`: number of stacked transformer blocks.
+    - `size_t embed_dim`: transformer hidden width.
+    - `size_t hidden_dim`: FFN intermediate width.
+    - `size_t num_heads`: attention heads; `embed_dim` must be divisible by `num_heads`.
+    - `size_t max_seq_len`: upper bound used to size the shared RoPE cache.
+    - `float rope_theta`: RoPE base (e.g. `500000.0f`).
+- `blt_transformer_stack` struct
+  - Fields:
+    - `blt_transformer_config layer_config`: shared per-layer config for every block in the stack.
+    - `blt_transformer_layer_storage* layer_storage`: owned weight storage, `[num_layers]`.
+    - `blt_transformer_weights* layer_weights`: const-pointer views into `layer_storage`, `[num_layers]` — what is actually passed to the layer forward pass.
+    - `blt_tensor rope_cos_cache`: shared precomputed cosine RoPE cache of shape `[max_seq_len, head_dim/2]`.
+    - `blt_tensor rope_sin_cache`: shared precomputed sine RoPE cache of shape `[max_seq_len, head_dim/2]`.
+    - `size_t num_layers`, `embed_dim`, `hidden_dim`, `num_heads`, `head_dim`, `max_seq_len`: stack metadata.
+- `blt_transformer_stack_grad` struct
+  - Fields:
+    - `blt_transformer_layer_grad* layer_grads`: gradient storage for each layer, `[num_layers]`.
+- `blt_transformer_stack_init(blt_arena* arena, blt_transformer_stack* stack, const blt_transformer_stack_config* config)`
+  - Input: scratch arena, stack to initialize, and stack config.
+  - Output: allocates each layer's weight storage and precomputes the shared RoPE cache.
+  - Behavior: caller fills the weight tensors afterward, using the same contract as `blt_tensor_create`.
+- `blt_transformer_stack_grad_create(blt_arena* arena, const blt_transformer_stack* stack)`
+  - Input: arena for storage and the stack to mirror.
+  - Output: allocated, zero-initialized gradient struct matching the stack's shapes.
+- `blt_transformer_stack_call_config(const blt_transformer_stack* stack, size_t seq_len, blt_tensor* cos_view, blt_tensor* sin_view)`
+  - Input: stack, sequence length, and caller-owned RoPE views sized for `[seq_len, head_dim/2]`.
+  - Output: returns a per-call `blt_transformer_config` whose RoPE cache pointers are overwritten to that sequence-length view.
+  - Behavior: copies the shared template config and allows callers to attach custom masks (e.g., a block-causal document mask) on the returned `attn_config.mask_config`.
+- `blt_transformer_stack_forward(const blt_transformer_stack* stack, const blt_tensor* x, const blt_transformer_config* call_cfg, size_t seq_len, blt_tensor* out, blt_arena* arena)`
+  - Input: stack, input tensor `x`, per-call config, sequence length, output tensor `out`, and scratch arena.
+  - Output: writes stacked transformer activations into `out` without storing the intermediate cache.
+  - Behavior: applies the stack as a sequence of identical RMSNorm + SwiGLU transformer layers with RoPE on the input stream.
+- `blt_transformer_stack_forward_cached(const blt_transformer_stack* stack, const blt_tensor* x, const blt_transformer_config* call_cfg, size_t seq_len, blt_arena* arena, blt_tensor* out)`
+  - Input: stack, input, call config, sequence length, arena, and output tensor.
+  - Output: returns a per-call cache object and writes the stacked forward result into `out`.
+  - Behavior: the cache must be passed to `blt_transformer_stack_backward` to backpropagate through the same computation.
+- `blt_transformer_stack_backward(const blt_transformer_stack* stack, const blt_transformer_stack_cache* cache, const blt_transformer_config* call_cfg, size_t seq_len, const blt_tensor* grad_out, blt_transformer_stack_grad* grad, blt_tensor* grad_x, blt_arena* arena)`
+  - Input: stack, cached forward pass, call config, sequence length, output gradient, gradient accumulator, and scratch arena.
+  - Output: writes per-layer weight gradients into `grad` and input gradients into `grad_x`.
+  - Behavior: walks the cached stack in reverse layer order, propagating gradients through the shared transformer primitives in the same order they were computed during forward.
+
+### blt/models/global_transformer.h
+- `blt_global_transformer_config` struct
+  - Fields:
+    - `size_t embed_dim`: patch embedding width (`h_G`).
+    - `size_t num_layers`: number of global transformer blocks (`l_G`).
+    - `size_t hidden_dim`: FFN width for the global stack.
+    - `size_t num_heads`: number of attention heads.
+    - `float rope_theta`: RoPE base frequency.
+    - `size_t max_seq_len`: maximum number of patches supported by the shared RoPE cache.
+- `blt_global_transformer` struct
+  - Fields:
+    - `blt_global_transformer_config config`: parameter block for the model.
+    - `blt_transformer_stack stack`: shared stack of `num_layers` transformer blocks with RoPE.
+- `blt_global_transformer_grad` struct
+  - Fields:
+    - `blt_transformer_stack_grad* stack_grad`: per-layer gradient storage, `[num_layers]`.
+- `blt_global_transformer_create(blt_arena* arena, const blt_global_transformer_config* config)`
+  - Input: arena for storage and global-transformer config.
+  - Output: allocated model with zero-initialized weights and a shared RoPE cache sized to `max_seq_len`.
+  - Behavior: caller fills weight data afterward; the same shared RoPE cache is reused across all layers.
+- `blt_global_transformer_grad_create(blt_arena* arena, const blt_global_transformer* model)`
+  - Input: arena and the model to mirror.
+  - Output: allocates a gradient struct with the same shapes as the model.
+- `blt_global_transformer_forward(const blt_global_transformer* model, const blt_tensor* patch_in, const size_t* doc_boundaries, size_t num_docs, blt_tensor* patch_out, blt_arena* arena)`
+  - Input: model, input patch tensor `[num_patches, embed_dim]`, document boundary offsets `doc_boundaries` in patch indices, document count `num_docs`, output patch tensor `patch_out`, and scratch arena.
+  - Output: writes contextualized patch representations `[num_patches, embed_dim]`.
+  - Behavior: builds a block-causal patch mask (full causal at patch level, scoped by document boundaries) and runs the stack over the patch stream. This is the patch-level decoder-only transformer used after the local encoder.
+- `blt_global_transformer_backward(const blt_global_transformer* model, const blt_tensor* patch_in, const size_t* doc_boundaries, size_t num_docs, const blt_tensor* grad_patch_out, blt_tensor* grad_patch_in, blt_global_transformer_grad* grad, blt_arena* arena)`
+  - Input: model, patch inputs, document boundaries, output-gradient tensor, gradient accumulator, and scratch arena.
+  - Output: writes gradients for the input patches and each stack layer into `grad`.
+  - Behavior: recomputes the forward pass with per-layer intermediates cached, then backpropagates across layers in reverse order through the shared transformer stack.
+
+### blt/models/entropy_lm.h
 Assembly of already-implemented pieces (byte embedding, RoPE-enabled transformer stack, cross-entropy) into one callable "tiny causal byte LM": embedding → N transformer layers → LM head → shifted next-byte cross-entropy loss.
 - `blt_entropy_lm_config` struct
   - Fields:
@@ -327,23 +407,16 @@ Assembly of already-implemented pieces (byte embedding, RoPE-enabled transformer
     - `size_t num_heads`: attention heads; `embed_dim` must be divisible by `num_heads`.
     - `size_t max_seq_len`: upper bound used to size the shared RoPE cache.
     - `float rope_theta`: RoPE base (e.g. 500000.0f).
-- `blt_transformer_layer_storage` struct
-  - Fields: `blt_tensor norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w` — owned storage for one transformer layer's weights.
 - `blt_entropy_lm` struct
   - Fields:
     - `blt_entropy_lm_config config`
     - `blt_tensor embedding_weight`: `[256, embed_dim]`.
     - `blt_tensor lm_head_weight`: `[embed_dim, 256]`.
-    - `blt_tensor rope_cos_cache`, `rope_sin_cache`: `[max_seq_len, head_dim/2]`, precomputed once at model-init time.
-    - `blt_transformer_config layer_config`: single shared config for every layer (`norm_type = BLT_NORM_RMSNORM`, `activation_type = BLT_ACTIVATION_SWIGLU`, `use_rope = true`).
-    - `blt_transformer_layer_storage* layer_storage`: owned weight storage, `[num_layers]`.
-    - `blt_transformer_weights* layer_weights`: const-pointer views into `layer_storage`, `[num_layers]` — what's actually passed to `blt_transformer_forward`.
-- `blt_transformer_layer_grad` struct
-  - Fields: `blt_tensor norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w` — gradient counterpart of `blt_transformer_layer_storage`.
+    - `blt_transformer_stack stack`: shared stack of `num_layers` transformer blocks with RoPE.
 - `blt_entropy_lm_grad` struct
   - Fields:
     - `blt_tensor embedding_grad`: `[256, embed_dim]`.
-    - `blt_transformer_layer_grad* layer_grads`: `[num_layers]`.
+    - ` blt_transformer_stack_grad* stack_grad`: per-layer gradient storage, `[num_layers]`.
     - `blt_tensor lm_head_grad`: `[embed_dim, 256]`.
 - `blt_entropy_lm_create(blt_arena* arena, const blt_entropy_lm_config* config)`
   - Input: arena for storage and model config.
@@ -482,6 +555,49 @@ Assembly of already-implemented pieces (byte embedding, RoPE-enabled transformer
   - Output: Populates `grad` struct with parameter gradients.
   - Behavior: Recomputes forward passes with per-layer caching, then propagates gradients in reverse through cross-attention, byte transformer layers, patch pooling, n-gram tables, and byte embeddings.
 
+
+### blt/models/local_decoder.h
+- `blt_local_decoder_config` struct
+  - Fields:
+    - `size_t embed_dim`: Transformer hidden width (h_D).
+    - `size_t num_layers`: Number of decoder layers (l_D).
+    - `size_t hidden_dim`: Intermediate hidden width for FFN projections.
+    - `size_t num_heads`: Number of byte self-attention heads.
+    - `size_t cross_attn_heads`: Number of cross-attention heads.
+    - `size_t local_window`: Sliding window size (0 = full causal).
+    - `bool cross_attn_all_layers`: If `true`, cross-attention fires in every layer (decoder default paper finding; configurable).
+    - `float rope_theta`: Base frequency for Rotary Position Embeddings.
+    - `size_t max_seq_len`: Maximum sequence length used to size the shared RoPE cache.
+    - `size_t vocab_size`: Vocabulary size for the LM head (typically 256).
+- `blt_local_decoder_layer_storage` struct
+  - Fields: Cross-attention block weights (`cross_norm_weight`, `cross_weight_q`, `cross_weight_k`, `cross_weight_v`, `cross_weight_proj`) and byte-transformer block weights (`norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w`).
+- `blt_local_decoder` struct
+  - Fields:
+    - `blt_local_decoder_config config`: Decoder configuration parameters.
+    - `blt_tensor rope_cos_cache`, `rope_sin_cache`: Precomputed RoPE tables `[max_seq_len, head_dim/2]`.
+    - `blt_local_decoder_layer_storage* layers`: Array of per-layer storage blocks `[num_layers]`.
+    - `blt_tensor lm_head_weight`: Language-model head weights `[embed_dim, vocab_size]`.
+- `blt_local_decoder_layer_grad` struct
+  - Fields: Per-layer gradient storage mirroring `blt_local_decoder_layer_storage`.
+- `blt_local_decoder_grad` struct
+  - Fields:
+    - `blt_local_decoder_layer_grad* layer_grads`: Layer gradient structures `[num_layers]` (overwritten).
+    - `blt_tensor lm_head_grad`: Gradient for LM head weights.
+- `blt_local_decoder_create(arena, config)`
+  - Input: `arena` for allocations and `config` parameters.
+  - Output: Allocated `blt_local_decoder*` handle with zero-initialized weights and precomputed RoPE caches.
+  - Behavior: Allocates model storage and precomputes shared RoPE cache once for the entire decoder. Caller populates model weights afterward.
+- `blt_local_decoder_grad_create(arena, model)`
+  - Input: `arena` for storage and reference `model`.
+  - Output: Allocated, zero-initialized `blt_local_decoder_grad*` structure matching `model` shapes.
+  - Behavior: Prepares zero-initialized gradient structures for tracking backpropagation.
+- `blt_local_decoder_forward(model, byte_hidden_in, patch_in, patches, num_patches, bytes_in, doc_boundaries, num_docs, logits_out, loss_out, arena)`
+  - Input: `model`, `byte_hidden_in` `[seq_len, embed_dim]` (encoder byte outputs), `patch_in` `[num_patches, embed_dim]` (global transformer outputs), `patches` array, optional `bytes_in` targets `[seq_len]` (UINT8), `doc_boundaries`, `num_docs`, and scratch `arena`.
+  - Output: Writes token logits into `logits_out` `[seq_len, vocab_size]` and optional scalar loss into `loss_out`.
+  - Behavior: Runs cross-attention from patch representations into causal byte transformer layers, applies causal local self-attention (sliding window or full causal), and projects final byte hidden states through the LM head to produce logits and loss.
+- `blt_local_decoder_backward(model, byte_hidden_in, patch_in, patches, num_patches, bytes_in, doc_boundaries, num_docs, grad_byte_hidden_in, grad_patch_in, grad, arena)`
+  - Input: Same forward parameters plus destination gradients `grad_byte_hidden_in` `[seq_len, embed_dim]` (feeds back into local encoder), `grad_patch_in` `[num_patches, embed_dim]` (feeds back into global transformer), destination gradient handle `grad`, and scratch `arena`.
+  - Output: Populates `grad` struct with parameter gradients and writes upstream gradients into `grad_byte_hidden_in` and `grad_patch_in` when provided.
 
 ------------------------------------------------------------------------------------------------------------
 ## Core Implementations

@@ -5,6 +5,7 @@
 #include "blt/core/allocator.h"
 #include "blt/models/attention.h"
 #include "blt/models/transformer.h"
+#include "blt/models/transformer_stack.h"
 #include "blt/models/byte_embedding.h"
 #include "blt/models/cross_attention.h"
 #include "blt/ops/elementwise.h"
@@ -386,123 +387,27 @@ void blt_local_encoder_forward(const blt_local_encoder* model,
 // forward doesnt save intermediates -> so each layers forward is recomputed here with caching
 
 typedef struct {
-    blt_tensor normed1;      // rmsnorm(h_l, norm1_weight)        [seq_len, E]
-    blt_tensor h_mid;        // h_l + attn_out                    [seq_len, E]
-    blt_tensor normed2;      // rmsnorm(h_mid, norm2_weight)      [seq_len, E]
-    blt_tensor gate;         // normed2 @ ffn_gate_w              [seq_len, hidden]
-    blt_tensor up;           // normed2 @ ffn_up_w                [seq_len, hidden]
-    blt_tensor act;          // swiglu(gate, up)                  [seq_len, hidden]
     bool has_cross;
     blt_tensor p_in;         // P_l before this layer's cross-attn   [num_patches, E]
     blt_tensor normed_p;     // rmsnorm(p_in, cross_norm_weight)     [num_patches, E]
+    blt_transformer_layer_cache* byte_cache;  // recomputed byte transformer block, from blt_transformer_layer_forward_cached
 } layer_cache;
 
 
 
-//------------------------------------------------------------------------
-// Recomputes one byte transformer layers forward pass, caching intermediates.
-// pre-norm attention with residual, pre-norm SwiGLU FFN with residual
-//
-static void byte_layer_forward_cached(const blt_local_encoder* model, size_t layer,
-                                      const blt_tensor* h_in, const blt_transformer_config* layer_config,
-                                      blt_arena* arena, layer_cache* cache, blt_tensor* h_next) {
-    const blt_local_encoder_layer_storage* s = &model->layers[layer];
-    size_t seq_len = h_in->shape[0];
-    size_t E = model->config.embed_dim;
-    size_t hidden = model->config.hidden_dim;
-    size_t byte_shape[2] = { seq_len, E };
-    size_t hidden_shape[2] = { seq_len, hidden };
-
-    // pre-norm self-attention + residual
-    cache->normed1 = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-    blt_rmsnorm_forward(h_in, &s->norm1_weight, &cache->normed1);
-
-    blt_tensor attn_out = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-    blt_multihead_attention(&cache->normed1, &s->attn_qkv_w, &s->attn_proj_w,
-                            &attn_out, &layer_config->attn_config, arena);
-
-    cache->h_mid = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-    blt_add(h_in, &attn_out, &cache->h_mid);
-
-    // pre-norm SwiGLU FFN + residual
-    cache->normed2 = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-    blt_rmsnorm_forward(&cache->h_mid, &s->norm2_weight, &cache->normed2);
-
-    cache->gate = blt_tensor_create(arena, hidden_shape, 2, BLT_DTYPE_FP32);
-    blt_matmul(&cache->normed2, &s->ffn_gate_w, &cache->gate);
-
-    cache->up = blt_tensor_create(arena, hidden_shape, 2, BLT_DTYPE_FP32);
-    blt_matmul(&cache->normed2, &s->ffn_up_w, &cache->up);
-
-    cache->act = blt_tensor_create(arena, hidden_shape, 2, BLT_DTYPE_FP32);
-    blt_swiglu_forward(&cache->gate, &cache->up, &cache->act);
-
-    blt_tensor ffn_out = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-    blt_matmul(&cache->act, &s->ffn_down_w, &ffn_out);
-
-    *h_next = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-    blt_add(&cache->h_mid, &ffn_out, h_next);
+// Builds the blt_transformer_layer_grad view blt_transformer_layer_backward
+// needs from this layers blt_local_encoder_layer_grad
+static blt_transformer_layer_grad byte_layer_grad_view(blt_local_encoder_layer_grad* lg) {
+    blt_transformer_layer_grad g;
+    g.norm1_weight = lg->norm1_weight;
+    g.attn_qkv_w   = lg->attn_qkv_w;
+    g.attn_proj_w  = lg->attn_proj_w;
+    g.norm2_weight = lg->norm2_weight;
+    g.ffn_up_w     = lg->ffn_up_w;
+    g.ffn_gate_w   = lg->ffn_gate_w;
+    g.ffn_down_w   = lg->ffn_down_w;
+    return g;
 }
-
-
-//------------------------------------------------------------------------
-// Backward of byte_layer_forward_cached
-// grad_h_next: dL/d(h_{l+1}) in. Returns dL/d(h_l). Weight grads overwritten into lg
-static blt_tensor byte_layer_backward(const blt_local_encoder* model, size_t layer,
-                                      const blt_tensor* h_in, const layer_cache* cache,
-                                      const blt_transformer_config* layer_config,
-                                      const blt_tensor* grad_h_next,
-                                      blt_local_encoder_layer_grad* lg, blt_arena* arena) {
-    const blt_local_encoder_layer_storage* s = &model->layers[layer];
-    size_t seq_len = h_in->shape[0];
-    size_t E = model->config.embed_dim;
-    size_t hidden = model->config.hidden_dim;
-    size_t byte_shape[2] = { seq_len, E };
-    size_t hidden_shape[2] = { seq_len, hidden };
-
-    // h_next = h_mid + ffn_out  =>  ffn_out = act @ ffn_down_w
-    blt_tensor grad_act = blt_tensor_create(arena, hidden_shape, 2, BLT_DTYPE_FP32);
-    blt_matmul_backward(&cache->act, &s->ffn_down_w, grad_h_next, &grad_act, &lg->ffn_down_w);
-
-    // act = swiglu(gate, up)
-    blt_tensor grad_gate = blt_tensor_create(arena, hidden_shape, 2, BLT_DTYPE_FP32);
-    blt_tensor grad_up = blt_tensor_create(arena, hidden_shape, 2, BLT_DTYPE_FP32);
-    blt_swiglu_backward(&grad_act, &cache->gate, &cache->up, &grad_gate, &grad_up);
-
-    // gate = normed2 @ ffn_gate_w
-    // up = normed2 @ ffn_up_w
-    blt_tensor grad_normed2_a = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-    blt_tensor grad_normed2_b = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-    blt_matmul_backward(&cache->normed2, &s->ffn_gate_w, &grad_gate, &grad_normed2_a, &lg->ffn_gate_w);
-    blt_matmul_backward(&cache->normed2, &s->ffn_up_w, &grad_up, &grad_normed2_b, &lg->ffn_up_w);
-    blt_tensor grad_normed2 = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-    blt_add(&grad_normed2_a, &grad_normed2_b, &grad_normed2);
-
-    // normed2 = rmsnorm(h_mid)
-    blt_tensor grad_h_mid_norm = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-    blt_rmsnorm_backward(&grad_normed2, &cache->h_mid, &s->norm2_weight, &grad_h_mid_norm, &lg->norm2_weight);
-
-    // h_mid = h_in + attn_out  =>  residual split
-    blt_tensor grad_h_mid = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-    blt_add(grad_h_next, &grad_h_mid_norm, &grad_h_mid);
-
-    // attn_out = multihead_attention(normed1)
-    blt_tensor grad_normed1 = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-    blt_multihead_attention_backward(&cache->normed1, &s->attn_qkv_w, &s->attn_proj_w,
-                                     &grad_h_mid, &grad_normed1,
-                                     &lg->attn_qkv_w, &lg->attn_proj_w,
-                                     &layer_config->attn_config, arena);
-
-    // normed1 = rmsnorm(h_in)
-    blt_tensor grad_h_in_norm = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-    blt_rmsnorm_backward(&grad_normed1, h_in, &s->norm1_weight, &grad_h_in_norm, &lg->norm1_weight);
-
-    // h_in receives residual plus attention
-    blt_tensor grad_h_in = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-    blt_add(&grad_h_mid, &grad_h_in_norm, &grad_h_in);
-    return grad_h_in;
-}
-
 
 
 void blt_local_encoder_backward(const blt_local_encoder* model,
@@ -560,11 +465,13 @@ void blt_local_encoder_backward(const blt_local_encoder* model,
     blt_tensor p = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
     blt_patch_pool_forward(&h[0], patches, num_patches, config->pool_type, &p);
 
-    for (size_t l = 0; l < L; ++l) {
+        for (size_t l = 0; l < L; ++l) {
         const blt_local_encoder_layer_storage* s = &model->layers[l];
         layer_cache* c = &caches[l];
 
-        byte_layer_forward_cached(model, l, &h[l], &layer_config, arena, c, &h[l + 1]);
+        blt_transformer_weights w = byte_layer_weights_view(s);
+        c->byte_cache = blt_transformer_layer_forward_cached(
+            &h[l], &w, &layer_config, arena, seq_len, E, config->hidden_dim, &h[l + 1]);
 
         if (cross_attn_fires(config, l)) {
             c->has_cross = true;
@@ -599,7 +506,7 @@ void blt_local_encoder_backward(const blt_local_encoder* model,
     // -----------------------------------------------------------------
     // STEP 3: reverse layer loop
     // 
-    for (size_t li = L; li-- > 0;) {
+        for (size_t li = L; li-- > 0;) {
         const blt_local_encoder_layer_storage* s = &model->layers[li];
         blt_local_encoder_layer_grad* lg = &grad->layer_grads[li];
         const layer_cache* c = &caches[li];
@@ -635,7 +542,12 @@ void blt_local_encoder_backward(const blt_local_encoder* model,
         }
 
         // byte transformer layer backward: dh becomes dL/d(h[li])
-        dh = byte_layer_backward(model, li, &h[li], c, &layer_config, &dh, lg, arena);
+        blt_transformer_weights w = byte_layer_weights_view(s);
+        blt_transformer_layer_grad lgv = byte_layer_grad_view(lg);
+        blt_tensor dh_next;
+        blt_transformer_layer_backward(c->byte_cache, &w, &layer_config, arena,
+                                        seq_len, E, config->hidden_dim, &dh, &lgv, &dh_next);
+        dh = dh_next;
     }
 
     // -----------------------------------------------------------------

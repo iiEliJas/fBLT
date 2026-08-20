@@ -28,6 +28,9 @@ int run_elm_model_tests(void);
 int run_hash_ngram_model_tests(void);
 int run_lencoder_mask_model_test(void);
 int run_local_encoder_smoke_test(void);
+int run_global_transformer_causal_mask(void);
+int run_global_transformer_doc_boundary(void);
+int run_local_decoder_cross_mask(void);
 
 int run_matmul_parity_test(void);
 int run_softmax_parity_test(void);
@@ -36,4 +39,8 @@ int run_patcher_parity_tests(void);
 int run_elm_overfit_tests(void);
 int run_lencoder_overfit_test(void);
 int run_local_encoder_parity(void);
+int run_global_transformer_parity(void);
+int run_global_transformer_overfit(void);
+int run_local_decoder_parity(void);
+int run_local_decoder_overfit(void);
 #endif // BLT_TEST_SUITE_H

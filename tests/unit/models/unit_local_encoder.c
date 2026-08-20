@@ -215,10 +215,10 @@ int run_lencoder_overfit_test(void) {
     size_t pred_shape[2] = {seq_len, 1};
 
     float first_loss = -1.0f, last_loss = -1.0f;
-    const int STEPS = 30;
+    const int num_steps = 30;
     const float lr = 0.05f;
 
-    for (int step = 0; step < STEPS; step++) {
+    for (int step = 0; step < num_steps; step++) {
         blt_arena_reset(compute_arena);
 
         blt_tensor patch_out = blt_tensor_create(compute_arena, patch_shape, 2, BLT_DTYPE_FP32);

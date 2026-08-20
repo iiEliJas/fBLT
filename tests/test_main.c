@@ -49,8 +49,11 @@ int main(void) {
         {"hash ngram", run_hash_ngram_model_tests},
         {"local encoder mask", run_lencoder_mask_model_test},
         {"local encoder smoke", run_local_encoder_smoke_test},
+        {"global transformer causal mask", run_global_transformer_causal_mask},
+        {"global transformer doc boundary", run_global_transformer_doc_boundary},
+        {"local decoder cross mask", run_local_decoder_cross_mask},
     };
-
+    
     const test_case parity_tests[] = {
         {"matmul parity", run_matmul_parity_test},
         {"softmax parity", run_softmax_parity_test},
@@ -59,7 +62,13 @@ int main(void) {
         {"entropy LM overfit", run_elm_overfit_tests},
         {"local encoder overfit", run_lencoder_overfit_test},
         {"local encoder parity", run_local_encoder_parity},
+        {"global transformer parity", run_global_transformer_parity},
+        {"global transformer overfit", run_global_transformer_overfit}, 
+        {"local decoder parity", run_local_decoder_parity},
+        {"local decoder overfit", run_local_decoder_overfit},
+        
     };
+
 
     int passed = 0;
 
