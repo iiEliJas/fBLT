@@ -89,11 +89,12 @@ configs/                Model configs (JSON)
 - Attention (causal, cross-attention, custom masks)
 - Full test harness (unit, integration, golden files)
 - Hash n-gram embeddings
-
-**Todo:**
 - Local encoder + decoder
 - Patch transformer (global model)
 - End-to-end forward pass
+
+**Todo:**
+- FLOP counting and profiling
 - Config file plumbing
 - CUDA kernels
 - Training loop

@@ -456,7 +456,7 @@ int run_blt_model_overfit(void) {
         }
     }
 
-    printf("[run_blt_model_overfit_test] final avg loss = %f\n", (double)avg_loss);
+    printf("    final avg loss = %f\n", (double)avg_loss);
     TEST_ASSERT(avg_loss < loss_threshold);
 
     blt_arena_destroy(scratch_arena);
@@ -498,7 +498,7 @@ int run_blt_model_generate_sanity(void) {
     const char* snippets[] = {
         "int x=1;\n",
         "return 0;\n",
-        "for(;;){}\n",
+        "for(;i<x;i++){}\n",
     };
 
     const size_t num_snippets = sizeof(snippets) / sizeof(snippets[0]);
@@ -561,8 +561,7 @@ int run_blt_model_generate_sanity(void) {
     const size_t num_prompts = sizeof(prompts) / sizeof(prompts[0]);
     const size_t max_new_bytes = 16;
 
-    printf("[run_blt_model_generate_sanity_test] eyeball-check generations "
-           "(model is only lightly warmed up, expect noisy output):\n");
+    printf("    check generations:\n");
 
     for (size_t p = 0; p < num_prompts; p++) {
         blt_arena_reset(scratch_arena);
@@ -575,7 +574,7 @@ int run_blt_model_generate_sanity(void) {
         blt_generate_greedy(model, entropy_model, &patcher_cfg,
             (const uint8_t*)prompts[p], prompt_len, max_new_bytes, output, scratch_arena);
 
-        printf("  prompt=\"%s\" -> \"", prompts[p]);
+        printf("        prompt=\"%s\" -> \"", prompts[p]);
         for (size_t i = 0; i < out_len; i++) {
             uint8_t c = output[i];
             putchar(isprint(c) ? (int)c : '.');

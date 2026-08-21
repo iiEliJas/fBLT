@@ -34,7 +34,7 @@ blt_model_grad* blt_model_grad_create(blt_arena* arena, const blt_model* model);
 void blt_model_forward(
     const blt_model* model,
     const blt_tensor* bytes_in,          // [seq_len] UINT8
-    const blt_patch_info* patches,       // from blt_segment_patches (Phase 2)
+    const blt_patch_info* patches,
     size_t num_patches,
     const size_t* doc_boundaries,        // byte-indexed
     size_t num_docs,

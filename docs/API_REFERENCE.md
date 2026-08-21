@@ -611,6 +611,41 @@ Assembly of already-implemented pieces (byte embedding, RoPE-enabled transformer
   - Input: Same forward parameters plus destination gradients `grad_byte_hidden_in` `[seq_len, embed_dim]` (feeds back into local encoder), `grad_patch_in` `[num_patches, embed_dim]` (feeds back into global transformer), destination gradient handle `grad`, and scratch `arena`.
   - Output: Populates `grad` struct with parameter gradients and writes upstream gradients into `grad_byte_hidden_in` and `grad_patch_in` when provided.
 
+
+### blt/models/model.h
+- `blt_model_config` struct
+  - Fields:
+    - `blt_local_encoder_config encoder_config`: configuration for the byte-level local encoder.
+    - `blt_global_transformer_config global_config`: configuration for the patch-level global transformer.
+    - `blt_local_decoder_config decoder_config`: configuration for the local decoder head.
+- `blt_model` struct
+  - Fields:
+    - `blt_model_config config`: model configuration snapshot used at creation time.
+    - `blt_local_encoder* encoder`: pointer to the local byte encoder submodule.
+    - `blt_global_transformer* global`: pointer to the global patch transformer submodule.
+    - `blt_local_decoder* decoder`: pointer to the decoder submodule that emits logits and loss.
+- `blt_model_grad` struct
+  - Fields:
+    - `blt_local_encoder_grad* encoder_grad`: gradients for the encoder.
+    - `blt_global_transformer_grad* global_grad`: gradients for the global transformer.
+    - `blt_local_decoder_grad* decoder_grad`: gradients for the decoder.
+- `blt_model_create(arena, config)`
+  - Input: arena for storage and model configuration that defines the encoder, global transformer, and decoder widths.
+  - Output: allocates and initializes a full model object. The encoder/global/decoder `embed_dim` values must match.
+  - Behavior: constructs the local encoder, global transformer, and local decoder into one composed model instance.
+- `blt_model_grad_create(arena, model)`
+  - Input: arena for storage and a fully initialized model.
+  - Output: allocates a gradient container with one gradient struct per submodule.
+  - Behavior: creates gradient holders for the encoder, global transformer, and decoder so backward propagation can accumulate updates.
+- `blt_model_forward(model, bytes_in, patches, num_patches, doc_boundaries, num_docs, logits_out, loss_out, arena)`
+  - Input: model pointer, input byte tensor `[seq_len]` in `UINT8`, patch metadata array, number of patches, document boundary indices, number of documents, output logits tensor, scalar loss tensor, and scratch arena.
+  - Output: writes logits `[seq_len, vocab_size]` and scalar loss into `logits_out` and `loss_out`.
+  - Behavior: runs the encoder on the raw bytes and patch spans, remaps document boundaries from byte offsets to patch indices, runs the global transformer over patch features, and finally decodes to token logits/loss. `loss_out` is a 0D or scalar tensor carrying the sequence loss.
+- `blt_model_backward(model, bytes_in, patches, num_patches, doc_boundaries, num_docs, grad, arena)`
+  - Input: model, byte input, patch metadata, doc boundaries, gradient accumulator object, and scratch arena.
+  - Output: recomputes the forward intermediates and backpropagates through the encoder, global transformer, and decoder, accumulating gradients into `grad`.
+  - Behavior: mirrors the forward pass in reverse, reusing the same byte-to-patch remapping and the submodule backward routines. The gradient object must be allocated with `blt_model_grad_create`.
+
 ------------------------------------------------------------------------------------------------------------
 ## Core Implementations
 

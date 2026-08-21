@@ -10,7 +10,7 @@
 
 // Repeatedly re-runs the entropy model + patcher + blt_model_forward 
 // over the growing byte sequence
-// (no KV cache) and greedily appends argmax(logits_out[-1]) each step.
+// and greedily appends argmax(logits_out[-1]) each step.
 void blt_generate_greedy(
     const blt_model* model,
     const blt_entropy_lm* entropy_model,
