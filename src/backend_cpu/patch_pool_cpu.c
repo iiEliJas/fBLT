@@ -126,3 +126,18 @@ void blt_patch_build_group_ids(const blt_patch_info* patches, size_t num_patches
     BLT_REQUIRE(pos == seq_len,
                 "patch_group_ids: patches do not cover [0, seq_len) exactly");
 }
+
+
+
+void blt_patch_expand_group_ids(const size_t* group_ids_in, size_t n, size_t k,
+                                size_t* group_ids_out) {
+    BLT_REQUIRE(group_ids_in != NULL || n == 0, "patch_expand_group_ids: NULL group_ids_in");
+    BLT_REQUIRE(group_ids_out != NULL || n * k == 0, "patch_expand_group_ids: NULL group_ids_out");
+    BLT_REQUIRE(k >= 1, "patch_expand_group_ids: k must be >= 1");
+
+    for (size_t i = 0; i < n; i++) {
+        const size_t id = group_ids_in[i];
+        for (size_t s = 0; s < k; s++)
+            group_ids_out[i * k + s] = id;
+    }
+}

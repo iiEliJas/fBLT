@@ -28,9 +28,11 @@ int run_elm_model_tests(void);
 int run_hash_ngram_model_tests(void);
 int run_lencoder_mask_model_test(void);
 int run_local_encoder_smoke_test(void);
+int run_local_encoder_k_split(void);
 int run_global_transformer_causal_mask(void);
 int run_global_transformer_doc_boundary(void);
 int run_local_decoder_cross_mask(void);
+int run_local_decoder_k_split(void);
 
 int run_matmul_parity_test(void);
 int run_softmax_parity_test(void);

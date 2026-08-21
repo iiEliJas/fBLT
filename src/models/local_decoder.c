@@ -73,8 +73,10 @@ static void validate_call(const blt_local_decoder* model, const blt_tensor* byte
     BLT_REQUIRE(seq_len >= 2 && seq_len <= model->config.max_seq_len,
         "blt_local_decoder: seq_len must be in [2, max_seq_len]");
 
-    blt_check_nd_fp32(patch_in, 2, (const size_t[]){num_patches, E},
-        "blt_local_decoder: patch_in must be [num_patches, embed_dim] FP32");
+    // patch_in is patch_dim-wide
+    size_t patch_dim = (model->config.patch_dim == 0) ? E : model->config.patch_dim;
+    blt_check_nd_fp32(patch_in, 2, (const size_t[]){num_patches, patch_dim},
+        "blt_local_decoder: patch_in must be [num_patches, patch_dim] FP32");
 
     BLT_REQUIRE(bytes_in->ndim == 1 && bytes_in->dtype == BLT_DTYPE_UINT8 && bytes_in->shape[0] == seq_len,
         "blt_local_decoder: bytes_in must be 1D UINT8 [seq_len] matching byte_hidden_in");
@@ -90,10 +92,12 @@ static void validate_call(const blt_local_decoder* model, const blt_tensor* byte
 // for both forward and backward
 
 typedef struct {
-    blt_mask_config local_mask;   // byte self-attention inside the decoder's transformer block: causal, window w_D
-    blt_mask_config cross_mask;   // byte->patch cross-attention: block-diagonal, roles swapped from the encoder
+    blt_mask_config local_mask;
+    blt_mask_config cross_mask;
     blt_tensor rope_cos_view;
     blt_tensor rope_sin_view;
+    size_t k;           // patch_dim / embed_dim split factor (1 = no split)
+    size_t patch_dim;   // effective patch width (== embed_dim when config->patch_dim == 0)
 } ld_context;
 
 
@@ -102,18 +106,26 @@ static ld_context make_context(const blt_local_decoder* model, size_t seq_len,
                                const blt_patch_info* patches, size_t num_patches,
                                const size_t* doc_boundaries, size_t num_docs,
                                blt_arena* arena) {
-    // blt_patch_build_group_ids already produces exactly the two arrays the
-    // role-swapped decoder cross-mask needs: query_group_ids_out[j] = j (trivial
-    // patch identity) and kv_group_ids_out[i] = the patch id containing byte i.
-    // We just wire them to the opposite mask fields from the encoder.
+    size_t E = model->config.embed_dim;
+    size_t patch_dim = model->config.patch_dim ? model->config.patch_dim : E;
+    size_t k = patch_dim / E;
+
+    // patch_identity_ids[j] = j (trivial), byte_patch_ids[i] = patch id of byte i
     size_t* patch_identity_ids = (size_t*)blt_arena_alloc(arena, num_patches * sizeof(size_t), 64);
-    size_t* byte_patch_ids     = (size_t*)blt_arena_alloc(arena, seq_len * sizeof(size_t), 64);
+    size_t* byte_patch_ids = (size_t*)blt_arena_alloc(arena, seq_len * sizeof(size_t), 64);
     BLT_REQUIRE(patch_identity_ids && byte_patch_ids, "blt_local_decoder: failed to allocate group ids");
     blt_patch_build_group_ids(patches, num_patches, seq_len, patch_identity_ids, byte_patch_ids);
+    
+    // expand the kv (patch) side group ids by k -- each patch's k sub-tokens share its group id
+    size_t* expanded_kv_group_ids = (size_t*)blt_arena_alloc(arena, num_patches * k * sizeof(size_t), 64);
+    BLT_REQUIRE(expanded_kv_group_ids, "blt_local_decoder: failed to allocate expanded group ids");
+    blt_patch_expand_group_ids(patch_identity_ids, num_patches, k, expanded_kv_group_ids);
 
     ld_context ctx = {0};
+    ctx.k = k;
+    ctx.patch_dim = patch_dim;
 
-    // Byte self-attention (inside the byte transformer block): causal, window w_D
+    // Byte self-attention: causal, window w_D
     ctx.local_mask.seq_len_q = seq_len;
     ctx.local_mask.seq_len_kv = seq_len;
     ctx.local_mask.sliding_window = model->config.local_window;
@@ -121,15 +133,15 @@ static ld_context make_context(const blt_local_decoder* model, size_t seq_len,
     ctx.local_mask.num_docs = num_docs;
     ctx.local_mask.is_causal = true;
 
-    // Cross mask: bytes are now queries, patches are now keys/values
+    // Cross mask: bytes are queries, patches are kv, split into k sub-tokens each
     ctx.cross_mask.seq_len_q = seq_len;
-    ctx.cross_mask.seq_len_kv = num_patches;
-    ctx.cross_mask.query_group_ids = byte_patch_ids;      // each bytes own patch id
-    ctx.cross_mask.kv_group_ids = patch_identity_ids;     // patch j group id = j
+    ctx.cross_mask.seq_len_kv = num_patches * k;
+    ctx.cross_mask.query_group_ids = byte_patch_ids;         // each bytes own patch id
+    ctx.cross_mask.kv_group_ids = expanded_kv_group_ids;     // patch j k sub-tokens all carry group id j
     ctx.cross_mask.bidirectional_within_group = true;
     ctx.cross_mask.is_causal = false;
 
-    size_t head_dim = model->config.embed_dim / model->config.num_heads;
+    size_t head_dim = E / model->config.num_heads;
     size_t half = head_dim / 2;
     blt_tensor_view_2d(&ctx.rope_cos_view, model->rope_cos_cache.data, seq_len, half, model->rope_cos_cache.backend);
     blt_tensor_view_2d(&ctx.rope_sin_view, model->rope_sin_cache.data, seq_len, half, model->rope_sin_cache.backend);
@@ -159,8 +171,10 @@ static blt_transformer_config make_byte_layer_config(const blt_local_decoder_con
 
 static blt_cross_attention_config make_cross_attn_config(const blt_local_decoder_config* config, const ld_context* ctx) {
     blt_cross_attention_config c = {0};
-    c.embed_dim = config->embed_dim;
-    c.num_heads = config->cross_attn_heads;   // head_dim inferred (0)
+    c.embed_dim = config->embed_dim;          // local width h_D
+    c.patch_dim = config->patch_dim;          // 0 = no split, matches ctx->k == 1
+    c.split_mode = BLT_CROSS_ATTN_SPLIT_KV;   // decoder splits the kv (patch) side
+    c.num_heads = config->cross_attn_heads;
     c.mask_config = &ctx->cross_mask;
     return c;
 }
@@ -186,6 +200,8 @@ blt_local_decoder* blt_local_decoder_create(blt_arena* arena, const blt_local_de
         "blt_local_decoder_create: embed_dim must be divisible by cross_attn_heads");
     BLT_REQUIRE(config->rope_theta > 0.0f, "blt_local_decoder_create: rope_theta must be positive");
     BLT_REQUIRE(config->vocab_size > 0, "blt_local_decoder_create: vocab_size must be positive");
+
+    BLT_REQUIRE(config->patch_dim % config->embed_dim == 0, "blt_local_decoder_create: patch_dim must be divisible by embed_dim");
 
     blt_local_decoder* m = (blt_local_decoder*)blt_arena_alloc(arena, sizeof(blt_local_decoder), sizeof(void*));
     BLT_REQUIRE(m != NULL, "blt_local_decoder_create: failed to allocate model");
@@ -315,10 +331,37 @@ void blt_local_decoder_forward(const blt_local_decoder* model,
     size_t V = config->vocab_size;
     blt_check_nd_fp32(logits_out, 2, (const size_t[]){seq_len, V},
         "blt_local_decoder_forward: logits_out must be [seq_len, vocab_size] FP32");
-
+    
+    // K split setup
+    // patch_dim == 0 is no split (k = 1)
+    size_t patch_dim = (config->patch_dim == 0) ? E : config->patch_dim;
+    BLT_REQUIRE(patch_dim % E == 0,
+        "blt_local_decoder_forward: patch_dim must be a multiple of embed_dim");
+    size_t k = patch_dim / E;
+    BLT_REQUIRE(patch_in->shape[1] == patch_dim,
+        "blt_local_decoder_forward: patch_in must be [num_patches, patch_dim] FP32");
+    
+    
     ld_context ctx = make_context(model, seq_len, patches, num_patches, doc_boundaries, num_docs, arena);
     blt_transformer_config layer_config = make_byte_layer_config(config, &ctx);
     blt_cross_attention_config cross_config = make_cross_attn_config(config, &ctx);
+    cross_config.embed_dim = E;
+    cross_config.patch_dim = patch_dim;
+    cross_config.split_mode = (k == 1) ? BLT_CROSS_ATTN_NO_SPLIT : BLT_CROSS_ATTN_SPLIT_KV;
+
+    // kv side split
+    blt_mask_config split_mask_cfg;
+    if (k > 1) {
+        split_mask_cfg = *cross_config.mask_config;   // mask cfg
+        split_mask_cfg.seq_len_kv = num_patches * k;
+        split_mask_cfg.kv_group_ids = ctx.cross_mask.kv_group_ids;
+        cross_config.mask_config = &split_mask_cfg;    // query side not changed
+    }
+
+
+    // Reinterprets patch_in [num_patches, patch_dim] as [num_patches*k, E]
+    blt_tensor patch_in_split;
+    blt_tensor_view_2d(&patch_in_split, patch_in->data, num_patches * k, E, patch_in->backend);
 
     size_t byte_shape[2] = { seq_len, E };
 
@@ -328,7 +371,7 @@ void blt_local_decoder_forward(const blt_local_decoder* model,
     blt_tensor d = *byte_hidden_in;
 
     // -----------------------------------------------------------------
-    // STEP 2: layer loop (cross-attn first, then byte transformer block)
+    // STEP 2: layer loop: cross-attn, byte transformer block
     //
     for (size_t l = 0; l < config->num_layers; ++l) {
         const blt_local_decoder_layer_storage* s = &model->layers[l];
@@ -340,7 +383,8 @@ void blt_local_decoder_forward(const blt_local_decoder* model,
 
             blt_cross_attention_weights xw = cross_attn_weights_view(s);
             blt_tensor cross_out = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-            blt_cross_attention_forward(&normed_d, patch_in, &xw, &cross_out, &cross_config, arena);
+            // query side never split so output stays [seq_len, E]
+            blt_cross_attention_forward(&normed_d, &patch_in_split, &xw, &cross_out, &cross_config, arena);
 
             b = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
             blt_add(&d, &cross_out, &b);
@@ -429,21 +473,41 @@ void blt_local_decoder_backward(const blt_local_decoder* model,
     const size_t E = config->embed_dim;
     const size_t V = config->vocab_size;
     const size_t L = config->num_layers;
+    
+    // K split setup
+    size_t patch_dim = (config->patch_dim == 0) ? E : config->patch_dim;
+    BLT_REQUIRE(patch_dim % E == 0,
+        "blt_local_decoder_backward: patch_dim must be a multiple of embed_dim");
+    size_t k = patch_dim / E;
 
     blt_check_nd_fp32(grad_byte_hidden_in, 2, (const size_t[]){seq_len, E},
         "blt_local_decoder_backward: grad_byte_hidden_in must be [seq_len, embed_dim] FP32");
-    blt_check_nd_fp32(grad_patch_in, 2, (const size_t[]){num_patches, E},
-        "blt_local_decoder_backward: grad_patch_in must be [num_patches, embed_dim] FP32");
+    blt_check_nd_fp32(grad_patch_in, 2, (const size_t[]){num_patches, patch_dim},
+        "blt_local_decoder_backward: grad_patch_in must be [num_patches, patch_dim] FP32");
     blt_check_nd_fp32(&grad->lm_head_grad, 2, (const size_t[]){E, V},
         "blt_local_decoder_backward: lm_head_grad must be [embed_dim, vocab_size] FP32");
 
     ld_context ctx = make_context(model, seq_len, patches, num_patches, doc_boundaries, num_docs, arena);
     blt_transformer_config layer_config = make_byte_layer_config(config, &ctx);
     blt_cross_attention_config cross_config = make_cross_attn_config(config, &ctx);
+    cross_config.embed_dim = E;
+    cross_config.patch_dim = patch_dim;
+    cross_config.split_mode = (k == 1) ? BLT_CROSS_ATTN_NO_SPLIT : BLT_CROSS_ATTN_SPLIT_KV;
+        
+    blt_mask_config split_mask_cfg;
+    if (k > 1) {
+        split_mask_cfg = *cross_config.mask_config;
+        split_mask_cfg.seq_len_kv = num_patches * k;
+        split_mask_cfg.kv_group_ids = ctx.cross_mask.kv_group_ids;
+        cross_config.mask_config = &split_mask_cfg;
+    }
 
-    size_t byte_shape[2] = { seq_len, E };
-    size_t patch_shape[2] = { num_patches, E };
-    size_t logits_shape[2] = { seq_len, V };
+    blt_tensor patch_in_split;
+    blt_tensor_view_2d(&patch_in_split, patch_in->data, num_patches * k, E, patch_in->backend);
+
+    size_t byte_shape[2] = {seq_len, E};
+    size_t logits_shape[2] = {seq_len, V};
+
 
     // -----------------------------------------------------------------
     // STEP 1: recompute forward, caching per-layer intermediates
@@ -457,7 +521,7 @@ void blt_local_decoder_backward(const blt_local_decoder* model,
 
     d[0] = *byte_hidden_in;
 
-        for (size_t l = 0; l < L; ++l) {
+    for (size_t l = 0; l < L; ++l) {
         const blt_local_decoder_layer_storage* s = &model->layers[l];
         dec_layer_cache* c = &caches[l];
         c->d_in = d[l];
@@ -471,7 +535,7 @@ void blt_local_decoder_backward(const blt_local_decoder* model,
 
             blt_cross_attention_weights xw = cross_attn_weights_view(s);
             blt_tensor cross_out = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-            blt_cross_attention_forward(&c->normed_d, patch_in, &xw, &cross_out, &cross_config, arena);
+            blt_cross_attention_forward(&c->normed_d, &patch_in_split, &xw, &cross_out, &cross_config, arena);
 
             b = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
             blt_add(&d[l], &cross_out, &b);
@@ -510,7 +574,7 @@ void blt_local_decoder_backward(const blt_local_decoder* model,
     blt_tensor grad_logits_view = blt_tensor_create(arena, grad_logits_view_shape, 2, BLT_DTYPE_FP32);
     blt_cross_entropy_backward(&logits_view, &targets_view, &grad_logits_view);
 
-    blt_tensor grad_logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);   // zero-initialized
+    blt_tensor grad_logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);   // zero-init
     memcpy(grad_logits.data, grad_logits_view.data, (seq_len - 1) * V * sizeof(float));
 
     // logits = d[L] @ lm_head_weight
@@ -522,9 +586,9 @@ void blt_local_decoder_backward(const blt_local_decoder* model,
     //   dh - running dL/d(d[l+1]), starts at dL/d(d[L])
     //   dP - running dL/d(patch_in), summed across every firing layer
     //
-    blt_tensor dP = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);   // zero-initialized
+    blt_tensor dP_split = blt_tensor_create(arena, (size_t[]){num_patches * k, E}, 2, BLT_DTYPE_FP32);   // zero-init
 
-        for (size_t li = L; li-- > 0;) {
+    for (size_t li = L; li-- > 0;) {
         const blt_local_decoder_layer_storage* s = &model->layers[li];
         blt_local_decoder_layer_grad* lg = &grad->layer_grads[li];
         const dec_layer_cache* c = &caches[li];
@@ -534,7 +598,7 @@ void blt_local_decoder_backward(const blt_local_decoder* model,
         blt_transformer_layer_grad lgv = byte_layer_grad_view(lg);
         blt_tensor grad_b;
         blt_transformer_layer_backward(c->byte_cache, &w, &layer_config, arena,
-                                        seq_len, E, config->hidden_dim, &dh, &lgv, &grad_b);
+                                    seq_len, E, config->hidden_dim, &dh, &lgv, &grad_b);
 
         if (c->has_cross) {
             // b = d_in + cross_out  =>  residual: d(d_in) += grad_b, d(cross_out) = grad_b
@@ -546,16 +610,16 @@ void blt_local_decoder_backward(const blt_local_decoder* model,
             xg.grad_weight_proj = lg->cross_weight_proj;
 
             blt_tensor grad_normed_d = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-            blt_tensor grad_kv = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
-            blt_cross_attention_backward(&c->normed_d, patch_in, &xw, &grad_b,
-                                         &grad_normed_d, &grad_kv, &xg, &cross_config, arena);
+            blt_tensor grad_kv_split = blt_tensor_create(arena, (size_t[]){num_patches * k, E}, 2, BLT_DTYPE_FP32);
+            blt_cross_attention_backward(&c->normed_d, &patch_in_split, &xw, &grad_b,
+                                         &grad_normed_d, &grad_kv_split, &xg, &cross_config, arena);
 
-            // patch_in feeds every firing layer's cross-attn, so its gradient accumulates
-            blt_tensor dP_new = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
-            blt_add(&dP, &grad_kv, &dP_new);
-            dP = dP_new;
+            // patch_in feeds every firing layer's cross-attn, so its
+            // gradient accumulates across layers -- still in split form.
+            blt_tensor dP_split_new = blt_tensor_create(arena, (size_t[]){num_patches * k, E}, 2, BLT_DTYPE_FP32);
+            blt_add(&dP_split, &grad_kv_split, &dP_split_new);
+            dP_split = dP_split_new;
 
-            // normed_d = rmsnorm(d_in, cross_norm_weight)
             blt_tensor grad_d_in_norm = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
             blt_rmsnorm_backward(&grad_normed_d, &c->d_in, &s->cross_norm_weight, &grad_d_in_norm, &lg->cross_norm_weight);
 
@@ -569,12 +633,14 @@ void blt_local_decoder_backward(const blt_local_decoder* model,
     }
 
     // -----------------------------------------------------------------
-    // STEP 4: write terminal gradients -- byte_hidden_in and patch_in are
-    // external inputs (local encoder / global transformer outputs), so both
-    // are pure sinks here rather than feeding further local computation.
+    // STEP 4: write terminal gradients
     //
     memcpy(grad_byte_hidden_in->data, dh.data, seq_len * E * sizeof(float));
-    memcpy(grad_patch_in->data, dP.data, num_patches * E * sizeof(float));
+
+    // Reinterpret dP_split [num_patches*k, E] back as [num_patches, patch_dim]
+    blt_tensor dP;
+    blt_tensor_view_2d(&dP, dP_split.data, num_patches, patch_dim, dP_split.backend);
+    memcpy(grad_patch_in->data, dP.data, num_patches * patch_dim * sizeof(float));
 
     // Arena cleanup is callers responsibility
 }

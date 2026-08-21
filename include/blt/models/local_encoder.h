@@ -18,17 +18,18 @@
 //   P_l = P_{l-1} + cross_attn_l(query = RMSNorm(P_{l-1}), kv = h_l)
 
 typedef struct {
-    size_t embed_dim;              // Hidden width (h_E)
-    size_t num_layers;             // Byte transformer layers (l_E, default: 1)
-    size_t hidden_dim;             // FFN intermediate width
-    size_t num_heads;              // Byte self-attention heads
-    size_t cross_attn_heads;       // Cross-attention heads (U_E)
-    size_t local_window;           // Window w_E for byte self-attn (0 = full causal)
-    bool cross_attn_all_layers;    // false = cross-attn only after final layer
-    blt_patch_pool_type pool_type; // Init strategy for P_0 (default: MEAN)
+    size_t embed_dim;               // Hidden width (h_E)
+    size_t num_layers;              // Byte transformer layers (l_E, default: 1)
+    size_t patch_dim;               // Global width (h_G, default: 0 = same as embed_dim)
+    size_t hidden_dim;              // FFN intermediate width
+    size_t num_heads;               // Byte self-attention heads
+    size_t cross_attn_heads;        // Cross-attention heads (U_E)
+    size_t local_window;            // Window w_E for byte self-attn (0 = full causal)
+    bool cross_attn_all_layers;     // false = cross-attn only after final layer
+    blt_patch_pool_type pool_type;  // Init strategy for P_0 (default: MEAN)
     blt_hash_ngram_config ngram_config; // embed_dim must match config.embed_dim
-    float rope_theta;              // RoPE base frequency
-    size_t max_seq_len;            // Maximum sequence length for RoPE cache
+    float rope_theta;               // RoPE base frequency
+    size_t max_seq_len;             // Maximum sequence length for RoPE cache
 } blt_local_encoder_config;
 
 

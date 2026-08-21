@@ -49,9 +49,12 @@ int main(void) {
         {"hash ngram", run_hash_ngram_model_tests},
         {"local encoder mask", run_lencoder_mask_model_test},
         {"local encoder smoke", run_local_encoder_smoke_test},
+        {"local encoder k-split", run_local_encoder_k_split},
         {"global transformer causal mask", run_global_transformer_causal_mask},
         {"global transformer doc boundary", run_global_transformer_doc_boundary},
-        {"local decoder cross mask", run_local_decoder_cross_mask},
+        
+        {"local decoder cross mask", run_local_decoder_cross_mask}, 
+        {"local decoder k-split", run_local_decoder_k_split},
     };
     
     const test_case parity_tests[] = {
@@ -69,50 +72,56 @@ int main(void) {
         
     };
 
-
+    int do_test[3] = {1, 1, 1}; // core, model, parity
+    size_t test_count = 0;
     int passed = 0;
 
     printf("\n------------------------------------------\n");
     printf("            Running FBLT tests...\n");
     printf("------------------------------------------\n");
 
-    printf("\n------------------------\n");
-    printf("Running core tests...\n\n");
-
-    for (size_t i = 0; i < sizeof(core_tests) / sizeof(core_tests[0]); ++i) {
-        if (core_tests[i].fn()) {
-            printf("[PASS] %s\n", core_tests[i].name);
-            passed++;
-        } else {
-            printf("[FAIL] %s\n", core_tests[i].name);
+    if (do_test[0]) {
+        printf("\n------------------------\n");
+        printf("Running core tests...\n\n");
+        test_count += sizeof(core_tests) / sizeof(core_tests[0]);
+        for (size_t i = 0; i < sizeof(core_tests) / sizeof(core_tests[0]); ++i) {
+            if (core_tests[i].fn()) {
+                printf("[PASS] %s\n", core_tests[i].name);
+                passed++;
+            } else {
+                printf("[FAIL] %s\n", core_tests[i].name);
+            }
         }
     }
 
-    printf("\n------------------------\n");
-    printf("Running model tests...\n\n");
-
-    for (size_t i = 0; i < sizeof(model_tests) / sizeof(model_tests[0]); ++i) {
-        if (model_tests[i].fn()) {
-            printf("[PASS] %s\n", model_tests[i].name);
-            passed++;
-        } else {
-            printf("[FAIL] %s\n", model_tests[i].name);
+    if (do_test[1]) {
+        printf("\n------------------------\n");
+        printf("Running model tests...\n\n");
+        test_count += sizeof(model_tests) / sizeof(model_tests[0]);
+        for (size_t i = 0; i < sizeof(model_tests) / sizeof(model_tests[0]); ++i) {
+            if (model_tests[i].fn()) {
+                printf("[PASS] %s\n", model_tests[i].name);
+                passed++;
+            } else {
+                printf("[FAIL] %s\n", model_tests[i].name);
+            }
         }
     }
 
-    printf("\n------------------------\n");
-    printf("Running parity tests...\n\n");
-
-    for (size_t i = 0; i < sizeof(parity_tests) / sizeof(parity_tests[0]); ++i) {
-        if (parity_tests[i].fn()) {
-            printf("[PASS] %s\n", parity_tests[i].name);
-            passed++;
-        } else {
-            printf("[FAIL] %s\n", parity_tests[i].name);
+    if (do_test[2]) {
+        printf("\n------------------------\n");
+        printf("Running parity tests...\n\n");
+        test_count += sizeof(parity_tests) / sizeof(parity_tests[0]);
+        for (size_t i = 0; i < sizeof(parity_tests) / sizeof(parity_tests[0]); ++i) {
+            if (parity_tests[i].fn()) {
+                printf("[PASS] %s\n", parity_tests[i].name);
+                passed++;
+            } else {
+                printf("[FAIL] %s\n", parity_tests[i].name);
+            }
         }
     }
 
-    size_t test_count = sizeof(core_tests) / sizeof(core_tests[0]) + sizeof(model_tests) / sizeof(model_tests[0]) + sizeof(parity_tests) / sizeof(parity_tests[0]);
     printf("\n------------------------------------------\n");
     printf("Summary: %d/%zu tests passed\n", passed, test_count);
     printf("------------------------------------------\n");

@@ -1,6 +1,7 @@
 #include "test_helpers.h"
 #include "test_suite.h"
 #include "blt/ops/mask_builder.h"
+#include "blt/ops/patch_pool.h"
 #include "blt/core/allocator.h"
 
 
@@ -110,6 +111,63 @@ static int run_mask_builder_doc_boundary_test(void) {
 
 
 
+//------------------------------------------------------------------------
+// K-split test
+//
+// Verifies blt_patch_expand_group_ids produces the correct repeated-id
+// pattern, and that reinterpreting a [num_patches, patch_dim] tensor as
+// [num_patches*k, E] and back is a lossless round-trip
+
+static int run_patch_k_split(void) {
+    blt_arena* arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
+    if (!arena) return 0;
+
+    // --- group id expansion ---
+    size_t group_ids_in[2] = { 0, 1 };
+    size_t k = 3;
+    size_t num_patches = 2;
+    size_t* expanded = (size_t*)blt_arena_alloc(arena, num_patches * k * sizeof(size_t), 64);
+    TEST_ASSERT(expanded != NULL);
+
+    blt_patch_expand_group_ids(group_ids_in, num_patches, k, expanded);
+
+    size_t expected[6] = { 0, 0, 0, 1, 1, 1 };
+    for (size_t i = 0; i < num_patches * k; i++) {
+        TEST_ASSERT(expanded[i] == expected[i]);
+    }
+
+    // --- reshape round-trip ---
+    size_t E = 4;
+    size_t patch_dim = E * k;   // = 12
+    size_t patch_shape[2] = { num_patches, patch_dim };
+    blt_tensor p = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
+
+    float* d = (float*)p.data;
+    for (size_t i = 0; i < num_patches * patch_dim; i++) d[i] = (float)i;
+
+    // view as [num_patches*k, E]
+    blt_tensor split_view;
+    blt_tensor_view_2d(&split_view, p.data, num_patches * k, E, p.backend);
+    TEST_ASSERT(split_view.shape[0] == num_patches * k && split_view.shape[1] == E);
+
+    // view back as [num_patches, patch_dim]
+    blt_tensor concat_view;
+    blt_tensor_view_2d(&concat_view, split_view.data, num_patches, patch_dim, split_view.backend);
+    TEST_ASSERT(concat_view.shape[0] == num_patches && concat_view.shape[1] == patch_dim);
+
+    // must be bit-identical to the original data, since its the same buffer
+    const float* orig = (const float*)p.data;
+    const float* roundtrip = (const float*)concat_view.data;
+    for (size_t i = 0; i < num_patches * patch_dim; i++) {
+        TEST_ASSERT(orig[i] == roundtrip[i]);
+    }
+
+    blt_arena_destroy(arena);
+    return 1;
+}
+
+
+
 //----------------------------------------------------------------------------
 // Block-diagonal group mask test
 // only matching query/kv groups may attend to each other
@@ -153,5 +211,6 @@ int run_mask_builder_backend_tests(void) {
     ok &= run_mask_builder_sliding_window_test();
     ok &= run_mask_builder_doc_boundary_test();
     ok &= run_mask_builder_group_test();
+    ok &= run_patch_k_split();
     return ok;
 }

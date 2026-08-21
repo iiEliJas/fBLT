@@ -389,3 +389,174 @@ int run_local_encoder_smoke_test(void) {
 
     return 1;
 }
+
+
+
+
+//------------------------------------------------------------------------
+// Local Encoder k-split test
+//
+// Same shape as the overfit test, but with patch_dim = k * embed_dim (k=3),
+// so patch_out is wider than embed_dim and cross-attention has to go through
+// the split-query path (BLT_CROSS_ATTN_SPLIT_QUERY) instead of the k=1 passthrough.
+
+static void fill_random(blt_tensor* t, float scale) {
+    float* d = (float*)t->data;
+    for (size_t i = 0; i < t->numel; i++) {
+        d[i] = scale * (((float)(rand() % 2000) / 1000.0f) - 1.0f);
+    }
+}
+
+
+
+static void fill_random_bytes(blt_tensor* t) {
+    uint8_t* d = (uint8_t*)t->data;
+    for (size_t i = 0; i < t->numel; i++) {
+        d[i] = (uint8_t)(rand() % 256);
+    }
+}
+
+
+static void sgd_update_local_encoder(blt_local_encoder* model, const blt_local_encoder_grad* grad, float lr) {
+    // 1. Update transformer and cross-attention layers
+    for (size_t l = 0; l < model->config.num_layers; l++) {
+        blt_local_encoder_layer_storage* s = &model->layers[l];
+        const blt_local_encoder_layer_grad* g = &grad->layer_grads[l];
+
+        blt_sgd_step(&s->norm1_weight, &g->norm1_weight, lr);
+        blt_sgd_step(&s->attn_qkv_w, &g->attn_qkv_w, lr);
+        blt_sgd_step(&s->attn_proj_w, &g->attn_proj_w, lr);
+        blt_sgd_step(&s->norm2_weight, &g->norm2_weight, lr);
+        blt_sgd_step(&s->ffn_up_w, &g->ffn_up_w, lr);
+        blt_sgd_step(&s->ffn_gate_w, &g->ffn_gate_w, lr);
+        blt_sgd_step(&s->ffn_down_w, &g->ffn_down_w, lr);
+
+        blt_sgd_step(&s->cross_norm_weight, &g->cross_norm_weight, lr);
+        blt_sgd_step(&s->cross_weight_q, &g->cross_weight_q, lr);
+        blt_sgd_step(&s->cross_weight_k, &g->cross_weight_k, lr);
+        blt_sgd_step(&s->cross_weight_v, &g->cross_weight_v, lr);
+        blt_sgd_step(&s->cross_weight_proj, &g->cross_weight_proj, lr);
+    }
+
+    // 2. Update the base byte embedding table
+    blt_sgd_step(&model->byte_embedding_weight, &grad->embedding_grad, lr);
+
+    // 3. Update the active hash n-gram embedding tables
+    for (size_t i = 0; i < model->ngram_weights.num_tables; i++) {
+        blt_sgd_step(&model->ngram_weights.tables[i], &grad->ngram_grads.tables[i], lr);
+    }
+}
+
+
+
+int run_local_encoder_k_split(void) {
+    blt_arena* arena = blt_arena_create(16 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena* compute_arena = blt_arena_create(16 * 1024 * 1024, BLT_BACKEND_CPU);
+    if (!arena || !compute_arena) return 0;
+
+    srand(7);
+
+    blt_patch_info patches[3];
+    patches[0].start_idx = 0; patches[0].length = 3; patches[0].peak_entropy = 0.0f;
+    patches[1].start_idx = 3; patches[1].length = 3; patches[1].peak_entropy = 0.0f;
+    patches[2].start_idx = 6; patches[2].length = 2; patches[2].peak_entropy = 0.0f;
+    size_t num_patches = 3;
+    size_t seq_len = 8;
+
+    size_t k = 3;
+    size_t E = 16;
+
+    blt_local_encoder_config cfg = {0};
+    cfg.embed_dim = E;
+    cfg.patch_dim = E * k;   // = 48, forces the split-query path
+    cfg.num_layers = 2;
+    cfg.hidden_dim = 32;
+    cfg.num_heads = 4;
+    cfg.cross_attn_heads = 4;
+    cfg.local_window = 0;   // full causal
+    cfg.cross_attn_all_layers = true;
+    cfg.pool_type = BLT_POOL_MEAN; // Mean pooling for initial patch representation
+    
+    // N-gram hash config initialization
+    cfg.ngram_config.num_ngram_sizes = 2;
+    cfg.ngram_config.ngram_sizes[0] = 3;
+    cfg.ngram_config.ngram_sizes[1] = 4;
+    cfg.ngram_config.per_ngram_vocab = 256;
+    cfg.ngram_config.hash_prime = 31;
+    cfg.ngram_config.normalize = true;
+    cfg.ngram_config.embed_dim = E;
+    
+    cfg.rope_theta = 500000.0f;
+    cfg.max_seq_len = 32;
+
+    blt_local_encoder* model = blt_local_encoder_create(arena, &cfg);
+    TEST_ASSERT(model != NULL);
+   
+    for (size_t l = 0; l < cfg.num_layers; l++) {
+        blt_local_encoder_layer_storage* s = &model->layers[l];
+        fill_random(&s->norm1_weight, 1.0f);
+        fill_random(&s->attn_qkv_w, 0.1f);
+        fill_random(&s->attn_proj_w, 0.1f);
+        fill_random(&s->norm2_weight, 1.0f);
+        fill_random(&s->ffn_up_w, 0.1f);
+        fill_random(&s->ffn_gate_w, 0.1f);
+        fill_random(&s->ffn_down_w, 0.1f);
+        fill_random(&s->cross_norm_weight, 1.0f);
+        fill_random(&s->cross_weight_q, 0.1f);
+        fill_random(&s->cross_weight_k, 0.1f);
+        fill_random(&s->cross_weight_v, 0.1f);
+        fill_random(&s->cross_weight_proj, 0.1f);
+    }
+    fill_random(&model->byte_embedding_weight, 0.1f);
+    for (size_t i = 0; i < model->ngram_weights.num_tables; i++) {
+        fill_random(&model->ngram_weights.tables[i], 0.1f);
+    }
+
+    blt_local_encoder_grad* grad = blt_local_encoder_grad_create(arena, model);
+    TEST_ASSERT(grad != NULL);
+ 
+    size_t bytes_shape[1] = { seq_len };
+    blt_tensor bytes_in = blt_tensor_create(arena, bytes_shape, 1, BLT_DTYPE_UINT8);
+    fill_random_bytes(&bytes_in);
+
+    size_t byte_hidden_shape[2] = { seq_len, E };
+    size_t patch_shape[2] = { num_patches, cfg.patch_dim };   // patch_dim-wide, not E-wide
+    
+    blt_tensor patch_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
+    blt_tensor byte_hidden_out = blt_tensor_create(arena, byte_hidden_shape, 2, BLT_DTYPE_FP32);
+    
+    blt_tensor grad_patch_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
+    
+    // Target tensor to compute our manual MSE loss against
+    blt_tensor patch_target = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
+    fill_random(&patch_target, 1.0f);
+
+    const int num_steps = 200;
+    const float lr = 0.05f;
+
+    for (int step = 0; step < num_steps; step++) {
+        blt_arena_reset(compute_arena);
+
+        blt_local_encoder_forward(model, &bytes_in, patches, num_patches,
+                                  NULL, 0, &patch_out, &byte_hidden_out, compute_arena);
+        
+        // Zero scatter-add targets for embeddings/ngrams before backward
+        memset(grad->embedding_grad.data, 0, grad->embedding_grad.numel * sizeof(float));
+        for (size_t i = 0; i < grad->ngram_grads.num_tables; i++) {
+            memset(grad->ngram_grads.tables[i].data, 0, grad->ngram_grads.tables[i].numel * sizeof(float));
+        }
+        
+        // Passing NULL for optional grad_byte_hidden_out to strictly supervise via patches
+        blt_local_encoder_backward(model, &bytes_in, patches, num_patches,
+                                   NULL, 0, &grad_patch_out, NULL, grad, compute_arena);
+
+        // patch_out must come out at the full patch_dim width, not E
+        TEST_ASSERT(patch_out.shape[0] == num_patches && patch_out.shape[1] == cfg.patch_dim);
+
+        sgd_update_local_encoder(model, grad, lr);
+    }
+   
+    blt_arena_destroy(arena);
+    blt_arena_destroy(compute_arena);
+    return 1;
+}

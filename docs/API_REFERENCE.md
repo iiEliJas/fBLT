@@ -218,6 +218,10 @@
   - Input: `patches` metadata array `[num_patches]`, `num_patches`, `seq_len` (total bytes), caller-allocated `query_group_ids_out` `[num_patches]`, and `kv_group_ids_out` `[seq_len]`.
   - Output: Fills `query_group_ids_out` with query patch indices ($0 \dots \text{num\_patches}-1$) and `kv_group_ids_out` with parent patch indices for each byte position.
   - Behavior: Maps queries and key/value positions into patch groups for block-diagonal cross-attention masks. Asserts that input patches form a contiguous tiling over `[0, seq_len)`.
+  - `blt_patch_expand_group_ids(group_ids_in, n, k, group_ids_out)`
+    - Input: `group_ids_in` array `[n]`, expansion factor `k`, and output array `group_ids_out` `[n * k]`.
+    - Output: Fills `group_ids_out` by repeating each input group ID `k` times consecutively.
+    - Behavior: Expands each input group ID into `k` consecutive output group IDs.
 
 ------------------------------------------------------------------------------------------------------------
 ## Model APIs
@@ -481,9 +485,15 @@ Assembly of already-implemented pieces (byte embedding, RoPE-enabled transformer
   - Behavior: Computes gradients w.r.t the base byte embeddings and the hash tables. Scales gradients by `1 / (num_ngram_sizes + 1)` if `normalize` is true. Scatter-adds gradients into `grad_tables` (which MUST be zero-initialized by the caller). To avoid aliasing issues if `grad_byte_emb` and `grad_out` point to the same memory, the scatter-add is executed strictly before overwriting `grad_byte_emb`.
 
 ### blt/models/cross_attention.h
+- `blt_cross_attention_split_mode`enum
+  - `BLT_CROSS_ATTN_NO_SPLIT=0`: k = 1, current behavior, unchanged
+  - `BLT_CROSS_ATTN_SPLIT_QUERY`: query_in is `[n_q, patch_dim]`; kv_in is `[n_kv, embed_dim]` (encoder usage)
+  - `BLT_CROSS_ATTN_SPLIT_KV`: kv_in is `[n_kv, patch_dim]`; query_in is `[n_q, embed_dim]` (decoder usage)
 - `blt_cross_attention_config` struct
   - Fields:
     - `size_t embed_dim`: Shared hidden width ($h_E$) for query and key/value inputs.
+    - `size_t patch_dim`: Width of the patch input; if 0, same as `embed_dim` (no splitting).
+    - `blt_cross_attention_split_mode split_mode`: Which input is patch-dimension-wide.
     - `size_t num_heads`: Number of cross-attention heads ($U_E$).
     - `size_t head_dim`: Per-head dimension; if 0, inferred as `embed_dim / num_heads`.
     - `const blt_mask_config* mask_config`: REQUIRED pointer to block-diagonal patch mask config.
@@ -512,6 +522,7 @@ Assembly of already-implemented pieces (byte embedding, RoPE-enabled transformer
 - `blt_local_encoder_config` struct
   - Fields:
     - `size_t embed_dim`: Transformer hidden width ($h_E$).
+    - `size_t patch_dim`: Width of the patch input ($h_P$); if 0, same as `embed_dim` (no splitting).
     - `size_t num_layers`: Number of byte transformer layers ($l_E$, default: 1).
     - `size_t hidden_dim`: Intermediate hidden width for FFN projections.
     - `size_t num_heads`: Number of byte self-attention heads.
@@ -560,6 +571,7 @@ Assembly of already-implemented pieces (byte embedding, RoPE-enabled transformer
 - `blt_local_decoder_config` struct
   - Fields:
     - `size_t embed_dim`: Transformer hidden width (h_D).
+    - `size_t patch_dim`: Width of the patch input ($h_P$); if 0, same as `embed_dim` (no splitting).
     - `size_t num_layers`: Number of decoder layers (l_D).
     - `size_t hidden_dim`: Intermediate hidden width for FFN projections.
     - `size_t num_heads`: Number of byte self-attention heads.

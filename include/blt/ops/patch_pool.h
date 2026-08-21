@@ -47,5 +47,12 @@ void blt_patch_build_group_ids(const blt_patch_info* patches,
                                size_t* kv_group_ids_out);
 
 
+// Input:     group_ids_in [n], k (expansion factor).
+// Output:    group_ids_out [n * k].
+// Behavior:  Expands each input group ID into k consecutive output group IDs.
+void blt_patch_expand_group_ids(const size_t* group_ids_in, size_t n, size_t k,
+                                size_t* group_ids_out);
+
+
 
 #endif // BLT_PATCH_POOL_H

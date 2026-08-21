@@ -15,8 +15,16 @@
 #include "blt/ops/softmax.h"
 
 
+typedef enum {
+    BLT_CROSS_ATTN_NO_SPLIT = 0,     // k = 1, current behavior, unchanged
+    BLT_CROSS_ATTN_SPLIT_QUERY,      // query_in is [n_q, patch_dim]; kv_in is [n_kv, embed_dim]  (encoder usage)
+    BLT_CROSS_ATTN_SPLIT_KV          // kv_in is [n_kv, patch_dim]; query_in is [n_q, embed_dim]   (decoder usage)
+} blt_cross_attention_split_mode;
+
 typedef struct {
-    size_t embed_dim;                    // h_E, shared by Q-source and KV-source
+    size_t embed_dim;                               // h_E or h_D local width; attention always projects to this width
+    size_t patch_dim;                               // h_G global width; 0 means same as embed_dim so no splitting
+    blt_cross_attention_split_mode split_mode;      // which side is patch_dim-wide
     size_t num_heads;                    // U_E, number of cross-attention heads 
     size_t head_dim;                     // 0 => infer embed_dim / num_heads
     const blt_mask_config* mask_config;  // REQUIRED: block-diagonal patch mask config

@@ -10,8 +10,9 @@
 #include "blt/models/patcher.h"
 
 typedef struct {
-    size_t embed_dim;              // h_D
-    size_t num_layers;             // l_D
+    size_t embed_dim;               // h_D
+    size_t patch_dim;               // h_G
+    size_t num_layers;              // l_D
     size_t hidden_dim;
     size_t num_heads;               // byte self-attention heads
     size_t cross_attn_heads;
