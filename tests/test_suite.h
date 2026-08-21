@@ -33,6 +33,7 @@ int run_global_transformer_causal_mask(void);
 int run_global_transformer_doc_boundary(void);
 int run_local_decoder_cross_mask(void);
 int run_local_decoder_k_split(void);
+int run_blt_model_generate_sanity(void);
 
 int run_matmul_parity_test(void);
 int run_softmax_parity_test(void);
@@ -45,4 +46,5 @@ int run_global_transformer_parity(void);
 int run_global_transformer_overfit(void);
 int run_local_decoder_parity(void);
 int run_local_decoder_overfit(void);
+int run_blt_model_overfit(void);
 #endif // BLT_TEST_SUITE_H

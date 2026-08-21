@@ -52,9 +52,9 @@ int main(void) {
         {"local encoder k-split", run_local_encoder_k_split},
         {"global transformer causal mask", run_global_transformer_causal_mask},
         {"global transformer doc boundary", run_global_transformer_doc_boundary},
-        
         {"local decoder cross mask", run_local_decoder_cross_mask}, 
         {"local decoder k-split", run_local_decoder_k_split},
+        {"blt model generate sanity", run_blt_model_generate_sanity},
     };
     
     const test_case parity_tests[] = {
@@ -69,7 +69,7 @@ int main(void) {
         {"global transformer overfit", run_global_transformer_overfit}, 
         {"local decoder parity", run_local_decoder_parity},
         {"local decoder overfit", run_local_decoder_overfit},
-        
+        {"blt model overfit", run_blt_model_overfit},
     };
 
     int do_test[3] = {1, 1, 1}; // core, model, parity

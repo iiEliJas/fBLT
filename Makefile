@@ -2,12 +2,13 @@
 # CONFIGURATION
 # ============================================================================
 CC ?= gcc
-CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Iinclude -Itests -D_POSIX_C_SOURCE=200809L
+CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Iinclude -Itests -Itools -D_POSIX_C_SOURCE=200809L
 LDLIBS ?= -lm
 
 # Directories
 SRC_DIR := src
 TESTS_DIR := tests
+TOOLS_DIR := tools
 RUN_DIR := run
 OBJ_DIR := obj
 BIN_DIR := bin
@@ -59,8 +60,11 @@ CORE_SRCS := \
 	$(SRC_DIR)/models/hash_ngram.c \
 	$(SRC_DIR)/models/local_encoder.c \
 	$(SRC_DIR)/models/local_decoder.c \
-	$(SRC_DIR)/models/global_transformer.c
+	$(SRC_DIR)/models/global_transformer.c \
+	$(SRC_DIR)/models/model.c
 
+TOOLS_SRCS := \
+	$(TOOLS_DIR)/generate_greedy.c
 
 TEST_SRCS := \
     $(wildcard $(TESTS_DIR)/unit/*/*.c) \
@@ -73,13 +77,14 @@ TEST_SRCS := \
 # OBJECT FILES
 # ============================================================================
 CORE_OBJS := $(addprefix $(OBJ_DIR)/,$(CORE_SRCS:.c=.o))
-TEST_OBJS := $(addprefix $(OBJ_DIR)/,$(TEST_SRCS:.c=.o)) $(CORE_OBJS)
+TOOLS_OBJS := $(addprefix $(OBJ_DIR)/,$(TOOLS_SRCS:.c=.o))
+TEST_OBJS := $(addprefix $(OBJ_DIR)/,$(TEST_SRCS:.c=.o)) $(CORE_OBJS) $(TOOLS_OBJS)
 
 
 # ============================================================================
 # TARGETS
 # ============================================================================
-.PHONY: all test main bench threshold sandbox clean info help
+.PHONY: all test main bench sandbox clean info help
 
 all: test
 
@@ -104,9 +109,6 @@ main: $(BIN_DIR)/main$(EXE_EXT)
 bench: $(BIN_DIR)/bench_patcher$(EXE_EXT)
 	@echo [BENCH] Built successfully: $(BIN_DIR)/bench$(EXE_EXT)
 
-threshold: $(BIN_DIR)/calibrate_threshold$(EXE_EXT)
-	@echo [MAIN] Built successfully: $(BIN_DIR)/calibrate_threshold$(EXE_EXT)
-
 sandbox: $(BIN_DIR)/sandbox$(EXE_EXT)
 	@echo [MAIN] Built successfully: $(BIN_DIR)/sandbox$(EXE_EXT)
 	@./$(BIN_DIR)/sandbox$(EXE_EXT)
@@ -118,6 +120,12 @@ sandbox: $(BIN_DIR)/sandbox$(EXE_EXT)
 
 # Compile src to obj files
 $(OBJ_DIR)/$(SRC_DIR)/%.o: $(SRC_DIR)/%.c
+	@echo "[CC] $< -> $@"
+	$(MKDIR_P)
+	@$(CC) $(CFLAGS) -c $< -o $@
+
+# Compile tool to obj files
+$(OBJ_DIR)/$(TOOLS_DIR)/%.o: $(TOOLS_DIR)/%.c
 	@echo "[CC] $< -> $@"
 	$(MKDIR_P)
 	@$(CC) $(CFLAGS) -c $< -o $@
@@ -145,12 +153,6 @@ $(BIN_DIR)/bench_patcher$(EXE_EXT): $(TESTS_DIR)/bench/bench_patcher.c $(CORE_OB
 	@echo [LD] Linking bench executable: $@
 	$(MKDIR_BIN)
 	@$(CC) $(CFLAGS) $(TESTS_DIR)/bench/bench_patcher.c $(CORE_OBJS) -o $@ $(LDLIBS)
-
-# Link calibrate_threshold exe
-$(BIN_DIR)/calibrate_threshold$(EXE_EXT): $(RUN_DIR)/calibrate_threshold.c $(CORE_OBJS)
-	@echo [LD] Linking main executable: $@
-	$(MKDIR_BIN)
-	@$(CC) $(CFLAGS) $(RUN_DIR)/calibrate_threshold.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
 # Link sandbox exe
 $(BIN_DIR)/sandbox$(EXE_EXT): $(RUN_DIR)/sandbox.c $(CORE_OBJS)
@@ -182,7 +184,6 @@ help:
 	@echo -  make test       - Build and run test exe
 	@echo -  make main       - Build main exe
 	@echo -  make bench      - Build benchmark exe
-	@echo -  make threshold  - Build calibrate_threshold exe
 	@echo -  make all        - Same as 'make test'
 	@echo -  make clean      - Remove all generated files
 	@echo -  make info       - Display build config
