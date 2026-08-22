@@ -91,7 +91,7 @@ TEST_OBJS := $(addprefix $(OBJ_DIR)/,$(TEST_SRCS:.c=.o)) $(CORE_OBJS) $(TOOLS_OB
 # ============================================================================
 # TARGETS
 # ============================================================================
-.PHONY: all test main bench bench-harness sandbox clean info help
+.PHONY: all test main bench bench-harness sandbox sweep clean info help
 
 all: test
 
@@ -123,6 +123,9 @@ bench-harness: $(BIN_DIR)/bench_harness_selftest$(EXE_EXT)
 sandbox: $(BIN_DIR)/sandbox$(EXE_EXT)
 	@echo [MAIN] Built successfully: $(BIN_DIR)/sandbox$(EXE_EXT)
 	@./$(BIN_DIR)/sandbox$(EXE_EXT)
+
+sweep: $(BIN_DIR)/train_sweep$(EXE_EXT)
+	@echo [SWEEP] Built successfully: $(BIN_DIR)/train_sweep$(EXE_EXT)
 
 
 # ============================================================================
@@ -182,6 +185,12 @@ $(BIN_DIR)/sandbox$(EXE_EXT): $(RUN_DIR)/sandbox.c $(CORE_OBJS)
 	@echo [LD] Linking main executable: $@
 	$(MKDIR_BIN)
 	@$(CC) $(CFLAGS) $(RUN_DIR)/sandbox.c $(CORE_OBJS) -o $@ $(LDLIBS)
+
+# Link sweep trainer exe
+$(BIN_DIR)/train_sweep$(EXE_EXT): $(TOOLS_DIR)/train_sweep.c $(CORE_OBJS) $(TOOLS_OBJS) $(BENCH_LIB_OBJS)
+	@echo [LD] Linking trainer executable: $@
+	$(MKDIR_BIN)
+	@$(CC) $(CFLAGS) -I$(BENCH_DIR) $(TOOLS_DIR)/train_sweep.c $(CORE_OBJS) $(TOOLS_OBJS) $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)
 
 
 # ============================================================================
