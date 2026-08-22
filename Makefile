@@ -64,7 +64,8 @@ CORE_SRCS := \
 	$(SRC_DIR)/models/model.c
 
 TOOLS_SRCS := \
-	$(TOOLS_DIR)/generate_greedy.c
+	$(TOOLS_DIR)/generate_greedy.c \
+	$(TOOLS_DIR)/flops.c \
 
 TEST_SRCS := \
     $(wildcard $(TESTS_DIR)/unit/*/*.c) \

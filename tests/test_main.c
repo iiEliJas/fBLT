@@ -72,7 +72,12 @@ int main(void) {
         {"blt model overfit", run_blt_model_overfit},
     };
 
-    int do_test[3] = {1, 1, 1}; // core, model, parity
+    const test_case tools_tests[] = {
+        {"FLOPs hand-derived test", run_flops_hand_derived_test},
+        {"FLOPs patch size scaling test", run_flops_patch_size_scaling_test},
+    };
+
+    int do_test[4] = {1, 1, 1, 0}; // core, model, parity, tools
     size_t test_count = 0;
     int passed = 0;
 
@@ -118,6 +123,20 @@ int main(void) {
                 passed++;
             } else {
                 printf("[FAIL] %s\n", parity_tests[i].name);
+            }
+        }
+    }
+
+    if (do_test[3]) {
+        printf("\n------------------------\n");
+        printf("Running tools tests...\n\n");
+        test_count += sizeof(tools_tests) / sizeof(tools_tests[0]);
+        for (size_t i = 0; i < sizeof(tools_tests) / sizeof(tools_tests[0]); ++i) {
+            if (tools_tests[i].fn()) {
+                printf("[PASS] %s\n", tools_tests[i].name);
+                passed++;
+            } else {
+                printf("[FAIL] %s\n", tools_tests[i].name);
             }
         }
     }
