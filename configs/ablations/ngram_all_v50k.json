@@ -1,0 +1,54 @@
+{
+  "name": "train_eval",
+  "tag": "ngram_all_v50k",
+  "phase": "5.1_ngram",
+  "model": {
+    "encoder": {
+      "embed_dim": 96,
+      "num_layers": 1,
+      "ngram": {
+        "enabled": true,
+        "vocab_size": 50000,
+        "sizes": [
+          3,
+          4,
+          5,
+          6,
+          7,
+          8
+        ]
+      }
+    },
+    "global": {
+      "embed_dim": 96,
+      "num_layers": 2
+    },
+    "decoder": {
+      "embed_dim": 96,
+      "num_layers": 2
+    }
+  },
+  "cross_attention": {
+    "placement": "both",
+    "pooling_init": true
+  },
+  "patcher": {
+    "rule": "global",
+    "threshold_global": 5.3,
+    "threshold_monotonic": 5.0,
+    "max_patch_length": 32
+  },
+  "train": {
+    "steps": 3000,
+    "lr": 0.01,
+    "seq_len": 256,
+    "seed": 42,
+    "eval_every": 250,
+    "ckpt_every": 250,
+    "ent_warmup_steps": 800,
+    "eval_windows": 64,
+    "max_wall_min": 25,
+    "train_bin": "data/train.bin",
+    "heldout_bin": "data/heldout.bin"
+  }
+}
