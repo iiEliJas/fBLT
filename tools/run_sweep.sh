@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # run_sweep.sh — sequential sweep queue runner.
-//
+#
 # Usage (from repo root):
 #   tools/run_sweep.sh <config.json> [config2.json ...]
-//
+#
 # - Skips a config whose tag already appears in bench/results.jsonl
 #   (set SWEEP_FORCE=1 to disable the skip, e.g. for the determinism check).
 # - Appends one JSON status line per config to configs/sweep_state.json.
