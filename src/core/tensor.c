@@ -45,6 +45,11 @@ void view_1d(blt_tensor* view, void* data, size_t len, blt_dtype dtype, blt_back
     view->is_view = true;
 }
 
+void view_1d_offset(blt_tensor* view, const blt_tensor* src, size_t offset_elems, size_t len) {
+    view_1d(view, (char*)src->data + offset_elems * blt_dtype_sizeof(src->dtype),
+            len, src->dtype, src->backend);
+}
+
 void blt_tensor_view_2d(blt_tensor* t, void* data, size_t rows, size_t cols, blt_backend backend) {
     t->data = data;
     t->shape[0] = rows;

@@ -66,7 +66,10 @@ void blt_cross_attention_forward(const blt_tensor* query_in,
 // Input:     Forward pass inputs, grad_out [num_patches, embed_dim] (dL/dOutput), arena.
 // Output:    grad_query_in [num_patches, embed_dim], grad_kv_in [seq_len, embed_dim],
 //            and grad_weights struct (all overwritten).
-// Behavior: Recomputes forward intermediates (Q, K, V, attention probabilities), then
+// Contract:  grad_kv_in is OVERWRITTEN, not accumulated into -- the K and V input
+//            gradients are summed internally before being written. Callers that
+//            need accumulation across multiple loss terms must add it themselves.
+// Behavior:  Recomputes forward intermediates (Q, K, V, attention probabilities), then
 //            propagates gradients backward into query, key/value, and weight matrices.
 void blt_cross_attention_backward(const blt_tensor* query_in,
                                  const blt_tensor* kv_in,

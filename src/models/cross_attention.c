@@ -81,46 +81,6 @@ static const float* build_mask(const blt_cross_attention_config* config,
 
 
 //----------------------------------------------------------------
-// Helper: Compute softmax of a row in-place with masking
-// (same helper as self-attention) [Note] Maybe add it to softmax.c
-
-static void softmax_row_inplace(float* row, size_t seq_len, size_t row_idx, bool is_causal, const float* mask_row, float scale) {
-    float max_val = -INFINITY;
-
-    for (size_t col = 0; col < seq_len; ++col) {
-        if (mask_row != NULL) {
-            row[col] = row[col] * scale + mask_row[col];
-        } else if (is_causal && col > row_idx) {
-            row[col] = -INFINITY;
-        } else {
-            row[col] *= scale;
-        }
-
-        if (isfinite(row[col]) && row[col] > max_val) {
-            max_val = row[col];
-        }
-    }
-
-    float sum = 0.0f;
-    for (size_t col = 0; col < seq_len; ++col) {
-        if (isfinite(row[col])) {
-            row[col] = expf(row[col] - max_val);
-            sum += row[col];
-        } else {
-            row[col] = 0.0f;
-        }
-    }
-
-    if (sum > 0.0f) {
-        for (size_t col = 0; col < seq_len; ++col) {
-            row[col] /= sum;
-        }
-    }
-}
-
-
-
-//----------------------------------------------------------------
 // Helper: Process a single cross-attention head
 //
 // Queries come from the patch sequence (length num_patches), keys/values from
@@ -132,6 +92,7 @@ static void cross_attention_head(const float* q_data, const float* k_data, const
                                  size_t embed_dim, size_t head_dim,
                                  const float* mask, float scale,
                                  float* scores_buf, float* combined_out) {
+    BLT_REQUIRE(mask != NULL, "blt_cross_attention: attention mask is required (block-diagonal patch mask)");
     size_t head_offset = head_idx * head_dim;
 
     for (size_t i = 0; i < num_patches; ++i) {
@@ -144,7 +105,7 @@ static void cross_attention_head(const float* q_data, const float* k_data, const
         }
 
         const float* mask_row = mask + i * seq_len;
-        softmax_row_inplace(scores_i, seq_len, i, false, mask_row, scale);
+        blt_softmax_masked_row_inplace(scores_i, seq_len, i, false, mask_row, scale);
     }
 
     for (size_t i = 0; i < num_patches; ++i) {
@@ -220,8 +181,6 @@ void blt_cross_attention_forward(
     float* v_data = (float*)blt_arena_alloc(arena, kv_numel * sizeof(float), sizeof(float));
     float* combined_data = (float*)blt_arena_alloc(arena, q_numel * sizeof(float), sizeof(float));
     float* scores_buf = (float*)blt_arena_alloc(arena, scores_numel * sizeof(float), sizeof(float));
-    BLT_REQUIRE(q_data && k_data && v_data && combined_data && scores_buf,
-                "blt_cross_attention: failed to allocate temporary buffers from arena");
 
     memset(combined_data, 0, q_numel * sizeof(float));
 
@@ -306,9 +265,6 @@ static void attn_bwd_recompute_forward(
     cache->v_data = (float*)blt_arena_alloc(arena, kv_numel * sizeof(float), sizeof(float));
     cache->combined_data = (float*)blt_arena_alloc(arena, q_numel * sizeof(float), sizeof(float));
     cache->weights_all = (float*)blt_arena_alloc(arena, weights_numel * sizeof(float), sizeof(float));
-    BLT_REQUIRE(cache->q_data && cache->k_data && cache->v_data &&
-                cache->combined_data && cache->weights_all,
-                "blt_cross_attention_backward: failed to allocate forward-recompute buffers");
     memset(cache->combined_data, 0, q_numel * sizeof(float));
 
     blt_tensor q_tensor, k_tensor, v_tensor;
@@ -403,7 +359,6 @@ void blt_cross_attention_backward(
     blt_tensor_view_2d(&combined_tensor, cache.combined_data, num_patches, embed_dim, query_in->backend);
 
     float* grad_combined_data = (float*)blt_arena_alloc(arena, num_patches * embed_dim * sizeof(float), sizeof(float));
-    BLT_REQUIRE(grad_combined_data, "blt_cross_attention_backward: failed to allocate grad_combined");
     blt_tensor grad_combined_tensor;
     blt_tensor_view_2d(&grad_combined_tensor, grad_combined_data, num_patches, embed_dim, query_in->backend);
 
@@ -414,16 +369,12 @@ void blt_cross_attention_backward(
     float* grad_q_data = (float*)blt_arena_alloc(arena, num_patches * embed_dim * sizeof(float), sizeof(float));
     float* grad_k_data = (float*)blt_arena_alloc(arena, seq_len * embed_dim * sizeof(float), sizeof(float));
     float* grad_v_data = (float*)blt_arena_alloc(arena, seq_len * embed_dim * sizeof(float), sizeof(float));
-    BLT_REQUIRE(grad_q_data && grad_k_data && grad_v_data,
-                "blt_cross_attention_backward: failed to allocate grad_q/k/v");
     memset(grad_q_data, 0, num_patches * embed_dim * sizeof(float));
     memset(grad_k_data, 0, seq_len * embed_dim * sizeof(float));
     memset(grad_v_data, 0, seq_len * embed_dim * sizeof(float));
 
     float* grad_w_buf = (float*)blt_arena_alloc(arena, num_patches * seq_len * sizeof(float), sizeof(float));
     float* grad_scores_buf = (float*)blt_arena_alloc(arena, num_patches * seq_len * sizeof(float), sizeof(float));
-    BLT_REQUIRE(grad_w_buf && grad_scores_buf,
-                "blt_cross_attention_backward: failed to allocate score grad buffers");
 
     for (size_t head = 0; head < num_heads; head++) {
         size_t head_offset = head * head_dim;
@@ -505,8 +456,6 @@ void blt_cross_attention_backward(
 
     float* grad_kv_k_data = (float*)blt_arena_alloc(arena, seq_len * embed_dim * sizeof(float), sizeof(float));
     float* grad_kv_v_data = (float*)blt_arena_alloc(arena, seq_len * embed_dim * sizeof(float), sizeof(float));
-    BLT_REQUIRE(grad_kv_k_data && grad_kv_v_data,
-                "blt_cross_attention_backward: failed to allocate grad_kv temporaries");
     blt_tensor grad_kv_k_tensor, grad_kv_v_tensor;
     blt_tensor_view_2d(&grad_kv_k_tensor, grad_kv_k_data, seq_len, embed_dim, kv_in->backend);
     blt_tensor_view_2d(&grad_kv_v_tensor, grad_kv_v_data, seq_len, embed_dim, kv_in->backend);

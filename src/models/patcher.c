@@ -85,6 +85,7 @@ size_t blt_segment_patches(const blt_tensor* entropy, const uint8_t* bytes, blt_
     blt_check_nd_fp32(entropy, 1, (const size_t[]){0}, "Entropy tensor must be 1D");
     BLT_REQUIRE(entropy->numel != 0, "Entropy tensor must not be empty");
     BLT_REQUIRE(config != NULL, "Config must not be null");
+    BLT_REQUIRE(max_patches >= 1, "max_patches must be at least 1");
 
     size_t seq_len = entropy->numel;
     size_t patch_count = 0;

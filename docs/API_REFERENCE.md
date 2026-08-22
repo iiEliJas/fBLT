@@ -37,12 +37,22 @@
 - `blt_tensor_bytes(const blt_tensor* t)`
   - Input: pointer to a tensor.
   - Output: total byte size of the tensor storage.
+- `view_1d(blt_tensor* view, void* data, size_t len, blt_dtype dtype, blt_backend backend)`
+  - Input: view tensor pointer, data pointer, element count, dtype, and backend.
+  - Output: initializes `view` as a 1D view over the provided data.
+- `view_1d_offset(blt_tensor* view, const blt_tensor* src, size_t offset_elems, size_t len)`
+  - Input: view tensor pointer, source tensor, element offset into the source's data, and element count.
+  - Output: initializes `view` as a 1D view starting `offset_elems` elements into `src`'s data; dtype and backend are inherited from `src`.
+  - Behavior: convenience for shifted views (e.g. next-byte loss targets).
 - `blt_tensor_view_2d(blt_tensor* t, void* data, size_t rows, size_t cols, blt_backend backend)`
   - Input: tensor pointer, data pointer, row count, column count, and backend.
-  - Output: initializes `t` as a 2D view over the provided data.
+  - Output: initializes `t` as a 2D view (FP32) over the provided data.
 - `blt_tensor_view_3d(blt_tensor* t, void* data, size_t d0, size_t d1, size_t d2, blt_backend backend)`
   - Input: tensor pointer, data pointer, three dimension sizes, and backend.
-  - Output: initializes `t` as a 3D view over the provided data.
+  - Output: initializes `t` as a 3D view (FP32) over the provided data.
+- `zero_tensor(blt_tensor* t)`
+  - Input: tensor pointer.
+  - Behavior: fills the tensor's storage with zeros. Note: tensors created via `blt_tensor_create` are already zero-initialized.
 
 
 ### blt/core/backend.h
@@ -57,7 +67,7 @@
   - Behavior: checks the condition and does a BLT_FATAL call if cond is false.
 - `blt_check_nd_fp32(const blt_tensor* t, size_t ndim, const size_t* dims, const char* msg)`
   - Input: blt_tensor to check, number of dimensions, dimension array, and message string
-  - Behaviour: Validates an N-dimensional FP32 tensor. Pass 0 for any dimension in `dims` to skip that dimension's check.
+  - Behaviour: Validates an N-dimensional FP32 tensor, including a non-NULL data pointer. Pass 0 for any dimension in `dims` to skip that dimension's check.
 - `blt_check_elementwise_fp32(const blt_tensor* a, const blt_tensor* b, const char* msg)`
   - Input: two tensors and a message string
   - Behaviour: Validates that two tensors are FP32 and elementwise-compatible, regardless of rank
@@ -171,6 +181,10 @@
   - Input: two input data floats and size_t n.
   - Output: float dot product.
   - Behavior: computes the dot product in length n.
+- `blt_softmax_masked_row_inplace(row, row_len, row_idx, is_causal, mask_row, scale)`
+  - Input: contiguous FP32 row of length `row_len`, the row's index (for causal masking), `is_causal` flag, optional additive `mask_row` (same length; e.g. 0 or `-INFINITY` entries), and score `scale`.
+  - Output: softmaxed row in place.
+  - Behavior: numerically stable masked/causal row-softmax shared by self-attention and cross-attention. Masking takes precedence over causal masking when `mask_row != NULL`. Non-finite entries after masking contribute zero; a fully masked row yields all zeros. Raw-pointer utility, not a `blt_tensor` op.
 
 ### blt/ops/gelu.h
 - `blt_gelu_forward(x, out)`
@@ -253,7 +267,7 @@
     - `blt_patch_rule rule`: which rule to use
     - `bool reset_on_newline`: starts a new patch after `\n`    
 - `blt_segment_patches(entropy, bytes, patches_out, max_patches, config)`
-  - Input: 1D entropy tensor, uint8_t bytes array, output patch buffer, maximum patch count, and patcher config
+  - Input: 1D entropy tensor, uint8_t bytes array, output patch buffer, maximum patch count (must be >= 1), and patcher config
   - Output: returns the number of produced patches and fills `patches_out` with patch metadata
 
 ## blt/models/byte_embedding.h
@@ -353,7 +367,7 @@
   - Input: arena for storage and the stack to mirror.
   - Output: allocated, zero-initialized gradient struct matching the stack's shapes.
 - `blt_transformer_stack_call_config(const blt_transformer_stack* stack, size_t seq_len, blt_tensor* cos_view, blt_tensor* sin_view)`
-  - Input: stack, sequence length, and caller-owned RoPE views sized for `[seq_len, head_dim/2]`.
+  - Input: stack, sequence length (must be in `[1, max_seq_len]` — the RoPE views index into the shared cache), and caller-owned RoPE views sized for `[seq_len, head_dim/2]`.
   - Output: returns a per-call `blt_transformer_config` whose RoPE cache pointers are overwritten to that sequence-length view.
   - Behavior: copies the shared template config and allows callers to attach custom masks (e.g., a block-causal document mask) on the returned `attn_config.mask_config`.
 - `blt_transformer_stack_forward(const blt_transformer_stack* stack, const blt_tensor* x, const blt_transformer_config* call_cfg, size_t seq_len, blt_tensor* out, blt_arena* arena)`
@@ -466,7 +480,7 @@ Assembly of already-implemented pieces (byte embedding, RoPE-enabled transformer
 - `blt_rolling_hash_init(state, n, prime, modulus)`
   - Input: pointer to `blt_rolling_hash_state`, n-gram size `n`, base `prime`, and `modulus`.
   - Output: None. Initializes the state and precomputes `prime^n % modulus`.
-  - Behavior: Validates that `n` is in `[1, 8]` and `prime * modulus` does not overflow `uint64`.
+  - Behavior: Validates that `n` is in `[1, 8]` and that the rolling update's largest intermediate (`(modulus-1)*prime + 255`) does not overflow `uint64`.
 - `blt_rolling_hash_update(state, new_byte)`
   - Input: pointer to `blt_rolling_hash_state` and a `uint8_t` byte.
   - Output: Returns the hash of the current n-gram if `positions_seen >= n`. Returns `UINT64_MAX` if not enough bytes have been seen yet.
@@ -516,7 +530,31 @@ Assembly of already-implemented pieces (byte embedding, RoPE-enabled transformer
 - `blt_cross_attention_backward(query_in, kv_in, weights, grad_out, grad_query_in, grad_kv_in, grad_weights, config, arena)`
   - Input: Same `query_in`, `kv_in`, `weights`, `config`, and `arena` as forward, plus `grad_out` `[num_patches, embed_dim]` ($dL/d\text{Output}$).
   - Output: Writes input gradients into `grad_query_in` `[num_patches, embed_dim]`, `grad_kv_in` `[seq_len, embed_dim]`, and weight gradients into `grad_weights` (all overwritten).
-  - Behavior: Recomputes forward intermediates ($Q$, $K$, $V$, per-head attention probabilities) into `arena`, then computes reverse-pass gradients for query inputs, key/value inputs, and projection weights via `blt_matmul_backward` and `blt_softmax_backward`.
+  - Behavior: Recomputes forward intermediates ($Q$, $K$, $V$, per-head attention probabilities) into `arena`, then computes reverse-pass gradients for query inputs, key/value inputs, and projection weights via `blt_matmul_backward` and `blt_softmax_backward`. Note: the K and V input gradients are summed internally before being written to `grad_kv_in`, which is overwritten (not accumulated into).
+
+### blt/models/local_common.h
+
+Shared per-layer weight layout used by both the local encoder and local decoder. Each layer composes a cross-attention block (RMSNorm + QKV cross-attention) and a byte-level transformer block (causal self-attn + FFN); only the order of operations differs between the two models.
+
+- `blt_local_layer_storage` struct
+  - Fields: byte transformer block weights (`norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w`) and cross-attention block weights (`cross_norm_weight`, `cross_weight_q`, `cross_weight_k`, `cross_weight_v`, `cross_weight_proj`) — all owned storage.
+  - Note: `blt_local_encoder_layer_storage` and `blt_local_decoder_layer_storage` are typedef aliases of this type; field access through either name is valid.
+- `blt_local_layer_grad` struct
+  - Fields: gradient counterpart mirroring `blt_local_layer_storage`. The per-model types `blt_local_encoder_layer_grad` and `blt_local_decoder_layer_grad` are typedef aliases of this type.
+- `blt_local_layer_storage_alloc(arena, storage, embed_dim, hidden_dim)`
+  - Behavior: allocates all tensors of a shared layer storage (zero-initialized).
+- `blt_local_layer_grad_alloc(arena, grad, embed_dim, hidden_dim)`
+  - Behavior: allocates all tensors of a shared layer grad (zero-initialized).
+- `blt_local_cross_attn_fires(bool cross_attn_all_layers, size_t num_layers, size_t layer)`
+  - Output: whether cross-attention fires on `layer` — every layer when `cross_attn_all_layers`, otherwise only after the final layer.
+- `blt_local_byte_weights_view(const blt_local_layer_storage* s)`
+  - Output: `blt_transformer_weights` view of the byte-transformer block for use with `blt_transformer_forward`/`blt_transformer_layer_forward_cached`.
+- `blt_local_cross_weights_view(const blt_local_layer_storage* s)`
+  - Output: `blt_cross_attention_weights` view of the cross-attention block.
+- `blt_local_byte_grad_view(blt_local_layer_grad* lg)`
+  - Output: `blt_transformer_layer_grad` view of the byte-transformer block gradients for `blt_transformer_layer_backward`.
+- `blt_local_byte_layer_config(embed_dim, num_heads, rope_theta, hidden_dim, local_mask, rope_cos_view, rope_sin_view)`
+  - Output: `blt_transformer_config` for a byte-transformer layer: RMSNorm + SwiGLU + causal RoPE'd self-attention over `local_mask`.
 
 ### blt/models/local_encoder.h
 - `blt_local_encoder_config` struct
@@ -534,7 +572,7 @@ Assembly of already-implemented pieces (byte embedding, RoPE-enabled transformer
     - `float rope_theta`: Base frequency for Rotary Position Embeddings.
     - `size_t max_seq_len`: Maximum sequence length used to size the shared RoPE cache.
 - `blt_local_encoder_layer_storage` struct
-  - Fields: `norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w`, `cross_norm_weight`, `cross_weight_q`, `cross_weight_k`, `cross_weight_v`, `cross_weight_proj` — owned storage for layer weights.
+  - Alias of `blt_local_layer_storage` (see blt/models/local_common.h): `norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w`, `cross_norm_weight`, `cross_weight_q`, `cross_weight_k`, `cross_weight_v`, `cross_weight_proj` — owned storage for layer weights.
 - `blt_local_encoder` struct
   - Fields:
     - `blt_local_encoder_config config`: Encoder configuration parameters.
@@ -543,7 +581,7 @@ Assembly of already-implemented pieces (byte embedding, RoPE-enabled transformer
     - `blt_tensor rope_cos_cache`, `rope_sin_cache`: Precomputed RoPE tables `[max_seq_len, head_dim/2]`.
     - `blt_local_encoder_layer_storage* layers`: Array of per-layer storage blocks `[num_layers]`.
 - `blt_local_encoder_layer_grad` struct
-  - Fields: `norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w`, `cross_norm_weight`, `cross_weight_q`, `cross_weight_k`, `cross_weight_v`, `cross_weight_proj` — gradient storage per layer.
+  - Alias of `blt_local_layer_grad` (see blt/models/local_common.h) — gradient storage per layer.
 - `blt_local_encoder_grad` struct
   - Fields:
     - `blt_tensor embedding_grad`: Gradient table for byte embeddings `[256, embed_dim]` (scatter-add target).
@@ -582,7 +620,7 @@ Assembly of already-implemented pieces (byte embedding, RoPE-enabled transformer
     - `size_t max_seq_len`: Maximum sequence length used to size the shared RoPE cache.
     - `size_t vocab_size`: Vocabulary size for the LM head (typically 256).
 - `blt_local_decoder_layer_storage` struct
-  - Fields: Cross-attention block weights (`cross_norm_weight`, `cross_weight_q`, `cross_weight_k`, `cross_weight_v`, `cross_weight_proj`) and byte-transformer block weights (`norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w`).
+  - Alias of `blt_local_layer_storage` (see blt/models/local_common.h). Cross-attention block weights (`cross_norm_weight`, `cross_weight_q`, `cross_weight_k`, `cross_weight_v`, `cross_weight_proj`) and byte-transformer block weights (`norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w`).
 - `blt_local_decoder` struct
   - Fields:
     - `blt_local_decoder_config config`: Decoder configuration parameters.
@@ -590,7 +628,7 @@ Assembly of already-implemented pieces (byte embedding, RoPE-enabled transformer
     - `blt_local_decoder_layer_storage* layers`: Array of per-layer storage blocks `[num_layers]`.
     - `blt_tensor lm_head_weight`: Language-model head weights `[embed_dim, vocab_size]`.
 - `blt_local_decoder_layer_grad` struct
-  - Fields: Per-layer gradient storage mirroring `blt_local_decoder_layer_storage`.
+  - Alias of `blt_local_layer_grad` (see blt/models/local_common.h) — per-layer gradient storage mirroring `blt_local_decoder_layer_storage`.
 - `blt_local_decoder_grad` struct
   - Fields:
     - `blt_local_decoder_layer_grad* layer_grads`: Layer gradient structures `[num_layers]` (overwritten).

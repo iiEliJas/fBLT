@@ -15,7 +15,6 @@ blt_entropy_lm* blt_entropy_lm_create(blt_arena* arena, const blt_entropy_lm_con
         "blt_entropy_lm_create: arena and config cannot be NULL");
 
     blt_entropy_lm* model = (blt_entropy_lm*)blt_arena_alloc(arena, sizeof(blt_entropy_lm), sizeof(void*));
-    BLT_REQUIRE(model != NULL, "blt_entropy_lm_create: failed to allocate model struct");
     model->config = *config;
 
     size_t embed_dim = config->embed_dim;
@@ -48,7 +47,6 @@ blt_entropy_lm_grad* blt_entropy_lm_grad_create(blt_arena* arena, const blt_entr
         "blt_entropy_lm_grad_create: arena and model cannot be NULL");
 
     blt_entropy_lm_grad* grad = (blt_entropy_lm_grad*)blt_arena_alloc(arena, sizeof(blt_entropy_lm_grad), sizeof(void*));
-    BLT_REQUIRE(grad != NULL, "blt_entropy_lm_grad_create: failed to allocate grad struct");
 
     size_t embed_dim = model->config.embed_dim;
 
@@ -138,7 +136,8 @@ void blt_entropy_lm_forward(
     blt_tensor logits_full = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
     blt_matmul(&h, &model->lm_head_weight, &logits_full);
 
-    BLT_REQUIRE(logits_out->ndim == 2 && logits_out->shape[0] == seq_len && logits_out->shape[1] == 256,
+    BLT_REQUIRE(logits_out->ndim == 2 && logits_out->dtype == BLT_DTYPE_FP32 &&
+                logits_out->shape[0] == seq_len && logits_out->shape[1] == 256,
         "blt_entropy_lm_forward: logits_out must be [seq_len, 256] FP32");
     memcpy(logits_out->data, logits_full.data, blt_tensor_bytes(&logits_full));
 
@@ -164,9 +163,7 @@ void blt_entropy_lm_forward(
 
     // Slice target byte IDs for positions 1 to (seq_len - 1)
     blt_tensor shifted_targets;
-    size_t elem_size = blt_dtype_sizeof(bytes_in->dtype);
-    view_1d(&shifted_targets, (char*)bytes_in->data + elem_size, seq_len - 1,
-            bytes_in->dtype, bytes_in->backend);
+    view_1d_offset(&shifted_targets, bytes_in, 1, seq_len - 1);
 
     // Compute cross-entropy loss over shifted sequence
     blt_cross_entropy_forward(&shifted_logits, &shifted_targets, loss_out);
@@ -221,9 +218,7 @@ void blt_entropy_lm_backward(
     blt_tensor_view_2d(&shifted_logits, logits_full.data, seq_len - 1, 256, final_x.backend);
 
     blt_tensor shifted_targets;
-    size_t elem_size = blt_dtype_sizeof(bytes_in->dtype);
-    view_1d(&shifted_targets, (char*)bytes_in->data + elem_size, seq_len - 1,
-            bytes_in->dtype, bytes_in->backend);
+    view_1d_offset(&shifted_targets, bytes_in, 1, seq_len - 1);
 
 
     // ----------------
@@ -232,10 +227,10 @@ void blt_entropy_lm_backward(
     blt_tensor grad_shifted_logits = blt_tensor_create(arena, shifted_logits_shape, 2, BLT_DTYPE_FP32);
     blt_cross_entropy_backward(&shifted_logits, &shifted_targets, &grad_shifted_logits);
 
-    // The final logits row (predicting one byte past the sequence) never contributed to the loss
-    // => the incoming gradient is zero
+    // grad_logits_full is zero-initialized by blt_tensor_create; only rows
+    // [0, seq_len-1) receive gradient below -- the final row stays zero
+    // (it predicts one byte past the sequence and never contributed to the loss).
     blt_tensor grad_logits_full = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
-    zero_tensor(&grad_logits_full);
     memcpy(grad_logits_full.data, grad_shifted_logits.data, blt_tensor_bytes(&grad_shifted_logits));
 
     blt_tensor grad_final_x = blt_tensor_create(arena, x_shape, 2, BLT_DTYPE_FP32);

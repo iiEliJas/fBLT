@@ -8,6 +8,7 @@
 #include "blt/core/allocator.h"
 #include "blt/ops/patch_pool.h"
 #include "blt/models/patcher.h"
+#include "blt/models/local_common.h"
 
 typedef struct {
     size_t embed_dim;               // h_D
@@ -24,14 +25,9 @@ typedef struct {
 } blt_local_decoder_config;
 
 
-typedef struct {
-    // cross-attention block (runs first in this layer)
-    blt_tensor cross_norm_weight;
-    blt_tensor cross_weight_q, cross_weight_k, cross_weight_v, cross_weight_proj;
-    // byte transformer block (runs second: causal self-attn + FFN)
-    blt_tensor norm1_weight, attn_qkv_w, attn_proj_w;
-    blt_tensor norm2_weight, ffn_up_w, ffn_gate_w, ffn_down_w;
-} blt_local_decoder_layer_storage;
+// Per-layer weights: shared layout, see blt/models/local_common.h
+// (cross-attention block runs first in decoder layers, byte transformer second)
+typedef blt_local_layer_storage blt_local_decoder_layer_storage;
 
 
 typedef struct {
@@ -42,12 +38,8 @@ typedef struct {
 } blt_local_decoder;
 
 
-typedef struct {
-    blt_tensor cross_norm_weight;
-    blt_tensor cross_weight_q, cross_weight_k, cross_weight_v, cross_weight_proj;
-    blt_tensor norm1_weight, attn_qkv_w, attn_proj_w;
-    blt_tensor norm2_weight, ffn_up_w, ffn_gate_w, ffn_down_w;
-} blt_local_decoder_layer_grad;
+// Gradient counterpart of blt_local_decoder_layer_storage (shared layout)
+typedef blt_local_layer_grad blt_local_decoder_layer_grad;
 
 typedef struct {
     blt_local_decoder_layer_grad* layer_grads;   // [num_layers]

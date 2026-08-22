@@ -38,7 +38,6 @@ blt_model* blt_model_create(blt_arena* arena, const blt_model_config* config) {
         "blt_model_create: encoder/global/decoder embed_dim must match (shared hidden width)");
 
     blt_model* model = (blt_model*)blt_arena_alloc(arena, sizeof(blt_model), sizeof(void*));
-    BLT_REQUIRE(model != NULL, "blt_model_create: failed to allocate model struct");
     model->config = *config;
 
     model->encoder = blt_local_encoder_create(arena, &config->encoder_config);
@@ -55,7 +54,6 @@ blt_model_grad* blt_model_grad_create(blt_arena* arena, const blt_model* model) 
         "blt_model_grad_create: arena and model cannot be NULL");
 
     blt_model_grad* grad = (blt_model_grad*)blt_arena_alloc(arena, sizeof(blt_model_grad), sizeof(void*));
-    BLT_REQUIRE(grad != NULL, "blt_model_grad_create: failed to allocate grad struct");
 
     grad->encoder_grad = blt_local_encoder_grad_create(arena, model->encoder);
     grad->global_grad  = blt_global_transformer_grad_create(arena, model->global);
@@ -91,6 +89,8 @@ void blt_model_forward(
         "blt_model_forward: arguments cannot be NULL");
     BLT_REQUIRE(bytes_in->ndim == 1 && bytes_in->dtype == BLT_DTYPE_UINT8,
         "blt_model_forward: bytes_in must be a 1D UINT8 tensor [seq_len]");
+    BLT_REQUIRE(num_docs == 0 || doc_boundaries != NULL,
+        "blt_model_forward: doc_boundaries cannot be NULL when num_docs > 0");
     BLT_REQUIRE(num_patches >= 1, "blt_model_forward: num_patches must be >= 1");
 
     size_t seq_len = bytes_in->shape[0];
@@ -114,8 +114,6 @@ void blt_model_forward(
     if (num_docs > 0) {
         patch_doc_boundaries = (size_t*)blt_arena_alloc(
             arena, num_docs * sizeof(size_t), sizeof(size_t));
-        BLT_REQUIRE(patch_doc_boundaries != NULL,
-            "blt_model_forward: failed to allocate patch_doc_boundaries");
         map_byte_boundaries_to_patch_boundaries(
             doc_boundaries, num_docs, patches, num_patches, patch_doc_boundaries);
     }
@@ -158,6 +156,8 @@ void blt_model_backward(
         "blt_model_backward: arguments cannot be NULL");
     BLT_REQUIRE(bytes_in->ndim == 1 && bytes_in->dtype == BLT_DTYPE_UINT8,
         "blt_model_backward: bytes_in must be a 1D UINT8 tensor [seq_len]");
+    BLT_REQUIRE(num_docs == 0 || doc_boundaries != NULL,
+        "blt_model_backward: doc_boundaries cannot be NULL when num_docs > 0");
     BLT_REQUIRE(num_patches >= 1, "blt_model_backward: num_patches must be >= 1");
 
     size_t seq_len = bytes_in->shape[0];
@@ -177,8 +177,6 @@ void blt_model_backward(
     if (num_docs > 0) {
         patch_doc_boundaries = (size_t*)blt_arena_alloc(
             arena, num_docs * sizeof(size_t), sizeof(size_t));
-        BLT_REQUIRE(patch_doc_boundaries != NULL,
-            "blt_model_backward: failed to allocate patch_doc_boundaries");
         map_byte_boundaries_to_patch_boundaries(
             doc_boundaries, num_docs, patches, num_patches, patch_doc_boundaries);
     }

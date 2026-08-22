@@ -23,7 +23,6 @@ static blt_transformer_config make_patch_layer_config(
 
     blt_mask_config* mask_cfg = (blt_mask_config*)blt_arena_alloc(
         arena, sizeof(blt_mask_config), sizeof(void*));
-    BLT_REQUIRE(mask_cfg != NULL, "make_patch_layer_config: failed to allocate mask_cfg");
     *mask_cfg = (blt_mask_config){0};
 
     mask_cfg->seq_len_q = num_patches;
@@ -52,7 +51,6 @@ blt_global_transformer* blt_global_transformer_create(blt_arena* arena, const bl
 
     blt_global_transformer* model = (blt_global_transformer*)blt_arena_alloc(
         arena, sizeof(blt_global_transformer), sizeof(void*));
-    BLT_REQUIRE(model != NULL, "blt_global_transformer_create: failed to allocate model struct");
     model->config = *config;
 
     // No embedding table and no LM head here 
@@ -78,7 +76,6 @@ blt_global_transformer_grad* blt_global_transformer_grad_create(blt_arena* arena
 
     blt_global_transformer_grad* grad = (blt_global_transformer_grad*)blt_arena_alloc(
         arena, sizeof(blt_global_transformer_grad), sizeof(void*));
-    BLT_REQUIRE(grad != NULL, "blt_global_transformer_grad_create: failed to allocate grad struct");
 
     grad->stack_grad = blt_transformer_stack_grad_create(arena, &model->stack);
 
@@ -108,6 +105,8 @@ void blt_global_transformer_forward(
 ) {
     BLT_REQUIRE(model != NULL && patch_in != NULL && patch_out != NULL && arena != NULL,
         "blt_global_transformer_forward: arguments cannot be NULL");
+    BLT_REQUIRE(num_docs == 0 || doc_boundaries != NULL,
+        "blt_global_transformer_forward: doc_boundaries cannot be NULL when num_docs > 0");
     BLT_REQUIRE(patch_in->ndim == 2 && patch_in->dtype == BLT_DTYPE_FP32,
         "blt_global_transformer_forward: patch_in must be a 2D FP32 tensor [num_patches, embed_dim]");
 
@@ -118,7 +117,8 @@ void blt_global_transformer_forward(
     BLT_REQUIRE(num_patches >= 1, "blt_global_transformer_forward: num_patches must be >= 1");
     BLT_REQUIRE(num_patches <= model->config.max_seq_len,
         "blt_global_transformer_forward: num_patches exceeds the model's max_seq_len (RoPE cache too small)");
-    BLT_REQUIRE(patch_out->ndim == 2 && patch_out->shape[0] == num_patches && patch_out->shape[1] == embed_dim,
+    BLT_REQUIRE(patch_out->ndim == 2 && patch_out->dtype == BLT_DTYPE_FP32 &&
+                patch_out->shape[0] == num_patches && patch_out->shape[1] == embed_dim,
         "blt_global_transformer_forward: patch_out must be [num_patches, embed_dim] FP32");
 
     blt_tensor rope_cos_view, rope_sin_view, mask;
@@ -158,6 +158,8 @@ void blt_global_transformer_backward(
     BLT_REQUIRE(model != NULL && patch_in != NULL && grad_patch_out != NULL &&
                 grad_patch_in != NULL && grad != NULL && arena != NULL,
         "blt_global_transformer_backward: arguments cannot be NULL");
+    BLT_REQUIRE(num_docs == 0 || doc_boundaries != NULL,
+        "blt_global_transformer_backward: doc_boundaries cannot be NULL when num_docs > 0");
     BLT_REQUIRE(patch_in->ndim == 2 && patch_in->dtype == BLT_DTYPE_FP32,
         "blt_global_transformer_backward: patch_in must be a 2D FP32 tensor [num_patches, embed_dim]");
 
@@ -172,8 +174,8 @@ void blt_global_transformer_backward(
     BLT_REQUIRE(grad_patch_out->ndim == 2 && grad_patch_out->shape[0] == num_patches &&
                 grad_patch_out->shape[1] == embed_dim,
         "blt_global_transformer_backward: grad_patch_out must be [num_patches, embed_dim] FP32");
-    BLT_REQUIRE(grad_patch_in->ndim == 2 && grad_patch_in->shape[0] == num_patches &&
-                grad_patch_in->shape[1] == embed_dim,
+    BLT_REQUIRE(grad_patch_in->ndim == 2 && grad_patch_in->dtype == BLT_DTYPE_FP32 &&
+                grad_patch_in->shape[0] == num_patches && grad_patch_in->shape[1] == embed_dim,
         "blt_global_transformer_backward: grad_patch_in must be [num_patches, embed_dim] FP32");
 
     blt_tensor rope_cos_view, rope_sin_view, mask;

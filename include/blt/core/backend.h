@@ -30,6 +30,7 @@
 // Validates an N-dimensional FP32 tensor. Pass 0 for any dimension in `dims` to skip that dimension's check.
 static inline void blt_check_nd_fp32(const blt_tensor* t, size_t ndim, const size_t* dims, const char* msg) {
     BLT_REQUIRE(t != NULL, "%s", msg);
+    BLT_REQUIRE(t->data != NULL, "%s", msg);
     BLT_REQUIRE(t->dtype == BLT_DTYPE_FP32, "%s", msg);
     BLT_REQUIRE(t->ndim == ndim, "%s", msg);
     BLT_REQUIRE(ndim <= BLT_MAX_NDIM, "ndim exceeds BLT_MAX_NDIM");

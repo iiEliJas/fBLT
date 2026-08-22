@@ -9,6 +9,7 @@
 #include "blt/ops/patch_pool.h"
 #include "blt/models/patcher.h"
 #include "blt/models/hash_ngram.h"
+#include "blt/models/local_common.h"
 
 //----------------------------------------------------------------
 // Local Encoder
@@ -33,21 +34,8 @@ typedef struct {
 } blt_local_encoder_config;
 
 
-typedef struct {
-    blt_tensor norm1_weight;       // [embed_dim]
-    blt_tensor attn_qkv_w;         // [embed_dim, 3 * embed_dim]
-    blt_tensor attn_proj_w;        // [embed_dim, embed_dim]
-    blt_tensor norm2_weight;       // [embed_dim]
-    blt_tensor ffn_up_w;           // [embed_dim, hidden_dim]
-    blt_tensor ffn_gate_w;         // [embed_dim, hidden_dim]
-    blt_tensor ffn_down_w;         // [hidden_dim, embed_dim]
-    // Cross-attention weights (allocated on every layer)
-    blt_tensor cross_norm_weight;  // [embed_dim]
-    blt_tensor cross_weight_q;     // [embed_dim, embed_dim]
-    blt_tensor cross_weight_k;     // [embed_dim, embed_dim]
-    blt_tensor cross_weight_v;     // [embed_dim, embed_dim]
-    blt_tensor cross_weight_proj;  // [embed_dim, embed_dim]
-} blt_local_encoder_layer_storage;
+// Per-layer weights: shared layout, see blt/models/local_common.h
+typedef blt_local_layer_storage blt_local_encoder_layer_storage;
 
 
 typedef struct {
@@ -60,21 +48,8 @@ typedef struct {
 } blt_local_encoder;
 
 
-// Gradient counterpart of blt_local_encoder_layer_storage
-typedef struct {
-    blt_tensor norm1_weight;
-    blt_tensor attn_qkv_w;
-    blt_tensor attn_proj_w;
-    blt_tensor norm2_weight;
-    blt_tensor ffn_up_w;
-    blt_tensor ffn_gate_w;
-    blt_tensor ffn_down_w;
-    blt_tensor cross_norm_weight;
-    blt_tensor cross_weight_q;
-    blt_tensor cross_weight_k;
-    blt_tensor cross_weight_v;
-    blt_tensor cross_weight_proj;
-} blt_local_encoder_layer_grad;
+// Gradient counterpart of blt_local_encoder_layer_storage (shared layout)
+typedef blt_local_layer_grad blt_local_encoder_layer_grad;
 
 
 // Gradient counterpart of blt_local_encoder.

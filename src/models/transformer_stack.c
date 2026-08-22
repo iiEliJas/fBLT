@@ -27,6 +27,7 @@ void blt_transformer_stack_init(
     size_t hidden_dim = config->hidden_dim;
     size_t num_heads  = config->num_heads;
     size_t head_dim   = embed_dim / num_heads;
+    BLT_REQUIRE(head_dim % 2 == 0, "blt_transformer_stack_init: RoPE requires an even head_dim");
 
     stack->num_layers  = config->num_layers;
     stack->embed_dim    = embed_dim;
@@ -66,8 +67,6 @@ void blt_transformer_stack_init(
         arena, config->num_layers * sizeof(blt_transformer_layer_storage), sizeof(void*));
     stack->layer_weights = (blt_transformer_weights*)blt_arena_alloc(
         arena, config->num_layers * sizeof(blt_transformer_weights), sizeof(void*));
-    BLT_REQUIRE(stack->layer_storage != NULL && stack->layer_weights != NULL,
-        "blt_transformer_stack_init: failed to allocate layer arrays");
 
     for (size_t l = 0; l < config->num_layers; ++l) {
         blt_transformer_layer_storage* s = &stack->layer_storage[l];
@@ -112,7 +111,6 @@ blt_transformer_stack_grad* blt_transformer_stack_grad_create(
 
     blt_transformer_stack_grad* grad = (blt_transformer_stack_grad*)blt_arena_alloc(
         arena, sizeof(blt_transformer_stack_grad), sizeof(void*));
-    BLT_REQUIRE(grad != NULL, "blt_transformer_stack_grad_create: failed to allocate grad struct");
 
     size_t embed_dim  = stack->embed_dim;
     size_t hidden_dim = stack->hidden_dim;
@@ -120,7 +118,6 @@ blt_transformer_stack_grad* blt_transformer_stack_grad_create(
 
     grad->layer_grads = (blt_transformer_layer_grad*)blt_arena_alloc(
         arena, num_layers * sizeof(blt_transformer_layer_grad), sizeof(void*));
-    BLT_REQUIRE(grad->layer_grads != NULL, "blt_transformer_stack_grad_create: failed to allocate layer grads");
 
     for (size_t l = 0; l < num_layers; ++l) {
         blt_transformer_layer_grad* lg = &grad->layer_grads[l];
@@ -155,6 +152,11 @@ blt_transformer_config blt_transformer_stack_call_config(
     const blt_transformer_stack* stack, size_t seq_len,
     blt_tensor* cos_view, blt_tensor* sin_view
 ) {
+    BLT_REQUIRE(stack != NULL && cos_view != NULL && sin_view != NULL,
+        "blt_transformer_stack_call_config: stack, cos_view, and sin_view cannot be NULL");
+    BLT_REQUIRE(seq_len >= 1 && seq_len <= stack->max_seq_len,
+        "blt_transformer_stack_call_config: seq_len must be in [1, max_seq_len] (RoPE cache too small)");
+
     size_t half = stack->head_dim / 2;
     blt_tensor_view_2d(cos_view, stack->rope_cos_cache.data, seq_len, half, stack->rope_cos_cache.backend);
     blt_tensor_view_2d(sin_view, stack->rope_sin_cache.data, seq_len, half, stack->rope_sin_cache.backend);
@@ -225,7 +227,6 @@ blt_transformer_layer_cache* blt_transformer_layer_forward_cached(
 
     blt_transformer_layer_cache* cache = (blt_transformer_layer_cache*)blt_arena_alloc(
         arena, sizeof(blt_transformer_layer_cache), sizeof(void*));
-    BLT_REQUIRE(cache != NULL, "blt_transformer_layer_forward_cached: failed to allocate cache");
 
     size_t embed_shape[2] = { seq_len, embed_dim };
     size_t hidden_shape[2] = { seq_len, hidden_dim };
@@ -342,12 +343,10 @@ blt_transformer_stack_cache* blt_transformer_stack_forward_cached(
 
     blt_transformer_stack_cache* cache = (blt_transformer_stack_cache*)blt_arena_alloc(
         arena, sizeof(blt_transformer_stack_cache), sizeof(void*));
-    BLT_REQUIRE(cache != NULL, "blt_transformer_stack_forward_cached: failed to allocate cache struct");
 
     cache->num_layers = stack->num_layers;
     cache->layers = (blt_transformer_layer_cache**)blt_arena_alloc(
         arena, stack->num_layers * sizeof(blt_transformer_layer_cache*), sizeof(void*));
-    BLT_REQUIRE(cache->layers != NULL, "blt_transformer_stack_forward_cached: failed to allocate layer cache array");
 
     blt_tensor cur = *x;
     for (size_t l = 0; l < stack->num_layers; ++l) {

@@ -19,7 +19,9 @@ void blt_rolling_hash_init(blt_rolling_hash_state* state, size_t n, uint64_t pri
     BLT_REQUIRE(n > 0 && n <= 8, "blt_rolling_hash_init: n must be in [1, 8]");
     BLT_REQUIRE(modulus > 1, "blt_rolling_hash_init: modulus must be > 1");
     
-    BLT_REQUIRE(prime > 0 && prime < (UINT64_MAX / modulus),
+    // Reserve headroom for the +byte term in the rolling update:
+    // max intermediate is (modulus-1)*prime + 255, which must stay in uint64.
+    BLT_REQUIRE(prime > 0 && prime <= ((UINT64_MAX - 255) / modulus),
                 "blt_rolling_hash_init: prime * modulus would overflow uint64");
 
     state->prime = prime;

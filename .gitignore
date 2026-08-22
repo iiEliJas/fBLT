@@ -8,4 +8,8 @@ obj/
 __pycache__/
 .venv
 .opencode/
+.cache/
+opencode.json
+AGENTS.md
+compile_commands.json
 

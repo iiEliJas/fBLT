@@ -58,7 +58,8 @@ CORE_SRCS := \
 	$(SRC_DIR)/models/transformer_stack.c \
     $(SRC_DIR)/models/entropy_lm.c \
 	$(SRC_DIR)/models/hash_ngram.c \
-	$(SRC_DIR)/models/local_encoder.c \
+ 	$(SRC_DIR)/models/local_common.c \
+ 	$(SRC_DIR)/models/local_encoder.c \
 	$(SRC_DIR)/models/local_decoder.c \
 	$(SRC_DIR)/models/global_transformer.c \
 	$(SRC_DIR)/models/model.c
