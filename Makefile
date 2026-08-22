@@ -42,6 +42,7 @@ endif
 
 CORE_SRCS := \
     $(SRC_DIR)/core/tensor.c \
+    $(SRC_DIR)/core/json.c \
     $(SRC_DIR)/core/allocator.c \
     $(SRC_DIR)/core/backend.c \
     $(SRC_DIR)/backend_cpu/elementwise_cpu.c \

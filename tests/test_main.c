@@ -21,6 +21,7 @@ typedef struct {
 int main(void) {
     const test_case core_tests[] = {
         {"tensor core helpers", run_tensor_core_tests},
+        {"json parser", run_json_parser_tests},
         {"allocator core helpers", run_allocator_core_tests},
         {"backend dispatch", run_backend_core_tests},
 

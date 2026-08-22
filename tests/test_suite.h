@@ -2,6 +2,7 @@
 #define BLT_TEST_SUITE_H
 
 int run_tensor_core_tests(void);
+int run_json_parser_tests(void);
 int run_allocator_core_tests(void);
 int run_backend_core_tests(void);
 

@@ -96,6 +96,36 @@
   - Output: blt_tensor - a zero-initialized tensor with allocated storage.
 
 
+### blt/core/json.h
+Minimal JSON parser for config files (objects, arrays of scalars, string/int/float/bool/null). All allocation comes from the caller-passed `blt_arena`; malformed input is fatal via `BLT_FATAL`.
+- `blt_json_type` enum: `BLT_JSON_NULL`, `BLT_JSON_BOOL`, `BLT_JSON_INT`, `BLT_JSON_FLOAT`, `BLT_JSON_STRING`, `BLT_JSON_ARRAY`, `BLT_JSON_OBJECT`.
+- `blt_json_value` struct
+  - Fields:
+    - `blt_json_type type`: discriminator.
+    - `bool bool_val`, `int64_t int_val`, `double float_val`: scalar payloads.
+    - `char* str_val`, `size_t str_len`: string payload (arena-owned, NUL-terminated).
+    - `blt_json_value** children`, `char** keys`: array/object children; `keys` parallel to `children` for objects, NULL for arrays.
+  - Note: numbers containing `.`, `e`, or `E` parse as FLOAT, otherwise INT. Accessors convert between INT and FLOAT where lossless.
+- `blt_json_parse(blt_arena* arena, const char* text)`
+  - Input: arena and a NUL-terminated JSON document.
+  - Output: parsed root value; fatal on malformed input (byte offset included in message).
+- `blt_json_parse_file(blt_arena* arena, const char* path)`
+  - Input: arena and path to a JSON file.
+  - Output: parsed root value; fatal on unreadable file or malformed input.
+- `blt_json_get(const blt_json_value* obj, const char* key)`
+  - Input: object value and key.
+  - Output: pointer to the child value, or NULL if missing / not an object.
+- `blt_json_get_bool/get_int/get_float/get_string(obj, key, fallback)`
+  - Input: object value, key, fallback returned when key missing or type incompatible.
+  - Output: typed scalar; never fatal.
+- `blt_json_array_size(const blt_json_value* arr)` / `blt_json_array_at(const blt_json_value* arr, size_t i)`
+  - Input: array value (and index).
+  - Output: child count (0 for non-arrays) / child at index (NULL out of range).
+- `blt_json_as_bool/as_int/as_float/as_string(const blt_json_value* v)`
+  - Input: value of the matching type.
+  - Output: typed scalar; fatal on type mismatch (INT/FLOAT interconvert).
+
+
 
 ------------------------------------------------------------------------------------------------------------
 ## Operator APIs
