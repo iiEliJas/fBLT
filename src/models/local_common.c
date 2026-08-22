@@ -57,8 +57,17 @@ void blt_local_layer_grad_alloc(blt_arena* arena, blt_local_layer_grad* g,
 //----------------------------------------------------------------------
 // Config / view helpers
 
-bool blt_local_cross_attn_fires(bool cross_attn_all_layers, size_t num_layers, size_t layer) {
-    return cross_attn_all_layers || (layer + 1 == num_layers);
+bool blt_local_cross_attn_fires(blt_xattn_placement placement,
+                                bool cross_attn_all_layers, size_t num_layers, size_t layer) {
+    switch (placement) {
+        case BLT_XATTN_NONE: return false;
+        case BLT_XATTN_LAST: return layer + 1 == num_layers;
+        case BLT_XATTN_ALL: return true;
+        case BLT_XATTN_FIRST: return layer == 0;
+        case BLT_XATTN_DEFAULT:
+        default:
+            return cross_attn_all_layers || (layer + 1 == num_layers);
+    }
 }
 
 

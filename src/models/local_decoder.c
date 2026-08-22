@@ -299,7 +299,7 @@ void blt_local_decoder_forward(const blt_local_decoder* model,
         const blt_local_decoder_layer_storage* s = &model->layers[l];
         blt_tensor b;
 
-        if (blt_local_cross_attn_fires(config->cross_attn_all_layers, config->num_layers, l)) {
+        if (blt_local_cross_attn_fires(config->cross_attn_placement, config->cross_attn_all_layers, config->num_layers, l)) {
             blt_tensor normed_d = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
             blt_rmsnorm_forward(&d, &s->cross_norm_weight, &normed_d);
 
@@ -425,7 +425,7 @@ void blt_local_decoder_backward(const blt_local_decoder* model,
         c->d_in = d[l];
 
         blt_tensor b;
-        if (blt_local_cross_attn_fires(config->cross_attn_all_layers, config->num_layers, l)) {
+        if (blt_local_cross_attn_fires(config->cross_attn_placement, config->cross_attn_all_layers, config->num_layers, l)) {
             c->has_cross = true;
 
             c->normed_d = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);

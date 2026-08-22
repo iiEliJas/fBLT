@@ -19,6 +19,7 @@ typedef struct {
     size_t cross_attn_heads;
     size_t local_window;            // 0 = full causal, else causal sliding window
     bool cross_attn_all_layers;     // paper finding: decoder wants "All Layers" (Table 7), unlike encoder's "Last Layer" default — still a config knob, not hardcoded
+    blt_xattn_placement cross_attn_placement; // sweep knob; DEFAULT = use the bool above
     float rope_theta;
     size_t max_seq_len;
     size_t vocab_size;              // 256, for the LM head

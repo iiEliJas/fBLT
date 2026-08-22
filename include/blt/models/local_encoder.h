@@ -27,6 +27,7 @@ typedef struct {
     size_t cross_attn_heads;        // Cross-attention heads (U_E)
     size_t local_window;            // Window w_E for byte self-attn (0 = full causal)
     bool cross_attn_all_layers;     // false = cross-attn only after final layer
+    blt_xattn_placement cross_attn_placement; // sweep knob; DEFAULT = use the bool above
     blt_patch_pool_type pool_type;  // Init strategy for P_0 (default: MEAN)
     blt_hash_ngram_config ngram_config; // embed_dim must match config.embed_dim
     float rope_theta;               // RoPE base frequency

@@ -65,9 +65,22 @@ void blt_local_layer_grad_alloc(blt_arena* arena, blt_local_layer_grad* g,
                                 size_t embed_dim, size_t hidden_dim);
 
 
+// Cross-attention placement modes for the ablation sweeps (paper Table 7).
+// BLT_XATTN_DEFAULT keeps the legacy bool behavior of cross_attn_all_layers;
+// explicit modes override it. FIRST is only meaningful for the local decoder.
+typedef enum {
+    BLT_XATTN_DEFAULT = 0,
+    BLT_XATTN_NONE,
+    BLT_XATTN_LAST,
+    BLT_XATTN_ALL,
+    BLT_XATTN_FIRST
+} blt_xattn_placement;
+
 // Cross-attention fires on every layer when cross_attn_all_layers is set,
-// otherwise only after the final layer.
-bool blt_local_cross_attn_fires(bool cross_attn_all_layers, size_t num_layers, size_t layer);
+// otherwise only after the final layer. An explicit placement (anything but
+// BLT_XATTN_DEFAULT) overrides the bool entirely.
+bool blt_local_cross_attn_fires(blt_xattn_placement placement,
+                                bool cross_attn_all_layers, size_t num_layers, size_t layer);
 
 
 // Views of a shared layer's tensors as the op-level weight/grad structs

@@ -575,8 +575,9 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
   - Behavior: allocates all tensors of a shared layer storage (zero-initialized).
 - `blt_local_layer_grad_alloc(arena, grad, embed_dim, hidden_dim)`
   - Behavior: allocates all tensors of a shared layer grad (zero-initialized).
-- `blt_local_cross_attn_fires(bool cross_attn_all_layers, size_t num_layers, size_t layer)`
-  - Output: whether cross-attention fires on `layer` — every layer when `cross_attn_all_layers`, otherwise only after the final layer.
+- `blt_xattn_placement` enum: `BLT_XATTN_DEFAULT` (legacy bool behavior), `BLT_XATTN_NONE`, `BLT_XATTN_LAST`, `BLT_XATTN_ALL`, `BLT_XATTN_FIRST` (decoder-only). Sweep knob for cross-attention placement (paper Table 7).
+- `blt_local_cross_attn_fires(blt_xattn_placement placement, bool cross_attn_all_layers, size_t num_layers, size_t layer)`
+  - Output: whether cross-attention fires on `layer`. An explicit placement overrides the legacy bool; `BLT_XATTN_DEFAULT` falls back to `cross_attn_all_layers || (layer + 1 == num_layers)`.
 - `blt_local_byte_weights_view(const blt_local_layer_storage* s)`
   - Output: `blt_transformer_weights` view of the byte-transformer block for use with `blt_transformer_forward`/`blt_transformer_layer_forward_cached`.
 - `blt_local_cross_weights_view(const blt_local_layer_storage* s)`
@@ -595,8 +596,8 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
     - `size_t hidden_dim`: Intermediate hidden width for FFN projections.
     - `size_t num_heads`: Number of byte self-attention heads.
     - `size_t cross_attn_heads`: Number of cross-attention heads ($U_E$).
-    - `size_t local_window`: Sliding window size ($w_E$) for byte self-attention (0 = full causal).
     - `bool cross_attn_all_layers`: If `false`, cross-attention fires only after the final layer.
+    - `blt_xattn_placement cross_attn_placement`: sweep knob overriding the bool above when not `BLT_XATTN_DEFAULT`.
     - `blt_patch_pool_type pool_type`: Initialization strategy for initial patch representations $P_0$ (default: MEAN).
     - `blt_hash_ngram_config ngram_config`: Hash n-gram config; `ngram_config.embed_dim` must match `embed_dim`.
     - `float rope_theta`: Base frequency for Rotary Position Embeddings.
@@ -649,6 +650,7 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
     - `float rope_theta`: Base frequency for Rotary Position Embeddings.
     - `size_t max_seq_len`: Maximum sequence length used to size the shared RoPE cache.
     - `size_t vocab_size`: Vocabulary size for the LM head (typically 256).
+    - `blt_xattn_placement cross_attn_placement`: sweep knob (`NONE`/`FIRST`/`ALL`) overriding `cross_attn_all_layers` when not `BLT_XATTN_DEFAULT`.
 - `blt_local_decoder_layer_storage` struct
   - Alias of `blt_local_layer_storage` (see blt/models/local_common.h). Cross-attention block weights (`cross_norm_weight`, `cross_weight_q`, `cross_weight_k`, `cross_weight_v`, `cross_weight_proj`) and byte-transformer block weights (`norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w`).
 - `blt_local_decoder` struct

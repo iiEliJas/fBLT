@@ -316,7 +316,7 @@ void blt_local_encoder_forward(const blt_local_encoder* model,
         blt_transformer_forward(&h, &w, &h_next, &layer_config, arena);
         h = h_next;   // byte states after transformer
 
-        if (blt_local_cross_attn_fires(config->cross_attn_all_layers, config->num_layers, l)) {
+        if (blt_local_cross_attn_fires(config->cross_attn_placement, config->cross_attn_all_layers, config->num_layers, l)) {
             // Reinterpret [num_patches, patch_dim] as [num_patches*k, E] BEFORE the norm
             blt_tensor p_view;
             blt_tensor_view_2d(&p_view, p.data, num_patches * k, E, p.backend);
@@ -451,7 +451,7 @@ void blt_local_encoder_backward(const blt_local_encoder* model,
         c->byte_cache = blt_transformer_layer_forward_cached(
             &h[l], &w, &layer_config, arena, seq_len, E, config->hidden_dim, &h[l + 1]);
 
-        if (blt_local_cross_attn_fires(config->cross_attn_all_layers, config->num_layers, l)) {
+        if (blt_local_cross_attn_fires(config->cross_attn_placement, config->cross_attn_all_layers, config->num_layers, l)) {
             c->has_cross = true;
             c->p_in = p;   // P_l before cross-attn
 
