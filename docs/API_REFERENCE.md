@@ -726,3 +726,45 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
   - Embedding → N `blt_transformer_forward` calls → LM head matmul → shifted-target `blt_cross_entropy_forward`.
 - `blt_entropy_lm_backward(...)`
   - Recomputes each layer's forward pass with caching (mirroring `blt_multihead_attention_backward`'s own recompute pattern, since `blt_transformer_forward` doesn't expose intermediates), then walks the graph in reverse using each op's existing backward.
+
+## Benchmark Harness
+
+### bench/harness.h / bench/harness.c
+Shared, backend-agnostic benchmark infrastructure used by the Phase 5/6 ablation sweeps. Latency samples are collected as `double` seconds; the raw timer works in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`.
+
+- `void bench_timer_start(void)`
+  - Records the current monotonic clock reading into a static timestamp.
+- `uint64_t bench_timer_stop_ns(void)`
+  - Returns elapsed nanoseconds since the last `bench_timer_start()`.
+- `double bench_timer_stop_sec(void)`
+  - Convenience wrapper: `bench_timer_stop_ns()` converted to seconds.
+- `bench_stats` (struct)
+  - `n`, `mean`, `stddev` (population), `min`, `max`, `p50`, `p90`, `p99` — all seconds except `n`. Percentiles use nearest-rank on a sorted copy of the samples.
+- `void bench_stats_compute(bench_stats* out, const double* samples, size_t n)`
+  - Computes all stats fields from a raw sample array; callers must discard cold-cache/warmup samples before calling.
+- `bench_kv` (struct)
+  - Fixed-size (`BENCH_KEY_LEN = 32`) key plus `double` value entry for domain metrics.
+- `bench_result` (struct)
+  - `name` (`BENCH_NAME_LEN = 64`), `tag` and `phase` (`BENCH_TAG_LEN = 64`), a `bench_stats latency`, and a flat metric map of up to `BENCH_MAX_METRICS = 16` `bench_kv` entries.
+- `void bench_result_init(bench_result* r, const char* name, const char* tag, const char* phase)`
+  - Zeroes the result and copies the identifying strings (truncating to capacity).
+- `void bench_result_add_metric(bench_result* r, const char* key, double value)`
+  - Adds a domain metric (BPB, NFEs, GB/s, ...); overwrites the value if `key` already exists. Fatal error when the map is full.
+- `typedef void (*bench_fn)(void* arg)`
+  - Workload callback type for `bench_collect_samples`.
+- `void bench_collect_samples(bench_fn fn, void* arg, size_t warmup, size_t iterations, double* samples)`
+  - Runs one cold-cache pass (measured but discarded), then `warmup` unmeasured runs, then times `iterations` runs into `samples` (seconds; array must hold at least `iterations`). Plan rule of thumb: `iterations >= 20`.
+- `int bench_write_json(const char* path, const bench_result* r)`
+  - Appends exactly one JSON line to `path` (typically `bench/results.jsonl`): `{"timestamp":<unix_s>,"phase":...,"name":...,"tag":...,"latency":{...},"metrics":{...}}` with latency in seconds. Line-delimited so killed/partial runs never corrupt history. Returns 0 on success, -1 on I/O failure.
+
+### tools/bench_report.py
+Python reporting tool for `bench/results.jsonl` (last record per `(name, tag)` wins).
+
+- `--results PATH` — input JSONL (default `bench/results.jsonl`)
+- `--phase/--tag/--name X` — repeatable filters
+- `--baseline TAG` — adds `%delta` columns vs that tag's run; `(+)` improvement / `(-)` regression assuming lower-is-better
+- `--sort KEY` — sort rows by latency field or metric key
+- `--x KEY --y KEY --plot PNG` — scatter plot of two keys (requires matplotlib)
+
+### tests/bench/bench_harness_selftest.c (bin via `make bench-harness`)
+Self-test for the harness exit criteria: measures a fixed deterministic workload twice and requires the two means to agree within 2%, sanity-checks stats ordering, then writes two dummy JSONL entries (tags `dummy_a`/`dummy_b`) for verifying `tools/bench_report.py`'s delta table. Exit code 0 = pass.

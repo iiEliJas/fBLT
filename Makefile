@@ -12,6 +12,7 @@ TOOLS_DIR := tools
 RUN_DIR := run
 OBJ_DIR := obj
 BIN_DIR := bin
+BENCH_DIR := bench
 
 
 # ============================================================================
@@ -80,13 +81,16 @@ TEST_SRCS := \
 # ============================================================================
 CORE_OBJS := $(addprefix $(OBJ_DIR)/,$(CORE_SRCS:.c=.o))
 TOOLS_OBJS := $(addprefix $(OBJ_DIR)/,$(TOOLS_SRCS:.c=.o))
+BENCH_LIB_SRCS := \
+	$(BENCH_DIR)/harness.c
+BENCH_LIB_OBJS := $(addprefix $(OBJ_DIR)/,$(BENCH_LIB_SRCS:.c=.o))
 TEST_OBJS := $(addprefix $(OBJ_DIR)/,$(TEST_SRCS:.c=.o)) $(CORE_OBJS) $(TOOLS_OBJS)
 
 
 # ============================================================================
 # TARGETS
 # ============================================================================
-.PHONY: all test main bench sandbox clean info help
+.PHONY: all test main bench bench-harness sandbox clean info help
 
 all: test
 
@@ -111,6 +115,10 @@ main: $(BIN_DIR)/main$(EXE_EXT)
 bench: $(BIN_DIR)/bench_patcher$(EXE_EXT)
 	@echo [BENCH] Built successfully: $(BIN_DIR)/bench$(EXE_EXT)
 
+bench-harness: $(BIN_DIR)/bench_harness_selftest$(EXE_EXT)
+	@echo [BENCH] Running harness self-test...
+	@./$(BIN_DIR)/bench_harness_selftest$(EXE_EXT) bench/dummy_results.jsonl
+
 sandbox: $(BIN_DIR)/sandbox$(EXE_EXT)
 	@echo [MAIN] Built successfully: $(BIN_DIR)/sandbox$(EXE_EXT)
 	@./$(BIN_DIR)/sandbox$(EXE_EXT)
@@ -131,6 +139,12 @@ $(OBJ_DIR)/$(TOOLS_DIR)/%.o: $(TOOLS_DIR)/%.c
 	@echo "[CC] $< -> $@"
 	$(MKDIR_P)
 	@$(CC) $(CFLAGS) -c $< -o $@
+
+# Compile bench harness to obj files
+$(OBJ_DIR)/$(BENCH_DIR)/%.o: $(BENCH_DIR)/%.c
+	@echo "[CC] $< -> $@"
+	$(MKDIR_P)
+	@$(CC) $(CFLAGS) -I$(BENCH_DIR) -c $< -o $@
 
 # Compile test to obj files
 $(OBJ_DIR)/$(TESTS_DIR)/%.o: $(TESTS_DIR)/%.c
@@ -155,6 +169,12 @@ $(BIN_DIR)/bench_patcher$(EXE_EXT): $(TESTS_DIR)/bench/bench_patcher.c $(CORE_OB
 	@echo [LD] Linking bench executable: $@
 	$(MKDIR_BIN)
 	@$(CC) $(CFLAGS) $(TESTS_DIR)/bench/bench_patcher.c $(CORE_OBJS) -o $@ $(LDLIBS)
+
+# Link harness self-test exe
+$(BIN_DIR)/bench_harness_selftest$(EXE_EXT): $(TESTS_DIR)/bench/bench_harness_selftest.c $(BENCH_LIB_OBJS)
+	@echo [LD] Linking harness self-test executable: $@
+	$(MKDIR_BIN)
+	@$(CC) $(CFLAGS) -I. $(TESTS_DIR)/bench/bench_harness_selftest.c $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)
 
 # Link sandbox exe
 $(BIN_DIR)/sandbox$(EXE_EXT): $(RUN_DIR)/sandbox.c $(CORE_OBJS)
@@ -185,7 +205,8 @@ help:
 	@echo - Available targets:
 	@echo -  make test       - Build and run test exe
 	@echo -  make main       - Build main exe
-	@echo -  make bench      - Build benchmark exe
+	@echo -  make bench       - Build benchmark exe
+	@echo -  make bench-harness - Build + run benchmark harness self-test
 	@echo -  make all        - Same as 'make test'
 	@echo -  make clean      - Remove all generated files
 	@echo -  make info       - Display build config

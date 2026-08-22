@@ -5,11 +5,24 @@ obj/
 *.exe
 *.o
 *.obj
+bench/results.jsonl
+bench/dummy_results.jsonl
 __pycache__/
 .venv
 .opencode/
 .cache/
+docs/Plan
+docs/blttransformerPAPER.md
+docs/fast_bltdPAPER.md
+graphify-out/
 opencode.json
 AGENTS.md
 compile_commands.json
 
+data/raw/
+data/train.bin
+data/heldout.bin
+data/heldout_c.bin
+data/heldout_h.bin
+configs/sweep_state.json
+logs/
