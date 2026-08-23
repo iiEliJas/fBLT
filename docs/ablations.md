@@ -218,10 +218,31 @@ Per-knob winners:
 - 5.5 patcher: strided-4 (+40% throughput, +0.04% BPB) if efficiency counts;
   otherwise no change
 
-Combined winner ("winner_combined"): baseline ngram + placement=decoder_all +
-patcher=fixed:4. This exact combination is NOT covered by the one-knob-at-a-time
-grid and is being validated with a dedicated run (tag winner_combined).
-Naive all-paper-defaults would be: six n-gram sizes @ large vocab, all-layer
-cross-attn in both modules, entropy-based dynamic patching — i.e. strictly more
-compute than our winner on every axis, and our grid shows each of those choices
-costs throughput without improving BPB at this scale.
+Combined winner ("winner_combined", VALIDATED with a dedicated run):
+baseline ngram {{3,4}} @ 50k + placement=decoder_all + patcher=fixed:4.
+
+| config | bpb | dBPB vs base | throughput | wall |
+|---|---|---|---|---|
+| baseline_p4 (paper-ish defaults) | 5.3925 | - | 290 B/s | ~18 min |
+| winner_combined | **5.3782** | **-0.27%** | **426 B/s (+47%)** | 20 min |
+
+The combination beats its parts: decoder_all alone was -0.02% and strided-4
+alone +0.04%, but together they land at -0.27% BPB while moving ~47% more
+bytes per second. The mechanism is plausible rather than mysterious: shorter
+patches give the byte-level decoder more local steps per window and denser
+gradients at fixed step count, and dropping encoder cross-attn removes noise
+the global stream never needed at this scale. Per-domain numbers also improve
+(bpb_c 5.4626 -> 5.4455, bpb_h 5.4170 -> 5.4039).
+
+Naive all-paper-defaults (six n-gram sizes @ large vocab, all-layer cross-attn
+in both modules, entropy-based dynamic patching) is strictly more compute than
+the winner on every axis; our grid shows each such choice costs throughput
+without improving BPB at this scale (see 5.1/5.2 tables and the saturated
+threshold rows in 5.5).
+
+Caveats: single seed per sweep point (determinism verified for baseline only),
+2000-step frozen budget under-trains deeper stacks (5.3), and the entropy-
+patcher threshold targets missed calibration so dynamic-vs-fixed patching was
+only compared in its saturating regime. None of these change the direction of
+the winner, but absolute gaps are small (~0.003 bpb) outside the patcher's
+throughput effect.
