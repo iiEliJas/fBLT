@@ -40,6 +40,9 @@ int run_model_decode_nullable_loss(void);
 int run_decoder_d0_modes(void);
 int run_rope_position_gather_test(void);
 int run_infer_stats_test(void);
+int run_verify_draft_directed(void);
+int run_selfspec_structural_random(void);
+int run_selfspec_equivalence_trained(void);
 
 int run_matmul_parity_test(void);
 int run_softmax_parity_test(void);

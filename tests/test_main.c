@@ -61,6 +61,9 @@ int main(void) {
         {"decoder d0 modes", run_decoder_d0_modes},
         {"rope position gather", run_rope_position_gather_test},
         {"infer stats", run_infer_stats_test},
+        {"verify draft directed", run_verify_draft_directed},
+        {"selfspec structural random", run_selfspec_structural_random},
+        {"selfspec equivalence trained", run_selfspec_equivalence_trained},
     };
     
     const test_case parity_tests[] = {
