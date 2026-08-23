@@ -1,15 +1,9 @@
-#!/usr/bin/env python3
-"""prep_corpus.py — Phase 5 Step 0: build train.bin / heldout.bin from the
-the-stack-smol C subset.
-
+"""
 Reads data/raw/the-stack-smol/data/c/data.json (JSONL), filters degenerate
 files, exact-hash dedups content, deterministic-shuffles (seed=42), splits
 95/5, and writes raw UTF-8 byte streams separated by a single '\n' plus
 data/manifest.json (sha256 of both bins, seed, kept/rejected counts with
 reasons, per-file index {offset,length,domain,path}).
-
-Also derives data/heldout_c.bin and data/heldout_h.bin (per-domain byte
-streams used by the trainer for the bpb_c / bpb_h breakout).
 """
 
 import argparse
@@ -119,7 +113,7 @@ def main():
             fh.write(streams[name])
         out_paths[name] = p
 
-    # Per-domain held-out streams for the bpb_c / bpb_h breakout.
+    # Per-domain held-out streams for the bpb_c / bpb_h breakout
     for dom in ("c", "h"):
         buf = bytearray()
         for e in index["heldout"]:
@@ -151,7 +145,7 @@ def main():
         },
         "index": index,
     }
-    # sha256 of derived domain bins too (computed from file to avoid re-buffering)
+    # sha256 of derived domain bins
     for dom in ("c", "h"):
         p = os.path.join(args.out_dir, f"heldout_{dom}.bin")
         hh = hashlib.sha256()

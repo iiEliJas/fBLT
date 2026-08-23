@@ -518,7 +518,7 @@ Assembly of already-implemented pieces (byte embedding, RoPE-enabled transformer
 - `blt_hash_ngram_create(arena, config)`
   - Input: arena for storage and `blt_hash_ngram_config`.
   - Output: Returns an allocated `blt_hash_ngram_weights` struct.
-  - Behavior: Allocates embedding tables and initializes them with small uniform random values in `[-0.02, 0.02]` to break symmetry.
+  - Behavior: Allocates embedding tables and initializes them with small uniform random values in `[-0.02, 0.02]` to break symmetry. `num_ngram_sizes == 0` is valid and yields an empty module (no tables; forward/backward are no-ops).
 - `blt_hash_ngram_forward(weights, config, bytes_in, byte_emb, out)`
   - Input: `weights`, `config`, `bytes_in` (1D UINT8 `[seq_len]`), `byte_emb` (2D FP32 `[seq_len, embed_dim]`).
   - Output: `out` (2D FP32 `[seq_len, embed_dim]`). Contains `byte_emb` + n-gram embeddings.

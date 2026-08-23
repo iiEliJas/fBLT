@@ -9,15 +9,17 @@ bench/results.jsonl
 bench/dummy_results.jsonl
 __pycache__/
 .venv
-.opencode/
 .cache/
-docs/Plan
-docs/blttransformerPAPER.md
+
+docs/Plan.md
+docs/bltransformerPAPER.md
 docs/fast_bltdPAPER.md
 graphify-out/
-opencode.json
+
 AGENTS.md
 compile_commands.json
+.opencode/
+opencode.json
 
 data/raw/
 data/train.bin
@@ -25,4 +27,5 @@ data/heldout.bin
 data/heldout_c.bin
 data/heldout_h.bin
 configs/sweep_state.json
+bench/ckpts/
 logs/

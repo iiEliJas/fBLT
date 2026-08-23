@@ -1,16 +1,14 @@
-// train_sweep.c — Phase 5 ablation trainer/evaluator.
-//
 // Loads a JSON sweep config, builds the encoder+global+decoder model
 // (plus a small co-trained entropy LM for entropy-based patching),
-// streams fixed-length windows from train.bin, trains for exactly
-// train.steps steps with SGD + global-norm grad clipping, evaluates
-// held-out BPB (overall + per-domain c/h) every eval_every steps and at
-// the end, and writes ONE bench_result JSON line via bench/harness.h.
+// streams fixed-length windows from train.bin, trains train.steps steps 
+// with SGD + global-norm grad clipping
+// evaluates held-out BPB (overall + per-domain c/h) every eval_every steps 
+// and at he end, and writes ONE bench_result JSON line via bench/harness.h.
 //
-// Determinism: xorshift64* RNG seeded from config; sequential window
-// order (wraparound); single-threaded math => same seed + same config
-// reproduces the identical loss trajectory. --resume restores weights,
-// step counter and RNG state exactly.
+// xorshift64* RNG seeded from config
+// sequential window order, single-threaded math => same seed + same config
+// reproduces the identical loss trajectory
+// --resume restores weights, step counter and RNG state
 //
 // Usage:
 //   ./bin/train_sweep --config configs/ablations/foo.json
@@ -326,15 +324,17 @@ static void build_model_config(const sweep_config* c, blt_model_config* mc) {
     mc->encoder_config.rope_theta = 10000.0f;
     mc->encoder_config.max_seq_len = c->seq_len;
 
+    // ngram_config fields are required valid even when the module is disabled
+    // (blt_local_encoder_create validates them unconditionally)
+    mc->encoder_config.ngram_config.embed_dim = c->enc_embed_dim;
+    mc->encoder_config.ngram_config.per_ngram_vocab = c->ngram_vocab;
+    mc->encoder_config.ngram_config.hash_prime = 1000000007ULL;
+    mc->encoder_config.ngram_config.normalize = true;
     if (c->ngram_enabled && c->num_ngram_sizes > 0) {
         for (size_t i = 0; i < c->num_ngram_sizes; i++) {
             mc->encoder_config.ngram_config.ngram_sizes[i] = c->ngram_sizes[i];
         }
         mc->encoder_config.ngram_config.num_ngram_sizes = c->num_ngram_sizes;
-        mc->encoder_config.ngram_config.per_ngram_vocab = c->ngram_vocab;
-        mc->encoder_config.ngram_config.hash_prime = 1000000007ULL;
-        mc->encoder_config.ngram_config.normalize = true;
-        mc->encoder_config.ngram_config.embed_dim = c->enc_embed_dim;
     }
 
     size_t gheads = c->glob_embed_dim / 32;

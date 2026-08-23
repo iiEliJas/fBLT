@@ -65,7 +65,7 @@ void blt_local_layer_grad_alloc(blt_arena* arena, blt_local_layer_grad* g,
                                 size_t embed_dim, size_t hidden_dim);
 
 
-// Cross-attention placement modes for the ablation sweeps (paper Table 7).
+// Cross-attention placement modes for the ablation sweeps
 // BLT_XATTN_DEFAULT keeps the legacy bool behavior of cross_attn_all_layers;
 // explicit modes override it. FIRST is only meaningful for the local decoder.
 typedef enum {

@@ -1,10 +1,8 @@
-#!/usr/bin/env python3
-"""bench_report.py — render bench/results.jsonl into comparison tables/plots.
-
-Reads the line-delimited JSON produced by bench/harness.c (bench_write_json),
-filters by phase/tag, and renders a Markdown comparison table. Optionally
-produces a matplotlib PNG (e.g. BPB vs FLOPs for Phase 5, quality vs
-memory-bandwidth for Phase 6).
+"""
+Reads the JSON produced by bench/harness.c,
+filters by phase/tag, and renders a Markdown comparison table. 
+Optionally produces a matplotlib PNG (e.g. BPB vs FLOPs, quality vs
+memory-bandwidth)
 
 Usage:
     python3 tools/bench_report.py                                # all runs
@@ -12,8 +10,7 @@ Usage:
     python3 tools/bench_report.py --baseline baseline_v1         # delta column
     python3 tools/bench_report.py --x flops_per_byte --y bpb --plot plot.png
 
-Rows are keyed by (name, tag); when multiple runs share a key, the most recent
-one wins (results.jsonl is append-only history).
+Rows are keyed by (name, tag)
 """
 
 import argparse
@@ -41,6 +38,11 @@ def parse_args(argv=None):
                    help="metric key for the plot y-axis (latency field or metric)")
     p.add_argument("--plot", default=None, metavar="PNG",
                    help="write a scatter PNG to this path (requires --x/--y and matplotlib)")
+    p.add_argument("--compare", action="append", default=[],
+                   help="tag to include in a grouped BPB-vs-throughput bar chart "
+                        "(repeatable; --baseline tag is auto-included and highlighted)")
+    p.add_argument("--title", default=None, metavar="TEXT",
+                   help="title for the --compare chart")
     return p.parse_args(argv)
 
 
@@ -126,7 +128,7 @@ def main(argv=None):
         sys.exit("error: filters matched no records")
     rows = dedupe_keep_latest(runs)
 
-    # Collect metric keys present anywhere.
+    # Collect metric keys
     metric_keys = []
     for r in rows:
         for k in r.get("metrics", {}):
@@ -148,7 +150,7 @@ def main(argv=None):
             return float("inf") if v is None else v
         rows.sort(key=sort_key)
 
-    # ---- Markdown table -----------------------------------------------------
+    # ---- Markdown table -------------------------------------------------------
     header = ["name", "tag", "n", "mean_ms", "p50_ms", "p90_ms", "p99_ms"] + \
              [f"{k}*" for k in metric_keys]
     sep = ["---"] * len(header)
@@ -190,8 +192,8 @@ def main(argv=None):
         print(f"delta vs baseline tag '{args.baseline}': "
               "(+) improvement, (-) regression; latency/metrics assumed lower-is-better.")
 
-    # ---- Optional plot -------------------------------------------------------
-    if args.plot:
+    # ---- Optional scatter plot -----------------------------------------------
+    if args.plot and not args.compare:
         if not (args.x and args.y):
             sys.exit("error: --plot requires both --x KEY and --y KEY")
         try:
@@ -217,6 +219,81 @@ def main(argv=None):
         fig.tight_layout()
         fig.savefig(args.plot, dpi=150)
         print(f"\nplot written to {args.plot}")
+
+    # ---- Grouped BPB-vs-throughput bar chart ----------------------------------
+    if args.compare:
+        render_compare(rows, base_rec, args)
+
+
+def render_compare(rows, base_rec, args):
+    """Grouped bar chart: held-out BPB (left) and throughput (right) for the
+    selected tags. Baseline bar is grey, the best-BPB tag is gold, everything
+    else steel blue. Requires --compare TAG (repeatable); use --baseline TAG to
+    highlight/reference a run and --title TEXT to label the figure."""
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        sys.exit("error: matplotlib not available; cannot write chart")
+
+    wanted = list(dict.fromkeys(args.compare))  # dedupe, keep order
+    by_tag = {r["tag"]: r for r in rows}
+    tags = [t for t in wanted if t in by_tag]
+    missing = [t for t in wanted if t not in by_tag]
+    if missing:
+        print(f"warning: --compare tags not found: {', '.join(missing)}", file=sys.stderr)
+    baseline_tag = args.baseline
+    if baseline_tag and baseline_tag not in tags and baseline_tag in by_tag:
+        tags.insert(0, baseline_tag)
+    if len(tags) < 2:
+        sys.exit("error: need at least two comparable rows for --compare")
+
+    def metric(tag, key):
+        v = get_value(by_tag[tag], key)
+        return 0.0 if v is None else float(v)
+
+    bpbs = [metric(t, "bpb") for t in tags]
+    thr = [metric(t, "throughput_bytes_per_sec") for t in tags]          # B/s
+
+    best_i = min(range(len(tags)), key=lambda i: bpbs[i])
+    colors = []
+    for i, t in enumerate(tags):
+        if t == baseline_tag:
+            colors.append("#888888")
+        elif i == best_i:
+            colors.append("#e6a817")
+        else:
+            colors.append("#4878a8")
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(max(7, 0.9 * len(tags)), 4.6))
+
+    bars1 = ax1.bar(tags, bpbs, color=colors)
+    ax1.set_ylabel("held-out BPB (lower is better)")
+    ax1.set_ylim(min(bpbs) * 0.985, max(bpbs) * 1.005)
+    for b, v in zip(bars1, bpbs):
+        ax1.text(b.get_x() + b.get_width() / 2, v, f"{v:.4f}",
+                 ha="center", va="bottom", fontsize=7)
+
+    bars2 = ax2.bar(tags, thr, color=colors)
+    ax2.set_ylabel("train throughput (bytes/s, higher is better)")
+    ax2.set_ylim(0, max(thr) * 1.18)
+    for b, v in zip(bars2, thr):
+        ax2.text(b.get_x() + b.get_width() / 2, v, f"{v:.0f}",
+                 ha="center", va="bottom", fontsize=7)
+
+    for ax in (ax1, ax2):
+        ax.tick_params(axis="x", labelrotation=35)
+        for lbl in ax.get_xticklabels():
+            lbl.set_horizontalalignment("right")
+            lbl.set_fontsize(8)
+        ax.grid(True, axis="y", alpha=0.3)
+
+    fig.suptitle(args.title or "ablation comparison", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    out = args.plot or "compare.png"
+    fig.savefig(out, dpi=150)
+    print(f"\ncomparison chart written to {out}")
 
 
 if __name__ == "__main__":

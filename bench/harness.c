@@ -8,9 +8,9 @@
 #include <time.h>
 #include <math.h>
 
-// ============================================================================
+//---------------------------------------------------------------------------
 // Timer
-// ==========================================================================
+//
 
 static struct timespec bench_ts_start;
 
@@ -30,9 +30,11 @@ double bench_timer_stop_sec(void) {
     return (double)bench_timer_stop_ns() / 1e9;
 }
 
-// ============================================================================
+
+
+//---------------------------------------------------------------------------
 // Statistics
-// ==========================================================================
+//
 
 static int bench_cmp_double(const void* a, const void* b) {
     double da = *(const double*)a;
@@ -42,7 +44,7 @@ static int bench_cmp_double(const void* a, const void* b) {
     return 0;
 }
 
-// Nearest-rank percentile on an already-sorted array of size n (n >= 1).
+// Nearest-rank percentile on a sorted array of size n (n >= 1)
 static double bench_percentile_sorted(const double* sorted, size_t n, double q) {
     double rank = (q / 100.0) * (double)n;
     size_t idx = (size_t)ceil(rank);
@@ -88,9 +90,11 @@ void bench_stats_compute(bench_stats* out, const double* samples, size_t n) {
     free(sorted);
 }
 
-// ============================================================================
+
+
+//---------------------------------------------------------------------------
 // Result
-// ==========================================================================
+//
 
 static void bench_copy_str(char* dst, size_t cap, const char* src) {
     if (src == NULL) src = "";
@@ -120,14 +124,15 @@ void bench_result_add_metric(bench_result* r, const char* key, double value) {
     ++r->num_metrics;
 }
 
-// ============================================================================
+
+
+//---------------------------------------------------------------------------
 // Collection
-// ==========================================================================
+//
 
 void bench_collect_samples(bench_fn fn, void* arg,
                            size_t warmup, size_t iterations,
                            double* samples) {
-    // Cold-cache pass: measured but discarded.
     bench_timer_start();
     fn(arg);
     bench_timer_stop_ns();
@@ -143,9 +148,11 @@ void bench_collect_samples(bench_fn fn, void* arg,
     }
 }
 
-// ============================================================================
+
+
+//---------------------------------------------------------------------------
 // JSONL output
-// ==========================================================================
+//
 
 int bench_write_json(const char* path, const bench_result* r) {
     FILE* f = fopen(path, "a");

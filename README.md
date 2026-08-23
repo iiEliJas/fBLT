@@ -70,14 +70,59 @@ src/
   ├── models/           Model components
 
 tests/
+  |── bench/            Benchmarks
   ├── unit/             op tests
   ├── integration/      Full pipeline tests
+  |── py/               Python parity generations
   ├── test_main.c       Entry point
   └── test_helpers.c    Asserts and utilities
 
 run/                    Entry points
 configs/                Model configs (JSON)
+data/                   Sample data (tests, training, etc.)
+tools/                  Scripts and utilities
 ```
+
+
+## Ablation sweeps
+
+I ran a first round of architecture ablations on the C code subset of
+the-stack-smol (~67 MB train / ~3.7 MB held-out, byte-level) with only the CPU-backend. Each config
+trains for a fixed budget (2000 steps, ~17-20 min on my CPU) and reports
+held-out BPB. Protocol, tables and caveats live in `docs/ablations.md`,
+raw numbers in `bench/results.jsonl`.
+
+Whats interesting: at this scale, doing the opposite of what the paper suggests
+worked better -
+
+| config | held-out BPB | throughput |
+|---|---|---|
+| baseline (paper-ish defaults) | 5.3925 | 290 B/s |
+| **winner**: tiny ngram tables, decoder-only cross-attn, fixed-stride-4 patches | **5.3782 (-0.27%)** | **426 B/s (+47%)** |
+
+Bigger ngram hash tables never helped, encoder cross-attention placement
+can't matter when the decoder doesn't read patches, and dumb fixed
+patching beats entropy-based dynamic patching on throughput for almost no
+quality cost. Reproduce with `make sweep` + the configs in `configs/ablations/`.
+
+![winner vs best of each sweep](docs/winner_vs_best.png)
+
+The n-gram sweep is a good example of "more is not better" — every bigger
+table loses to the tiny `{3,4} @ 50k` baseline, and dropping n-gram entirely
+costs only +0.07% BPB:
+
+| config | BPB | dBPB | throughput |
+|---|---|---|---|
+| **baseline `{3,4} @ 50k`** | **5.3925** | — | 290 B/s |
+| none | 5.3961 | +0.07% | 290 B/s |
+| `{3,4,5}` @ 200k | 5.3933 | +0.01% | 266 B/s |
+| `{6,7,8}` @ 100k | 5.3932 | +0.01% | 290 B/s |
+| all `{3..8}` @ 100k | 5.3980 | +0.10% | 272 B/s |
+
+![ngram comparison](docs/ngram_comparison.png)
+
+![BPB vs throughput](docs/patch_bpb_vs_throughput.png)
+
 
 ## TODO
 
@@ -92,15 +137,17 @@ configs/                Model configs (JSON)
 - Local encoder + decoder
 - Patch transformer (global model)
 - End-to-end forward pass
+- FLOP counting and profiling
+- Ablation sweeps (BPB tables)
 
 **Todo:**
-- FLOP counting and profiling
-- Config file plumbing
+- Self-speculation (BLT-S) and diffusion decoding (BLT-D)
 - CUDA kernels
 - Training loop
 - Inference/generation
-- Self-speculation (BLT-S) and diffusion decoding (BLT-D)
 - Benchmarking, multi-GPU
+
+---
 
 ## Docs
 

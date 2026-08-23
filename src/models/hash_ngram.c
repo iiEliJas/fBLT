@@ -97,13 +97,15 @@ uint64_t blt_rolling_hash_update(blt_rolling_hash_state* state, uint8_t new_byte
 blt_hash_ngram_weights blt_hash_ngram_create(blt_arena* arena, const blt_hash_ngram_config* config) {
     BLT_REQUIRE(arena != NULL, "blt_hash_ngram_create: arena is NULL");
     BLT_REQUIRE(config != NULL, "blt_hash_ngram_create: config is NULL");
-    BLT_REQUIRE(config->num_ngram_sizes > 0 &&
-                config->num_ngram_sizes <= BLT_MAX_NGRAM_SIZES,
+    BLT_REQUIRE(config->num_ngram_sizes <= BLT_MAX_NGRAM_SIZES,
                 "blt_hash_ngram_create: num_ngram_sizes out of range");
-    BLT_REQUIRE(config->per_ngram_vocab > 0,
-                "blt_hash_ngram_create: per_ngram_vocab must be > 0");
+    BLT_REQUIRE(config->num_ngram_sizes == 0 || config->per_ngram_vocab > 0,
+                "blt_hash_ngram_create: per_ngram_vocab must be > 0 when tables are used");
     BLT_REQUIRE(config->embed_dim > 0,
                 "blt_hash_ngram_create: embed_dim must be > 0");
+
+    // num_ngram_sizes == 0 is valid: the module is disabled and contributes
+    // nothing (forward/backward loop over zero tables).
 
     for (size_t i = 0; i < config->num_ngram_sizes; i++) {
         BLT_REQUIRE(config->ngram_sizes[i] > 0 &&

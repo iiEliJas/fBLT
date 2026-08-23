@@ -1,8 +1,7 @@
-# Phase 5 Ablation Protocol (LOCKED)
+# Phase 5 Ablation Protocol
 
 All ablation sweeps (5.1 ngram, 5.2 cross-attention placement, 5.3 depth,
-5.5 patcher) follow this frozen protocol. Any change to these rules invalidates
-comparability and must be recorded here with a reason.
+5.5 patcher) follow this protocol.
 
 - Date locked: 2026-08-22
 - Machine: Linux x86_64, 12 cores, 15 GiB RAM, CPU-only (no CUDA)
@@ -76,7 +75,7 @@ pooling_init MEAN; patcher rule global threshold 5.3 nats, max_patch_length 32.
 ## Documented deviations / caps
 
 1. **Ngram vocab capped at 200k** (plan sketched up to 400k). `blt_sgd_step`
-   is dense — it updates the entire table every step, and grads are zeroed +
+   is dense - it updates the entire table every step, and grads are zeroed +
    norm-scanned full-tensor too, so per-step cost is O(vocab * dim * tables)
    regardless of how few rows were touched. At 400k x dim 96 x 3 tables this
    adds >1 s/step and blows the frozen wall-clock budget. RAM would fit
@@ -92,10 +91,6 @@ pooling_init MEAN; patcher rule global threshold 5.3 nats, max_patch_length 32.
    so per the plan's decision rule there is no meaningful wall-clock share to
    trade away. Revisit only if final profiles contradict this.
 
-## Results tables
-
-Filled in per sweep below (via `tools/bench_report.py --baseline baseline_p4`).
-
 ## Determinism check
 
 Two baseline_p4 runs (same seed/config): bpb, bpb_c, bpb_h, avg_patch_len,
@@ -105,7 +100,7 @@ only wall_clock_sec/throughput differ (1047.7 s vs 1059.0 s). PASS.
 ## Results tables
 
 Delta columns are % vs baseline_p4 (lower is better for BPB; the throughput
-column is inverted in sign by bench_report — positive % there means slower).
+column is inverted in sign by bench_report - positive % there means slower).
 
 ### 5.1 ngram
 
@@ -135,7 +130,7 @@ delta vs baseline tag 'baseline_p4': (+) improvement, (-) regression; latency/me
 
 NOTE (expected artifact, not a bug): none / encoder_all / encoder_last produce
 bit-identical results because with decoder cross-attention disabled the patch
-stream never reaches the loss — encoder placement has nothing to influence.
+stream never reaches the loss - encoder placement has nothing to influence.
 The informative axis is decoder placement: decoder_all (with encoder cross-attn
 removed entirely) is nominally best at -0.02% BPB while also saving encoder
 cross-attn compute. Consistent with the paper's Table 7 finding that decoder
@@ -191,7 +186,7 @@ exceed even 5.01, so all three thresholds saturate at max_patch_length=32
 replicates of baseline, not a patch-size sweep.
 
 The informative rows are the controls: strided-4 and whitespace patching give
-+38..43% throughput at only +0.04..0.06% BPB — a large efficiency win for a
++38..43% throughput at only +0.04..0.06% BPB - a large efficiency win for a
 tiny quality cost. avg_patch_len 4.0 / 5.0 confirm the rules did what they
 should.
 
@@ -209,7 +204,7 @@ should.
 delta vs baseline tag 'baseline_p4': (+) improvement, (-) regression; latency/metrics assumed lower-is-better.
 
 
-## Winner analysis (from OUR data, not the paper's)
+## Winner analysis
 
 Per-knob winners:
 - 5.1 ngram: baseline {3,4} @ 50k (every alternative is worse)
@@ -223,7 +218,7 @@ baseline ngram {{3,4}} @ 50k + placement=decoder_all + patcher=fixed:4.
 
 | config | bpb | dBPB vs base | throughput | wall |
 |---|---|---|---|---|
-| baseline_p4 (paper-ish defaults) | 5.3925 | - | 290 B/s | ~18 min |
+| baseline_p4 (paper defaults) | 5.3925 | - | 290 B/s | ~18 min |
 | winner_combined | **5.3782** | **-0.27%** | **426 B/s (+47%)** | 20 min |
 
 The combination beats its parts: decoder_all alone was -0.02% and strided-4

@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-"""gen_configs.py — generate all Phase 5 sweep configs from baseline_p4."""
-
 import copy
 import json
 import os
@@ -28,8 +25,6 @@ def set_ngram(sizes, vocab):
         c["model"]["encoder"]["ngram"]["enabled"] = len(sizes) > 0
         c["model"]["encoder"]["ngram"]["sizes"] = sizes
         c["model"]["encoder"]["ngram"]["vocab_size"] = vocab
-        # no entropy model needed when the patcher never sees one? it still does:
-        # patcher rule is entropy-based in every 5.1 config, so warmup stays.
     return m
 
 
@@ -47,7 +42,8 @@ def set_depth(enc_layers, dec_layers):
     return m
 
 
-# ---------------------------------------------------------------- 5.1 ngram
+# ---------------------------------------------------------------- 
+# ngram
 # vocab capped at 200k (dense SGD cost), see docs/ablations.md deviations.
 cfg("ngram_none", "5.1_ngram", lambda c: (
     c["model"]["encoder"]["ngram"].update({"enabled": False}),
@@ -58,8 +54,9 @@ for sizes, name in ([[3, 4, 5], "s345"], [[6, 7, 8], "s678"],
         cfg(f"ngram_{name}_v{v // 1000}k", "5.1_ngram",
             set_ngram(sizes, v))
 
-# ---------------------------------------------------------------- 5.2 xattn
-# "both" + pooling MEAN is the baseline itself; not regenerated here.
+# ----------------------------------------------------------------
+# xattn
+# "both" + pooling MEAN is the baseline itself
 cfg("xattn_none", "5.2_xattn", set_placement("none"))
 cfg("xattn_encoder_all", "5.2_xattn", set_placement("encoder_all"))
 cfg("xattn_encoder_last", "5.2_xattn", set_placement("encoder_last"))
@@ -69,15 +66,17 @@ cfg("xattn_encoder_all_poolmax", "5.2_xattn", set_placement("encoder_all", False
 cfg("xattn_encoder_last_poolmax", "5.2_xattn", set_placement("encoder_last", False))
 cfg("xattn_both_poolmax", "5.2_xattn", set_placement("both", False))
 
-# ---------------------------------------------------------------- 5.3 depth
+# ----------------------------------------------------------------
+# depth
 cfg("depth_enc1_dec9", "5.3_depth", set_depth(1, 9))
 cfg("depth_enc3_dec7", "5.3_depth", set_depth(3, 7))
 cfg("depth_enc5_dec5", "5.3_depth", set_depth(5, 5))
 cfg("depth_enc9_dec1", "5.3_depth", set_depth(9, 1))
 
-# ---------------------------------------------------------------- 5.5 patch
+# ----------------------------------------------------------------
+# patch
 # thresholds from post-warmup entropy stats (mean 4.49, sd 0.77);
-# P(fire) = 1/target_patch_len -> thr = mean + z*sd (see ablations.md).
+# P(fire) = 1/target_patch_len -> thr = mean + z*sd
 cfg("patch_t4", "5.5_patch", lambda c: (
     c["patcher"].update({"rule": "global", "threshold_global": 5.01}),))
 cfg("patch_t6", "5.5_patch", lambda c: (

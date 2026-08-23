@@ -4,17 +4,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-// ============================================================================
+//---------------------------------------------------------------------------
 // Benchmark harness — shared, backend-agnostic measurement infrastructure.
 //
-// Used by Phase 5 ablation sweeps (BPB tables) and Phase 6 (NFE tables).
+// Used by ablation sweeps (BPB tables), patcher performance, and other benchmarks.
 // Latency samples are collected in seconds (double); the raw timer works in
 // nanoseconds via clock_gettime(CLOCK_MONOTONIC).
-// ==========================================================================
+//---------------------------------------------------------------------------
+
 
 // ---- Timer ----------------------------------------------------------------
 // Returns elapsed nanoseconds since bench_timer_start() was last called.
@@ -89,9 +86,5 @@ void bench_collect_samples(bench_fn fn, void* arg,
 // corrupt history and results can be tailed/grep'd directly.
 // Returns 0 on success, -1 on I/O failure.
 int bench_write_json(const char* path, const bench_result* r);
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif
