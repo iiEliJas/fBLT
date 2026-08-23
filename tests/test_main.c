@@ -64,6 +64,8 @@ int main(void) {
         {"verify draft directed", run_verify_draft_directed},
         {"selfspec structural random", run_selfspec_structural_random},
         {"selfspec equivalence trained", run_selfspec_equivalence_trained},
+        {"kv cache logits equal dense", run_kv_cache_logits_equal_dense},
+        {"kv cache rollback commit", run_kv_cache_rollback_commit},
     };
     
     const test_case parity_tests[] = {

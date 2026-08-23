@@ -67,6 +67,7 @@ CORE_SRCS := \
 	$(SRC_DIR)/models/model.c \
 	$(SRC_DIR)/infer/stats.c \
 	$(SRC_DIR)/infer/rope_gather.c \
+	$(SRC_DIR)/infer/kv_cache.c \
 	$(SRC_DIR)/infer/self_speculation.c
 
 TOOLS_SRCS := \
