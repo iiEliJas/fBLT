@@ -56,6 +56,11 @@ int main(void) {
         {"local decoder cross mask", run_local_decoder_cross_mask}, 
         {"local decoder k-split", run_local_decoder_k_split},
         {"blt model generate sanity", run_blt_model_generate_sanity},
+        {"model stage split", run_model_stage_split_equivalence},
+        {"model decode nullable loss", run_model_decode_nullable_loss},
+        {"decoder d0 modes", run_decoder_d0_modes},
+        {"rope position gather", run_rope_position_gather_test},
+        {"infer stats", run_infer_stats_test},
     };
     
     const test_case parity_tests[] = {

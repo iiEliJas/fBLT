@@ -97,7 +97,7 @@ worked better -
 
 | config | held-out BPB | throughput |
 |---|---|---|
-| baseline (paper-ish defaults) | 5.3925 | 290 B/s |
+| baseline (paper defaults) | 5.3925 | 290 B/s |
 | **winner**: tiny ngram tables, decoder-only cross-attn, fixed-stride-4 patches | **5.3782 (-0.27%)** | **426 B/s (+47%)** |
 
 Bigger ngram hash tables never helped, encoder cross-attention placement
@@ -113,7 +113,7 @@ costs only +0.07% BPB:
 
 | config | BPB | dBPB | throughput |
 |---|---|---|---|
-| **baseline `{3,4} @ 50k`** | **5.3925** | — | 290 B/s |
+| **baseline `{3,4} @ 50k`** | **5.3925** | / | 290 B/s |
 | none | 5.3961 | +0.07% | 290 B/s |
 | `{3,4,5}` @ 200k | 5.3933 | +0.01% | 266 B/s |
 | `{6,7,8}` @ 100k | 5.3932 | +0.01% | 290 B/s |

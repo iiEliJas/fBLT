@@ -651,6 +651,19 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
     - `size_t max_seq_len`: Maximum sequence length used to size the shared RoPE cache.
     - `size_t vocab_size`: Vocabulary size for the LM head (typically 256).
     - `blt_xattn_placement cross_attn_placement`: sweep knob (`NONE`/`FIRST`/`ALL`) overriding `cross_attn_all_layers` when not `BLT_XATTN_DEFAULT`.
+- `BLT_D0_VOCAB` constant (`257`)
+  - Row count of the decoder-owned D_0 embedding table: 256 byte values plus a MASK token at index 256.
+- `blt_d0_mode` enum
+  - D_0 policy for rows that have no encoder h_final state (BLT-S draft bytes, BLT-D masked block rows). Only affects draft quality / acceptance rate — verification guarantees output equivalence regardless.
+  - Values:
+    - `BLT_D0_HFINAL`: legacy; every row of `byte_hidden_in` is real h_final (default when no opts are passed).
+    - `BLT_D0_ZEROS`: rows >= `num_hfinal_rows` get zero vectors.
+    - `BLT_D0_LEARNED`: rows >= `num_hfinal_rows` read their D_0 from `d0_embed_weight[token]`.
+- `blt_local_decoder_d0_opts` struct
+  - Fields:
+    - `blt_d0_mode d0_mode`: policy selector.
+    - `size_t num_hfinal_rows`: rows `[0, num_hfinal_rows)` of `byte_hidden_in` are real h_final; ignored (treated as seq_len) in `BLT_D0_HFINAL` mode.
+    - `const uint32_t* d0_extra_tokens`: `[seq_len - num_hfinal_rows]` token ids in `[0, BLT_D0_VOCAB)`; required iff mode is `BLT_D0_LEARNED`.
 - `blt_local_decoder_layer_storage` struct
   - Alias of `blt_local_layer_storage` (see blt/models/local_common.h). Cross-attention block weights (`cross_norm_weight`, `cross_weight_q`, `cross_weight_k`, `cross_weight_v`, `cross_weight_proj`) and byte-transformer block weights (`norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w`).
 - `blt_local_decoder` struct
@@ -659,27 +672,34 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
     - `blt_tensor rope_cos_cache`, `rope_sin_cache`: Precomputed RoPE tables `[max_seq_len, head_dim/2]`.
     - `blt_local_decoder_layer_storage* layers`: Array of per-layer storage blocks `[num_layers]`.
     - `blt_tensor lm_head_weight`: Language-model head weights `[embed_dim, vocab_size]`.
+    - `blt_tensor d0_embed_weight`: D_0 table `[BLT_D0_VOCAB, embed_dim]` consulted in `BLT_D0_LEARNED` mode; row 256 doubles as the MASK embedding. No backward support yet (Phase D wires it) — its gradient stays zero until then.
 - `blt_local_decoder_layer_grad` struct
   - Alias of `blt_local_layer_grad` (see blt/models/local_common.h) — per-layer gradient storage mirroring `blt_local_decoder_layer_storage`.
 - `blt_local_decoder_grad` struct
   - Fields:
     - `blt_local_decoder_layer_grad* layer_grads`: Layer gradient structures `[num_layers]` (overwritten).
     - `blt_tensor lm_head_grad`: Gradient for LM head weights.
+    - `blt_tensor d0_embed_grad`: Gradient for the D_0 table `[BLT_D0_VOCAB, embed_dim]` (stays zero until Phase D).
 - `blt_local_decoder_create(arena, config)`
   - Input: `arena` for allocations and `config` parameters.
   - Output: Allocated `blt_local_decoder*` handle with zero-initialized weights and precomputed RoPE caches.
-  - Behavior: Allocates model storage and precomputes shared RoPE cache once for the entire decoder. Caller populates model weights afterward.
+  - Behavior: Allocates model storage (including the D_0 embedding table), precomputes the shared RoPE cache once for the entire decoder. Caller populates model weights afterward.
 - `blt_local_decoder_grad_create(arena, model)`
   - Input: `arena` for storage and reference `model`.
   - Output: Allocated, zero-initialized `blt_local_decoder_grad*` structure matching `model` shapes.
   - Behavior: Prepares zero-initialized gradient structures for tracking backpropagation.
 - `blt_local_decoder_forward(model, byte_hidden_in, patch_in, patches, num_patches, bytes_in, doc_boundaries, num_docs, logits_out, loss_out, arena)`
   - Input: `model`, `byte_hidden_in` `[seq_len, embed_dim]` (encoder byte outputs), `patch_in` `[num_patches, embed_dim]` (global transformer outputs), `patches` array, optional `bytes_in` targets `[seq_len]` (UINT8), `doc_boundaries`, `num_docs`, and scratch `arena`.
-  - Output: Writes token logits into `logits_out` `[seq_len, vocab_size]` and optional scalar loss into `loss_out`.
-  - Behavior: Runs cross-attention from patch representations into causal byte transformer layers, applies causal local self-attention (sliding window or full causal), and projects final byte hidden states through the LM head to produce logits and loss.
+  - Output: Writes token logits into `logits_out` `[seq_len, vocab_size]` and scalar loss into `loss_out`.
+  - Behavior: Legacy wrapper around `blt_local_decoder_forward_ext` with NULL opts — D_0 = h_final everywhere and loss always computed.
+- `blt_local_decoder_forward_ext(model, byte_hidden_in, patch_in, patches, num_patches, bytes_in, doc_boundaries, num_docs, d0_opts, logits_out, loss_out, arena)`
+  - Input: Same as `blt_local_decoder_forward` plus `d0_opts` (`NULL` = legacy behavior). Extensions: `loss_out` may be `NULL` to skip the shifted cross-entropy entirely (logits-only inference); `bytes_in` must then also be `NULL`. With non-HFINAL policies, `byte_hidden_in` supplies only its first `num_hfinal_rows`; rows beyond get their D_0 from the configured policy, sit causally after the prefix, and condition on the LAST patch's latent sub-tokens via the cross-attention group mechanism. `patches` must tile `[0, num_hfinal_rows)` exactly.
+  - Output: Writes `logits_out` `[seq_len, vocab_size]`; optionally the scalar shifted next-byte loss into `loss_out`.
+  - Behavior: Runs cross-attention from patch representations into causal byte transformer layers, applies causal local self-attention (sliding window or full causal), and projects final byte hidden states through the LM head. Rows `[0, num_hfinal_rows)` are bit-identical to running the legacy call on that prefix alone (causality guarantee).
 - `blt_local_decoder_backward(model, byte_hidden_in, patch_in, patches, num_patches, bytes_in, doc_boundaries, num_docs, grad_byte_hidden_in, grad_patch_in, grad, arena)`
   - Input: Same forward parameters plus destination gradients `grad_byte_hidden_in` `[seq_len, embed_dim]` (feeds back into local encoder), `grad_patch_in` `[num_patches, embed_dim]` (feeds back into global transformer), destination gradient handle `grad`, and scratch `arena`.
   - Output: Populates `grad` struct with parameter gradients and writes upstream gradients into `grad_byte_hidden_in` and `grad_patch_in` when provided.
+  - Behavior: Full-sequence backward only (legacy layout); diffusion/draft-row branches arrive with Phase D.
 
 
 ### blt/models/model.h
@@ -707,14 +727,53 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
   - Input: arena for storage and a fully initialized model.
   - Output: allocates a gradient container with one gradient struct per submodule.
   - Behavior: creates gradient holders for the encoder, global transformer, and decoder so backward propagation can accumulate updates.
+- `blt_model_enc_out` struct
+  - Frozen latents produced by the encode stage and consumed by `blt_model_decode` (possibly many times).
+  - Fields:
+    - `blt_tensor patch_out`: Local encoder output `P_final` `[num_patches, patch_dim]`.
+    - `blt_tensor global_out`: Global transformer output `O` `[num_patches, embed_dim]`.
+    - `blt_tensor byte_hidden_out`: Per-byte encoder states `h_final` `[seq_len, embed_dim]`.
+    - `size_t* patch_doc_boundaries`: Patch-indexed remap of byte doc boundaries `[num_docs]`; `NULL` when `num_docs == 0`.
+- `blt_model_encode(model, bytes_in, patches, num_patches, doc_boundaries, num_docs, out, arena)`
+  - Input: model pointer, input byte tensor `[seq_len]` in `UINT8`, patch metadata array, number of patches, byte-indexed document boundaries, number of documents, output struct pointer, and scratch arena.
+  - Output: Fills `out` with the frozen latents (`patch_out`, `global_out`, `byte_hidden_out`, remapped patch doc boundaries).
+  - Behavior: Stage 1 of the split forward — runs the local encoder on raw bytes and patch spans, remaps document boundaries from byte offsets to patch indices, and runs the global transformer over patch features. Inference controllers call this once per round and reuse the frozen latents across repeated decode calls.
+- `blt_model_decode(model, enc, patches, num_patches, bytes_in, doc_boundaries, num_docs, d0_opts, logits_out, loss_out, arena)`
+  - Input: model pointer, encode-stage output `enc` (frozen latents), the same `patches` array used at encode time (`num_patches` must match `enc->patch_out.shape[0]`), optional `bytes_in` targets, byte-indexed doc boundaries, `d0_opts` (`NULL` = legacy D_0 = h_final everywhere; see blt/models/local_decoder.h for draft/MASK row policies), logits output tensor, nullable scalar loss tensor, and scratch arena.
+  - Output: Writes logits `[seq_len, vocab_size]`; optionally the scalar shifted next-byte loss into `loss_out`.
+  - Behavior: Stage 2 of the split forward — decoder-only pass against the frozen encoder/global latents. `bytes_in` may be `NULL` iff `loss_out` is `NULL` (logits-only inference). Sequence length is defined by `enc->byte_hidden_out`.
 - `blt_model_forward(model, bytes_in, patches, num_patches, doc_boundaries, num_docs, logits_out, loss_out, arena)`
   - Input: model pointer, input byte tensor `[seq_len]` in `UINT8`, patch metadata array, number of patches, document boundary indices, number of documents, output logits tensor, scalar loss tensor, and scratch arena.
   - Output: writes logits `[seq_len, vocab_size]` and scalar loss into `logits_out` and `loss_out`.
-  - Behavior: runs the encoder on the raw bytes and patch spans, remaps document boundaries from byte offsets to patch indices, runs the global transformer over patch features, and finally decodes to token logits/loss. `loss_out` is a 0D or scalar tensor carrying the sequence loss.
+  - Behavior: Convenience wrapper that calls `blt_model_encode` followed by `blt_model_decode` (legacy semantics: full-sequence decode, non-null loss). Numerically identical to the staged calls.
 - `blt_model_backward(model, bytes_in, patches, num_patches, doc_boundaries, num_docs, grad, arena)`
   - Input: model, byte input, patch metadata, doc boundaries, gradient accumulator object, and scratch arena.
   - Output: recomputes the forward intermediates and backpropagates through the encoder, global transformer, and decoder, accumulating gradients into `grad`.
   - Behavior: mirrors the forward pass in reverse, reusing the same byte-to-patch remapping and the submodule backward routines. The gradient object must be allocated with `blt_model_grad_create`.
+
+------------------------------------------------------------------------------------------------------------
+## Inference utilities (Phase 6 / Fast-BLT)
+
+### blt/infer/stats.h
+- `blt_infer_stats` struct
+  - Forward-pass counters for the Phase 6 inference controllers (BLT-S / BLT-DV). Controllers increment at the call site; ops/models stay unmodified.
+  - Fields:
+    - `size_t nfe_encoder_global`: encode-stage invocations (encoder + global transformer; the expensive tier).
+    - `size_t nfe_decoder`: decoder-only invocations (drafting steps, verification decodes).
+    - `size_t bytes_drafted`: speculative bytes produced by a drafting policy.
+    - `size_t bytes_accepted`: committed bytes that came from a drafting policy (incl. forced progress).
+- `blt_infer_stats_reset(stats)`
+  - Zeroes all counters.
+- `blt_infer_stats_acceptance_rate(stats)`
+  - Output: `bytes_accepted / bytes_drafted` as float; `0.0f` when nothing was drafted.
+- `blt_infer_stats_print(stats, label)`
+  - Behavior: prints one summary line (NFEs, drafted/accepted, acceptance percentage) to stdout.
+
+### blt/infer/rope_gather.h
+- `blt_rope_position_gather(cos_cache, sin_cache, positions, n, cos_out, sin_out, arena)`
+  - Input: RoPE caches `[max_seq_len, head_dim/2]` FP32 as produced by `blt_rope_precompute`, position array `positions[n]` with each entry `< max_seq_len`, scratch arena.
+  - Output: creates `cos_out` / `sin_out` `[n, head_dim/2]` FP32 tensors in the arena; out row i is an exact copy of cache row `positions[i]`.
+  - Behavior: builds position-correct RoPE views when row index != sequence position (BLT-D block rows; BLT-S drafts stay contiguous and do not need this).
 
 ------------------------------------------------------------------------------------------------------------
 ## Core Implementations

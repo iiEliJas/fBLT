@@ -29,8 +29,8 @@
 static void validate_call(const blt_local_decoder* model, const blt_tensor* byte_hidden_in,
                           const blt_tensor* patch_in, const blt_patch_info* patches, size_t num_patches,
                           const blt_tensor* bytes_in, const blt_arena* arena, size_t* out_seq_len) {
-    BLT_REQUIRE(model != NULL && byte_hidden_in != NULL && patch_in != NULL && bytes_in != NULL && arena != NULL,
-        "blt_local_decoder: model, byte_hidden_in, patch_in, bytes_in and arena cannot be NULL");
+    BLT_REQUIRE(model != NULL && byte_hidden_in != NULL && patch_in != NULL && arena != NULL,
+        "blt_local_decoder: model, byte_hidden_in, patch_in and arena cannot be NULL");
     BLT_REQUIRE(patches != NULL && num_patches >= 1,
         "blt_local_decoder: need at least one patch");
 
@@ -47,8 +47,12 @@ static void validate_call(const blt_local_decoder* model, const blt_tensor* byte
     blt_check_nd_fp32(patch_in, 2, (const size_t[]){num_patches, patch_dim},
         "blt_local_decoder: patch_in must be [num_patches, patch_dim] FP32");
 
-    BLT_REQUIRE(bytes_in->ndim == 1 && bytes_in->dtype == BLT_DTYPE_UINT8 && bytes_in->shape[0] == seq_len,
-        "blt_local_decoder: bytes_in must be 1D UINT8 [seq_len] matching byte_hidden_in");
+    // bytes_in is optional (NULL = logits-only inference); when present it
+    // supplies the loss targets and must match the sequence length
+    if (bytes_in != NULL) {
+        BLT_REQUIRE(bytes_in->ndim == 1 && bytes_in->dtype == BLT_DTYPE_UINT8 && bytes_in->shape[0] == seq_len,
+            "blt_local_decoder: bytes_in must be 1D UINT8 [seq_len] matching byte_hidden_in");
+    }
 
     *out_seq_len = seq_len;
 }
@@ -71,18 +75,28 @@ typedef struct {
 
 
 
-static ld_context make_context(const blt_local_decoder* model, size_t seq_len,
+static ld_context make_context(const blt_local_decoder* model, size_t seq_len, size_t num_hfinal_rows,
                                const blt_patch_info* patches, size_t num_patches,
                                const size_t* doc_boundaries, size_t num_docs,
                                blt_arena* arena) {
+    BLT_REQUIRE(num_hfinal_rows >= 1 && num_hfinal_rows <= seq_len,
+        "blt_local_decoder: num_hfinal_rows must be in [1, seq_len]");
     size_t E = model->config.embed_dim;
     size_t patch_dim = model->config.patch_dim ? model->config.patch_dim : E;
     size_t k = patch_dim / E;
 
-    // patch_identity_ids[j] = j (trivial), byte_patch_ids[i] = patch id of byte i
+    // patch_identity_ids[j] = j (trivial), byte_patch_ids[i] = patch id of byte i.
+    // Ids are built over the h-final-covered prefix only; patches must tile
+    // [0, num_hfinal_rows) exactly. Rows beyond it (BLT-S draft bytes / BLT-D
+    // block rows) have no patch of their own and condition on the LAST patch's
+    // latent sub-tokens -- the Fast-BLT "condition on last available latent
+    // token" rule.
     size_t* patch_identity_ids = (size_t*)blt_arena_alloc(arena, num_patches * sizeof(size_t), 64);
     size_t* byte_patch_ids = (size_t*)blt_arena_alloc(arena, seq_len * sizeof(size_t), 64);
-    blt_patch_build_group_ids(patches, num_patches, seq_len, patch_identity_ids, byte_patch_ids);
+    blt_patch_build_group_ids(patches, num_patches, num_hfinal_rows, patch_identity_ids, byte_patch_ids);
+    for (size_t i = num_hfinal_rows; i < seq_len; i++) {
+        byte_patch_ids[i] = num_patches - 1;
+    }
     
     // expand the kv (patch) side group ids by k -- each patch's k sub-tokens share its group id
     size_t* expanded_kv_group_ids = (size_t*)blt_arena_alloc(arena, num_patches * k * sizeof(size_t), 64);
@@ -193,6 +207,12 @@ blt_local_decoder* blt_local_decoder_create(blt_arena* arena, const blt_local_de
     size_t lm_head_shape[2] = { E, config->vocab_size };
     m->lm_head_weight = blt_tensor_create(arena, lm_head_shape, 2, BLT_DTYPE_FP32);
 
+    // D_0 table for draft/MASK rows (BLT_D0_LEARNED); zero-initialized.
+    // Backward support lands with Phase D -- until then the gradient stays
+    // zero and SGD steps on it are no-ops.
+    size_t d0_embed_shape[2] = { BLT_D0_VOCAB, E };
+    m->d0_embed_weight = blt_tensor_create(arena, d0_embed_shape, 2, BLT_DTYPE_FP32);
+
     return m;
 }
 
@@ -219,6 +239,9 @@ blt_local_decoder_grad* blt_local_decoder_grad_create(blt_arena* arena, const bl
     size_t lm_head_shape[2] = { E, V };
     g->lm_head_grad = blt_tensor_create(arena, lm_head_shape, 2, BLT_DTYPE_FP32);
 
+    size_t d0_embed_shape[2] = { BLT_D0_VOCAB, E };
+    g->d0_embed_grad = blt_tensor_create(arena, d0_embed_shape, 2, BLT_DTYPE_FP32);
+
     return g;
 }
 
@@ -235,39 +258,62 @@ blt_local_decoder_grad* blt_local_decoder_grad_create(blt_arena* arena, const bl
 // logits = D_final @ lm_head_weight
 // loss   = shifted next-byte cross-entropy (targets[t] = bytes_in[t+1]), same convention as blt_entropy_lm
 
-void blt_local_decoder_forward(const blt_local_decoder* model,
-                               const blt_tensor* byte_hidden_in,
-                               const blt_tensor* patch_in,
-                               const blt_patch_info* patches,
-                               size_t num_patches,
-                               const blt_tensor* bytes_in,
-                               const size_t* doc_boundaries,
-                               size_t num_docs,
-                               blt_tensor* logits_out,
-                               blt_tensor* loss_out,
-                               blt_arena* arena) {
+void blt_local_decoder_forward_ext(const blt_local_decoder* model,
+                                   const blt_tensor* byte_hidden_in,
+                                   const blt_tensor* patch_in,
+                                   const blt_patch_info* patches,
+                                   size_t num_patches,
+                                   const blt_tensor* bytes_in,
+                                   const size_t* doc_boundaries,
+                                   size_t num_docs,
+                                   const blt_local_decoder_d0_opts* d0_opts,
+                                   blt_tensor* logits_out,
+                                   blt_tensor* loss_out,
+                                   blt_arena* arena) {
+    BLT_REQUIRE(logits_out != NULL,
+        "blt_local_decoder_forward_ext: logits_out cannot be NULL");
+    BLT_REQUIRE(loss_out != NULL || bytes_in == NULL,
+        "blt_local_decoder_forward_ext: bytes_in is only used for the loss; pass NULL when loss_out is NULL");
+    if (loss_out != NULL) {
+        BLT_REQUIRE(bytes_in != NULL,
+            "blt_local_decoder_forward_ext: bytes_in cannot be NULL when loss_out is requested");
+    }
     size_t seq_len;
     validate_call(model, byte_hidden_in, patch_in, patches, num_patches, bytes_in, arena, &seq_len);
-    BLT_REQUIRE(logits_out != NULL && loss_out != NULL,
-        "blt_local_decoder_forward: logits_out and loss_out cannot be NULL");
+
+    // D_0 policy validation
+    size_t num_hfinal_rows = seq_len;
+    if (d0_opts != NULL && d0_opts->d0_mode != BLT_D0_HFINAL) {
+        num_hfinal_rows = d0_opts->num_hfinal_rows;
+        BLT_REQUIRE(num_hfinal_rows >= 1 && num_hfinal_rows <= seq_len,
+            "blt_local_decoder_forward_ext: d0_opts->num_hfinal_rows must be in [1, seq_len]");
+        if (d0_opts->d0_mode == BLT_D0_LEARNED) {
+            BLT_REQUIRE(d0_opts->d0_extra_tokens != NULL,
+                "blt_local_decoder_forward_ext: d0_extra_tokens required for BLT_D0_LEARNED");
+            for (size_t i = 0; i < seq_len - num_hfinal_rows; i++) {
+                BLT_REQUIRE(d0_opts->d0_extra_tokens[i] < BLT_D0_VOCAB,
+                    "blt_local_decoder_forward_ext: d0_extra_tokens[%zu] must be < BLT_D0_VOCAB", i);
+            }
+        }
+    }
 
     const blt_local_decoder_config* config = &model->config;
     size_t E = config->embed_dim;
     size_t V = config->vocab_size;
     blt_check_nd_fp32(logits_out, 2, (const size_t[]){seq_len, V},
-        "blt_local_decoder_forward: logits_out must be [seq_len, vocab_size] FP32");
-    
+        "blt_local_decoder_forward_ext: logits_out must be [seq_len, vocab_size] FP32");
+
     // K split setup
     // patch_dim == 0 is no split (k = 1)
     size_t patch_dim = (config->patch_dim == 0) ? E : config->patch_dim;
     BLT_REQUIRE(patch_dim % E == 0,
-        "blt_local_decoder_forward: patch_dim must be a multiple of embed_dim");
+        "blt_local_decoder_forward_ext: patch_dim must be a multiple of embed_dim");
     size_t k = patch_dim / E;
     BLT_REQUIRE(patch_in->shape[1] == patch_dim,
-        "blt_local_decoder_forward: patch_in must be [num_patches, patch_dim] FP32");
-    
-    
-    ld_context ctx = make_context(model, seq_len, patches, num_patches, doc_boundaries, num_docs, arena);
+        "blt_local_decoder_forward_ext: patch_in must be [num_patches, patch_dim] FP32");
+
+
+    ld_context ctx = make_context(model, seq_len, num_hfinal_rows, patches, num_patches, doc_boundaries, num_docs, arena);
     blt_transformer_config layer_config = blt_local_byte_layer_config(
         config->embed_dim, config->num_heads, config->rope_theta, config->hidden_dim,
         &ctx.local_mask, &ctx.rope_cos_view, &ctx.rope_sin_view);
@@ -288,9 +334,28 @@ void blt_local_decoder_forward(const blt_local_decoder* model,
     size_t byte_shape[2] = { seq_len, E };
 
     // -----------------------------------------------------------------
-    // STEP 1: D_0 = byte_hidden_in
+    // STEP 1: D_0 construction per policy.
     //
-    blt_tensor d = *byte_hidden_in;
+    // Legacy / HFINAL: D_0 aliases byte_hidden_in (no copy). ZEROS /
+    // LEARNED: rows [0, num_hfinal_rows) are copied verbatim from
+    // byte_hidden_in; rows beyond it are zero-filled and optionally
+    // overwritten from the decoder-owned d0_embed_weight table.
+    //
+    blt_tensor d;
+    if (d0_opts == NULL || d0_opts->d0_mode == BLT_D0_HFINAL) {
+        d = *byte_hidden_in;
+    } else {
+        d = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);   // zero-init
+        memcpy(d.data, byte_hidden_in->data, num_hfinal_rows * E * sizeof(float));
+
+        if (d0_opts->d0_mode == BLT_D0_LEARNED) {
+            float* dst = (float*)d.data + num_hfinal_rows * E;
+            const float* table = (const float*)model->d0_embed_weight.data;
+            for (size_t i = 0; i < seq_len - num_hfinal_rows; i++) {
+                memcpy(dst + i * E, table + (size_t)d0_opts->d0_extra_tokens[i] * E, E * sizeof(float));
+            }
+        }
+    }
 
     // -----------------------------------------------------------------
     // STEP 2: layer loop: cross-attn, byte transformer block
@@ -321,19 +386,40 @@ void blt_local_decoder_forward(const blt_local_decoder* model,
     }
 
     // -----------------------------------------------------------------
-    // STEP 3: LM head + shifted next-byte cross-entropy
+    // STEP 3: LM head (+ optional shifted next-byte cross-entropy)
     //
     blt_matmul(&d, &model->lm_head_weight, logits_out);
 
-    blt_tensor logits_view;
-    blt_tensor_view_2d(&logits_view, logits_out->data, seq_len - 1, V, logits_out->backend);
+    if (loss_out != NULL) {
+        blt_tensor logits_view;
+        blt_tensor_view_2d(&logits_view, logits_out->data, seq_len - 1, V, logits_out->backend);
 
-    blt_tensor targets_view;
-    view_1d_offset(&targets_view, bytes_in, 1, seq_len - 1);
+        blt_tensor targets_view;
+        view_1d_offset(&targets_view, bytes_in, 1, seq_len - 1);
 
-    blt_cross_entropy_forward(&logits_view, &targets_view, loss_out);
+        blt_cross_entropy_forward(&logits_view, &targets_view, loss_out);
+    }
 
     // Arena cleanup is caller's responsibility
+}
+
+
+
+void blt_local_decoder_forward(const blt_local_decoder* model,
+                               const blt_tensor* byte_hidden_in,
+                               const blt_tensor* patch_in,
+                               const blt_patch_info* patches,
+                               size_t num_patches,
+                               const blt_tensor* bytes_in,
+                               const size_t* doc_boundaries,
+                               size_t num_docs,
+                               blt_tensor* logits_out,
+                               blt_tensor* loss_out,
+                               blt_arena* arena) {
+    BLT_REQUIRE(logits_out != NULL && loss_out != NULL,
+        "blt_local_decoder_forward: logits_out and loss_out cannot be NULL");
+    blt_local_decoder_forward_ext(model, byte_hidden_in, patch_in, patches, num_patches,
+        bytes_in, doc_boundaries, num_docs, NULL, logits_out, loss_out, arena);
 }
 
 
@@ -389,7 +475,7 @@ void blt_local_decoder_backward(const blt_local_decoder* model,
     blt_check_nd_fp32(&grad->lm_head_grad, 2, (const size_t[]){E, V},
         "blt_local_decoder_backward: lm_head_grad must be [embed_dim, vocab_size] FP32");
 
-    ld_context ctx = make_context(model, seq_len, patches, num_patches, doc_boundaries, num_docs, arena);
+    ld_context ctx = make_context(model, seq_len, seq_len, patches, num_patches, doc_boundaries, num_docs, arena);
     blt_transformer_config layer_config = blt_local_byte_layer_config(
         config->embed_dim, config->num_heads, config->rope_theta, config->hidden_dim,
         &ctx.local_mask, &ctx.rope_cos_view, &ctx.rope_sin_view);

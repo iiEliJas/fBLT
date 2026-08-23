@@ -68,11 +68,104 @@ blt_model_grad* blt_model_grad_create(blt_arena* arena, const blt_model* model) 
 // Forward path
 //
 // Pipeline:
-//   patch_out, byte_hidden_out = Encoder(bytes_in, patches)
+//   patch_out, byte_hidden_out = Encoder(bytes_in, patches)      (encode stage)
 //   patch_doc_boundaries       = byte doc_boundaries -> patch indices
 //   O                          = Global(patch_out, patch_doc_boundaries)
-//   logits_out, loss_out       = Decoder(byte_hidden_out, O, bytes_in)
+//   logits_out, loss_out       = Decoder(byte_hidden_out, O, bytes_in)   (decode stage)
 //
+
+void blt_model_encode(
+    const blt_model* model,
+    const blt_tensor* bytes_in,
+    const blt_patch_info* patches,
+    size_t num_patches,
+    const size_t* doc_boundaries,
+    size_t num_docs,
+    blt_model_enc_out* out,
+    blt_arena* arena
+) {
+    BLT_REQUIRE(model != NULL && bytes_in != NULL && patches != NULL &&
+                out != NULL && arena != NULL,
+        "blt_model_encode: arguments cannot be NULL");
+    BLT_REQUIRE(bytes_in->ndim == 1 && bytes_in->dtype == BLT_DTYPE_UINT8,
+        "blt_model_encode: bytes_in must be a 1D UINT8 tensor [seq_len]");
+    BLT_REQUIRE(num_docs == 0 || doc_boundaries != NULL,
+        "blt_model_encode: doc_boundaries cannot be NULL when num_docs > 0");
+    BLT_REQUIRE(num_patches >= 1, "blt_model_encode: num_patches must be >= 1");
+
+    size_t seq_len = bytes_in->shape[0];
+    size_t embed_dim = model->config.encoder_config.embed_dim;
+    size_t patch_shape[2] = {num_patches, embed_dim};
+    size_t byte_shape[2] = {seq_len, embed_dim};
+
+    // -----------------------------------------------------------------
+    // 1. Local encoder: bytes + patches -> P_final, h_final
+    // -----------------------------------------------------------------
+    out->patch_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
+    out->byte_hidden_out = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
+
+    blt_local_encoder_forward(model->encoder, bytes_in, patches, num_patches,
+        doc_boundaries, num_docs, &out->patch_out, &out->byte_hidden_out, arena);
+
+    // -----------------------------------------------------------------
+    // 2. Remap doc boundaries from byte indices to patch indices
+    // -----------------------------------------------------------------
+    out->patch_doc_boundaries = NULL;
+    if (num_docs > 0) {
+        out->patch_doc_boundaries = (size_t*)blt_arena_alloc(
+            arena, num_docs * sizeof(size_t), sizeof(size_t));
+        map_byte_boundaries_to_patch_boundaries(
+            doc_boundaries, num_docs, patches, num_patches, out->patch_doc_boundaries);
+    }
+
+    // -----------------------------------------------------------------
+    // 3. Global transformer: P_final -> O
+    // -----------------------------------------------------------------
+    out->global_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
+    blt_global_transformer_forward(model->global, &out->patch_out,
+        out->patch_doc_boundaries, num_docs, &out->global_out, arena);
+}
+
+
+void blt_model_decode(
+    const blt_model* model,
+    const blt_model_enc_out* enc,
+    const blt_patch_info* patches,
+    size_t num_patches,
+    const blt_tensor* bytes_in,
+    const size_t* doc_boundaries,
+    size_t num_docs,
+    const blt_local_decoder_d0_opts* d0_opts,
+    blt_tensor* logits_out,
+    blt_tensor* loss_out,
+    blt_arena* arena
+) {
+    BLT_REQUIRE(model != NULL && enc != NULL && patches != NULL && logits_out != NULL && arena != NULL,
+        "blt_model_decode: model, enc, patches, logits_out and arena cannot be NULL");
+    BLT_REQUIRE(num_patches >= 1, "blt_model_decode: num_patches must be >= 1");
+    BLT_REQUIRE(num_patches == enc->patch_out.shape[0],
+        "blt_model_decode: num_patches must match the encode-stage patch count");
+    BLT_REQUIRE(loss_out != NULL || bytes_in == NULL,
+        "blt_model_decode: bytes_in is only used for the loss; pass NULL when loss_out is NULL");
+    if (loss_out != NULL) {
+        BLT_REQUIRE(bytes_in != NULL,
+            "blt_model_decode: bytes_in cannot be NULL when loss_out is requested");
+    }
+
+    // The frozen latents define the sequence: h_final rows == logits rows
+    size_t seq_len = enc->byte_hidden_out.shape[0];
+    if (bytes_in != NULL) {
+        BLT_REQUIRE(bytes_in->ndim == 1 && bytes_in->dtype == BLT_DTYPE_UINT8 &&
+                    bytes_in->shape[0] == seq_len,
+            "blt_model_decode: bytes_in must be 1D UINT8 [seq_len] matching enc->byte_hidden_out");
+    }
+
+    blt_local_decoder_forward_ext(model->decoder, &enc->byte_hidden_out, &enc->global_out,
+        patches, num_patches, bytes_in, doc_boundaries, num_docs,
+        d0_opts, logits_out, loss_out, arena);
+}
+
+
 void blt_model_forward(
     const blt_model* model,
     const blt_tensor* bytes_in,
@@ -87,50 +180,11 @@ void blt_model_forward(
     BLT_REQUIRE(model != NULL && bytes_in != NULL && patches != NULL &&
                 logits_out != NULL && arena != NULL,
         "blt_model_forward: arguments cannot be NULL");
-    BLT_REQUIRE(bytes_in->ndim == 1 && bytes_in->dtype == BLT_DTYPE_UINT8,
-        "blt_model_forward: bytes_in must be a 1D UINT8 tensor [seq_len]");
-    BLT_REQUIRE(num_docs == 0 || doc_boundaries != NULL,
-        "blt_model_forward: doc_boundaries cannot be NULL when num_docs > 0");
-    BLT_REQUIRE(num_patches >= 1, "blt_model_forward: num_patches must be >= 1");
 
-    size_t seq_len = bytes_in->shape[0];
-    size_t embed_dim = model->config.encoder_config.embed_dim;
-    size_t patch_shape[2] = {num_patches, embed_dim};
-    size_t byte_shape[2] = {seq_len, embed_dim};
-
-    // -----------------------------------------------------------------
-    // 1. Local encoder: bytes + patches -> P_final, h_final
-    // -----------------------------------------------------------------
-    blt_tensor patch_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
-    blt_tensor byte_hidden_out = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-
-    blt_local_encoder_forward(model->encoder, bytes_in, patches, num_patches,
-        doc_boundaries, num_docs, &patch_out, &byte_hidden_out, arena);
-
-    // -----------------------------------------------------------------
-    // 2. Remap doc boundaries from byte indices to patch indices
-    // -----------------------------------------------------------------
-    size_t* patch_doc_boundaries = NULL;
-    if (num_docs > 0) {
-        patch_doc_boundaries = (size_t*)blt_arena_alloc(
-            arena, num_docs * sizeof(size_t), sizeof(size_t));
-        map_byte_boundaries_to_patch_boundaries(
-            doc_boundaries, num_docs, patches, num_patches, patch_doc_boundaries);
-    }
-
-    // -----------------------------------------------------------------
-    // 3. Global transformer: P_final -> O
-    // -----------------------------------------------------------------
-    blt_tensor global_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
-    blt_global_transformer_forward(model->global, &patch_out,
-        patch_doc_boundaries, num_docs, &global_out, arena);
-
-    // -----------------------------------------------------------------
-    // 4. Local decoder: h_final + O -> logits, loss
-    // -----------------------------------------------------------------
-    blt_local_decoder_forward(model->decoder, &byte_hidden_out, &global_out,
-        patches, num_patches, bytes_in, doc_boundaries, num_docs,
-        logits_out, loss_out, arena);
+    blt_model_enc_out enc;
+    blt_model_encode(model, bytes_in, patches, num_patches, doc_boundaries, num_docs, &enc, arena);
+    blt_model_decode(model, &enc, patches, num_patches, bytes_in, doc_boundaries, num_docs,
+        NULL, logits_out, loss_out, arena);
 }
 
 

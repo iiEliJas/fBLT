@@ -35,6 +35,11 @@ int run_global_transformer_doc_boundary(void);
 int run_local_decoder_cross_mask(void);
 int run_local_decoder_k_split(void);
 int run_blt_model_generate_sanity(void);
+int run_model_stage_split_equivalence(void);
+int run_model_decode_nullable_loss(void);
+int run_decoder_d0_modes(void);
+int run_rope_position_gather_test(void);
+int run_infer_stats_test(void);
 
 int run_matmul_parity_test(void);
 int run_softmax_parity_test(void);
