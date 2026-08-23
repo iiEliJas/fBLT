@@ -91,3 +91,52 @@ void blt_build_attention_mask(const blt_mask_config* config, blt_tensor* out_mas
         BLT_REQUIRE(row_has_valid_key, "blt_build_attention_mask: query position has no valid key");
     }
 }
+
+
+void blt_build_block_diffusion_mask(const blt_block_diffusion_config* config,
+                                    blt_tensor* out_mask, blt_arena* arena) {
+    BLT_REQUIRE(config != NULL && out_mask != NULL && arena != NULL,
+        "blt_build_block_diffusion_mask: config, out_mask and arena cannot be NULL");
+    const size_t S = config->seq_len;
+    const size_t N = config->num_clean;
+    BLT_REQUIRE(S >= 1 && N >= 1 && N <= S,
+        "blt_build_block_diffusion_mask: need 1 <= num_clean <= seq_len");
+
+    if (config->mode == BLT_BDM_TRAIN) {
+        BLT_REQUIRE(config->block_size >= 1,
+            "blt_build_block_diffusion_mask: TRAIN mode needs block_size >= 1");
+        BLT_REQUIRE((S - N) % config->block_size == 0,
+            "blt_build_block_diffusion_mask: block section must tile exactly (B * (M-1))");
+    }
+
+    size_t shape[2] = {S, S};
+    *out_mask = blt_tensor_create(arena, shape, 2, BLT_DTYPE_FP32);
+    float* m = (float*)out_mask->data;
+    const float neg_inf = -INFINITY;
+
+    for (size_t i = 0; i < S; i++) {
+        bool row_ok = false;
+
+        for (size_t j = 0; j < S; j++) {
+            bool allowed;
+            if (i < N) {
+                // Clean prefix: causal among clean rows only; never see blocks.
+                allowed = (j < N) && (j <= i);
+            } else if (config->mode == BLT_BDM_INFER) {
+                // Single live block: all clean + whole block section.
+                allowed = true;
+            } else {
+                // TRAIN: Fast-BLT Figure 5 matrix -- every row is a plain
+                // contiguous prefix run, i.e. plain causal over the
+                // concatenated [clean ; blocks] sequence. (The paper's prose
+                // says "bidirectional within each block", but its own matrix
+                // shows strict causality; the fixture test pins the matrix.)
+                allowed = (j <= i);
+            }
+
+            m[i * S + j] = allowed ? 0.0f : neg_inf;
+            row_ok = row_ok || allowed;
+        }
+        BLT_REQUIRE(row_ok, "blt_build_block_diffusion_mask: query position has no valid key");
+    }
+}

@@ -245,6 +245,21 @@ Minimal JSON parser for config files (objects, arrays of scalars, string/int/flo
 - `blt_build_attention_mask(config, out_mask, arena)`
     - Input: `blt_mask_config` struct defining attention constraints, output tensor, and arena for storage
     - Output: Writes a 2D FP32 mask tensor of shape `[seq_len_q, seq_len_kv]` to `out_mask`. Uses `0` for allowed attention and `-INFINITY` for masked attention
+- `blt_block_diffusion_mode` enum
+  - BLT-D block-diffusion self-attention mask modes (Fast-BLT §3.1.1 / §3.2.2).
+  - Values:
+    - `BLT_BDM_TRAIN`: plain causal over the concatenated `[clean ; blocks]` sequence — the Fast-BLT Figure 5 matrix is strict prefix-run causality (pinned by the fixture test; the paper's "bidirectional within block" prose disagrees with its own matrix).
+    - `BLT_BDM_INFER`: clean rows causal; every block row sees all clean positions plus the whole block section bidirectionally (single live block during generation).
+- `blt_block_diffusion_config` struct
+  - Fields:
+    - `blt_block_diffusion_mode mode`
+    - `size_t seq_len`: total decoder sequence length S (square mask)
+    - `size_t num_clean`: clean prefix length N
+    - `size_t block_size`: B; TRAIN only (block section must tile exactly). INFER ignores it.
+- `blt_build_block_diffusion_mask(config, out_mask, arena)`
+  - Input: config as above, output tensor, scratch arena.
+  - Output: square FP32 additive mask `[S, S]`, `0` allowed / `-INFINITY` blocked.
+  - Behavior: builds the BLT-D self-attention mask for the given mode; both modes are pinned by hardcoded-matrix fixture tests.
 
 ### blt/ops/patch_pool.h
 - `blt_patch_pool_type` enum
@@ -750,6 +765,20 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
   - Input: model, byte input, patch metadata, doc boundaries, gradient accumulator object, and scratch arena.
   - Output: recomputes the forward intermediates and backpropagates through the encoder, global transformer, and decoder, accumulating gradients into `grad`.
   - Behavior: mirrors the forward pass in reverse, reusing the same byte-to-patch remapping and the submodule backward routines. The gradient object must be allocated with `blt_model_grad_create`.
+
+### blt/models/block_diffusion.h
+- `BLT_MASK_TOKEN_ID` constant (`256`)
+  - Corrupted-cell token id; PAD cells reuse it for their embedding and are excluded from `L_mask` via `cell_valid` (documented deviation keeping `BLT_D0_VOCAB` at 257).
+- `blt_block_batch` struct
+  - One corrupted training example's block section (Fast-BLT §3.2.1): `tokens` (corrupted ids), `positions` (original byte positions for RoPE, PAD clamps to N-1), `targets` (clean bytes), `cell_valid`, `cell_masked`, `groups` (cross-attn group == block index j, i.e. block rows attend latent o_j = the paper's o_{i-1} rule), plus `num_clean` N, `block_size` B, `num_blocks`, `n_block_rows`, sampled timestep `t`.
+- `blt_block_batch_build(out, arena, bytes, N, patches, num_patches, B, rng_seed)`
+  - Input: clean bytes `[N]`, patch tiling of `[0,N)` (`num_patches >= 2`; first patch excluded from block construction), block size B, seed.
+  - Output: fills `out` with the corrupted block section. Deterministic given inputs and seed; draws `t ~ U(0,1)` and masks each valid cell independently with probability t.
+- `blt_local_decoder_forward_diffusion(model, byte_hidden_in [N,E], patch_in [M,pdim], patches, num_patches, clean_bytes [N], batch, d0_mode, logits_out [N+R, vocab], loss_out scalar, arena)`
+  - Output: logits over `[clean ; corrupted blocks]` and the combined scalar loss `L_clean + L_mask/t` (Fast-BLT Eq. 5-7). Clean-row D_0 is the encoder h_final (repo convention); block rows follow `d0_mode`. Cross-attention reuses the standard group mechanism; self-attention uses the Figure 5 TRAIN mask; RoPE uses recorded original positions for block rows.
+- `blt_local_decoder_backward_diffusion(model, ..., grad_byte_hidden_in [N,E], grad_patch_in [M,pdim], grad, arena)`
+  - Behavior: mirrors the forward exactly (recompute + cached intermediates). Cross-attention backward reuses `blt_cross_attention_backward`; self-attention backward mirrors attention.c with saved post-softmax weights; RoPE gradients rotate back through the same gathered tables. Block-row D_0 gradients scatter into `d0_embed_grad` when `d0_mode == BLT_D0_LEARNED` (discarded otherwise). Validated by a numeric-gradient test.
+- Trainer entry point: `make train-blt-d` builds `bin/train_blt_d --corpus FILE [--steps --lr --block-size --window --embed --hidden --layers --d0-mode --seed --report-every]` for full-pipeline BLT-D training runs.
 
 ------------------------------------------------------------------------------------------------------------
 ## Inference utilities (Phase 6 / Fast-BLT)

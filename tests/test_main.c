@@ -66,6 +66,9 @@ int main(void) {
         {"selfspec equivalence trained", run_selfspec_equivalence_trained},
         {"kv cache logits equal dense", run_kv_cache_logits_equal_dense},
         {"kv cache rollback commit", run_kv_cache_rollback_commit},
+        {"block diffusion mask fixture", run_block_diffusion_mask_fixture},
+        {"block diffusion gradcheck", run_block_diffusion_gradcheck},
+        {"block diffusion overfit gate", run_block_diffusion_overfit_gate},
     };
     
     const test_case parity_tests[] = {

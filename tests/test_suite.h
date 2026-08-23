@@ -45,6 +45,9 @@ int run_selfspec_structural_random(void);
 int run_selfspec_equivalence_trained(void);
 int run_kv_cache_logits_equal_dense(void);
 int run_kv_cache_rollback_commit(void);
+int run_block_diffusion_mask_fixture(void);
+int run_block_diffusion_gradcheck(void);
+int run_block_diffusion_overfit_gate(void);
 
 int run_matmul_parity_test(void);
 int run_softmax_parity_test(void);

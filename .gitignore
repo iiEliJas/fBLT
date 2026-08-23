@@ -12,8 +12,9 @@ __pycache__/
 .cache/
 
 docs/Plan.md
+docs/Phase_6.md
 docs/bltransformerPAPER.md
-docs/fast_bltdPAPER.md
+docs/fast_bltPAPER.md
 graphify-out/
 
 AGENTS.md

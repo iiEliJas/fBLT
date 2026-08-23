@@ -63,6 +63,7 @@ CORE_SRCS := \
  	$(SRC_DIR)/models/local_common.c \
  	$(SRC_DIR)/models/local_encoder.c \
 	$(SRC_DIR)/models/local_decoder.c \
+	$(SRC_DIR)/models/block_diffusion.c \
 	$(SRC_DIR)/models/global_transformer.c \
 	$(SRC_DIR)/models/model.c \
 	$(SRC_DIR)/infer/stats.c \
@@ -195,6 +196,15 @@ $(BIN_DIR)/train_sweep$(EXE_EXT): $(TOOLS_DIR)/train_sweep.c $(CORE_OBJS) $(TOOL
 	@echo [LD] Linking trainer executable: $@
 	$(MKDIR_BIN)
 	@$(CC) $(CFLAGS) -I$(BENCH_DIR) $(TOOLS_DIR)/train_sweep.c $(CORE_OBJS) $(TOOLS_OBJS) $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)
+
+# Link BLT-D trainer exe (Phase D)
+$(BIN_DIR)/train_blt_d$(EXE_EXT): $(RUN_DIR)/train_blt_d.c $(CORE_OBJS)
+	@echo [LD] Linking BLT-D trainer executable: $@
+	$(MKDIR_BIN)
+	@$(CC) $(CFLAGS) $(RUN_DIR)/train_blt_d.c $(CORE_OBJS) -o $@ $(LDLIBS)
+
+train-blt-d: $(BIN_DIR)/train_blt_d$(EXE_EXT)
+	@echo [TRAIN] Built successfully: $(BIN_DIR)/train_blt_d$(EXE_EXT)
 
 
 # ============================================================================
