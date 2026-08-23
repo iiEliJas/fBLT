@@ -50,6 +50,13 @@ the end; only the final numbers go to `bench/results.jsonl`.
 - Main training: exactly `steps=2000` steps total (800 warmup + 1200 main),
   constant lr=0.01 plain SGD, global-norm grad clipping at 1.0 (main model and
   entropy LM clipped independently).
+- REVISION (2026-08-23): the first launch accidentally ran configs at
+  steps=3000; those runs all tripped the 25-min wall guard and none ever
+  wrote a results line, so the protocol was restored to steps=2000 with zero
+  completed-run loss. All partial checkpoints/logs from the 3000-step era
+  were discarded. The four depth_* configs run the same frozen 2000 steps but
+  get max_wall_min=90 (guard is a safety net, not part of the protocol);
+  they need ~40 min for identical work.
 - seq_len=256, seed=42.
 - Wall-clock guard: clean checkpoint + abort if a run exceeds 25 min
   (resume with `--resume bench/ckpts/<tag>.ckpt`).

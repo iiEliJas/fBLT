@@ -39,7 +39,7 @@
     "max_patch_length": 32
   },
   "train": {
-    "steps": 3000,
+    "steps": 2000,
     "lr": 0.01,
     "seq_len": 256,
     "seed": 42,

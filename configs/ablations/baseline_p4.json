@@ -2,7 +2,6 @@
   "name": "train_eval",
   "tag": "baseline_p4",
   "phase": "baseline",
-
   "model": {
     "encoder": {
       "embed_dim": 96,
@@ -10,7 +9,10 @@
       "ngram": {
         "enabled": true,
         "vocab_size": 50000,
-        "sizes": [3, 4]
+        "sizes": [
+          3,
+          4
+        ]
       }
     },
     "global": {
@@ -22,21 +24,18 @@
       "num_layers": 2
     }
   },
-
   "cross_attention": {
     "placement": "both",
     "pooling_init": true
   },
-
   "patcher": {
     "rule": "global",
     "threshold_global": 5.3,
     "threshold_monotonic": 5.0,
     "max_patch_length": 32
   },
-
   "train": {
-    "steps": 3000,
+    "steps": 2000,
     "lr": 0.01,
     "seq_len": 256,
     "seed": 42,
