@@ -1,4 +1,3 @@
-// blt/infer/rope_gather.c
 #include "blt/infer/rope_gather.h"
 #include "blt/core/backend.h"
 

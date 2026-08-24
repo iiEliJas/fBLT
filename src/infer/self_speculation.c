@@ -1,8 +1,6 @@
-// blt/infer/self_speculation.c
+// BLT-S: self-speculative greedy generation (Fast-BLT 5.1, Algorithm 2).
 //
-// BLT-S: self-speculative greedy generation (Fast-BLT §5.1, Algorithm 2).
-//
-// Round structure (Phase C: cache-aware drafting):
+// Round structure:
 //   1. entropy LM + patcher segment the committed prefix
 //   2. one encoder+global call freezes the latents          [1 enc/global NFE]
 //      (tier-3 global/encoder caching is deferred; see kv_cache.h)

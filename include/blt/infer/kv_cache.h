@@ -1,4 +1,3 @@
-// blt/infer/kv_cache.h
 #ifndef BLT_INFER_KV_CACHE_H
 #define BLT_INFER_KV_CACHE_H
 
@@ -10,7 +9,7 @@
 #include "blt/models/patcher.h"
 
 
-// Two-tier KV cache for cache-aware incremental decoding (Fast-BLT Phase C).
+// Two-tier KV cache for cache-aware incremental decoding (Fast-BLT).
 //
 // Tier 1 (byte window): per-layer self-attention K/V for decoder byte
 //   positions. Row index == absolute byte position; rollback = truncate.
@@ -35,7 +34,7 @@
 // masked-softmax inline) rather than adding backend kernels; a future CUDA
 // port would map these compositions 1:1 onto fused kernels.
 //
-// Scope note (Phase C v1): encoder + global transformer still run densely
+// encoder + global transformer still run densely
 // once per round (tier 3, patch-level global KV, is deferred until
 // measured), and the dense decoder path remains untouched for training /
 // parity.

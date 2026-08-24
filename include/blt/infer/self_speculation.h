@@ -1,4 +1,3 @@
-// blt/infer/self_speculation.h
 #ifndef BLT_INFER_SELF_SPECULATION_H
 #define BLT_INFER_SELF_SPECULATION_H
 
@@ -12,7 +11,7 @@
 #include "blt/infer/stats.h"
 
 
-// BLT-S configuration (Fast-BLT §5.1, Algorithm 2).
+// BLT-S configuration (Fast-BLT 5.1, Algorithm 2).
 typedef struct {
     size_t window_k;      // speculative draft window; typical sweep {4, 8, 16}
     blt_d0_mode d0_mode;  // D_0 policy for draft rows; ZEROS default, LEARNED reads
@@ -52,7 +51,7 @@ size_t blt_verify_draft(
 );
 
 
-// Greedy generation with BLT self-speculation (Fast-BLT §5.1).
+// Greedy generation with BLT self-speculation (Fast-BLT 5.1).
 //
 // Per round: segment + encode the committed prefix once (frozen latents),
 // draft up to window_k bytes with decoder-only passes conditioning on the

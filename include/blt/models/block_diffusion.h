@@ -1,4 +1,3 @@
-// blt/models/block_diffusion.h
 #ifndef BLT_MODELS_BLOCK_DIFFUSION_H
 #define BLT_MODELS_BLOCK_DIFFUSION_H
 
@@ -11,7 +10,7 @@
 #include "blt/models/patcher.h"
 
 
-// BLT-D block-wise diffusion training support (Fast-BLT §3.2).
+// BLT-D block-wise diffusion training support (Fast-BLT 3.2).
 //
 // Decoder sequence layout during a diffusion training step:
 //   [ clean prefix x (N rows) ; corrupted blocks x_block^t (B*(M-1) rows) ]
@@ -50,6 +49,9 @@ typedef struct {
     size_t* groups;        // [n_block_rows] cross-attn group id == block index j
                            // (block j belongs to patch j+1 and attends latent o_j,
                            // i.e. the paper's o_{i-1} rule)
+    float loss_scale;      // multiplier on L_mask (paper Eq. 7 uses 1.0); set to 0
+                           // mid-training for warmup schedules. Weight only --
+                           // masking probabilities are fixed at build time.
 } blt_block_batch;
 
 
@@ -118,6 +120,21 @@ void blt_local_decoder_backward_diffusion(
     blt_tensor* grad_byte_hidden_in,
     blt_tensor* grad_patch_in,
     blt_local_decoder_grad* grad,
+    blt_arena* arena
+);
+
+// Inference-mode diffusion forward (Fast-BLT section 3.1.1): clean rows
+// causal, block rows bidirectional over the whole sequence; no loss.
+// Caller drives unmasking via batch->tokens/cell_masked across passes.
+// See src/models/block_diffusion.c for the batch contract.
+void blt_local_decoder_forward_diffusion_infer(
+    const blt_local_decoder* model,
+    const blt_tensor* byte_hidden_in,
+    const blt_tensor* patch_in,
+    const blt_patch_info* patches, size_t num_patches,
+    const blt_block_batch* batch,
+    blt_d0_mode d0_mode,
+    blt_tensor* logits_out,
     blt_arena* arena
 );
 

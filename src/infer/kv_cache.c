@@ -1,6 +1,4 @@
-// blt/infer/kv_cache.c
-//
-// Two-tier KV cache + cache-aware incremental decoder (Fast-BLT Phase C).
+// Two-tier KV cache + cache-aware incremental decoder
 // See kv_cache.h for the design contract. Every computation here mirrors
 // the dense composition in src/models/local_decoder.c / attention.c /
 // cross_attention.c op-for-op so results are bit-identical:

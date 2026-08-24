@@ -771,6 +771,7 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
   - Corrupted-cell token id; PAD cells reuse it for their embedding and are excluded from `L_mask` via `cell_valid` (documented deviation keeping `BLT_D0_VOCAB` at 257).
 - `blt_block_batch` struct
   - One corrupted training example's block section (Fast-BLT §3.2.1): `tokens` (corrupted ids), `positions` (original byte positions for RoPE, PAD clamps to N-1), `targets` (clean bytes), `cell_valid`, `cell_masked`, `groups` (cross-attn group == block index j, i.e. block rows attend latent o_j = the paper's o_{i-1} rule), plus `num_clean` N, `block_size` B, `num_blocks`, `n_block_rows`, sampled timestep `t`.
+  - `float loss_scale`: multiplier on L_mask (default 1.0 = paper Eq. 7); set below 1 for reweighting toward next-byte prediction (paper §6) or 0 during warmup. Weight only — masking probabilities are fixed at build time.
 - `blt_block_batch_build(out, arena, bytes, N, patches, num_patches, B, rng_seed)`
   - Input: clean bytes `[N]`, patch tiling of `[0,N)` (`num_patches >= 2`; first patch excluded from block construction), block size B, seed.
   - Output: fills `out` with the corrupted block section. Deterministic given inputs and seed; draws `t ~ U(0,1)` and masks each valid cell independently with probability t.
@@ -778,7 +779,25 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
   - Output: logits over `[clean ; corrupted blocks]` and the combined scalar loss `L_clean + L_mask/t` (Fast-BLT Eq. 5-7). Clean-row D_0 is the encoder h_final (repo convention); block rows follow `d0_mode`. Cross-attention reuses the standard group mechanism; self-attention uses the Figure 5 TRAIN mask; RoPE uses recorded original positions for block rows.
 - `blt_local_decoder_backward_diffusion(model, ..., grad_byte_hidden_in [N,E], grad_patch_in [M,pdim], grad, arena)`
   - Behavior: mirrors the forward exactly (recompute + cached intermediates). Cross-attention backward reuses `blt_cross_attention_backward`; self-attention backward mirrors attention.c with saved post-softmax weights; RoPE gradients rotate back through the same gathered tables. Block-row D_0 gradients scatter into `d0_embed_grad` when `d0_mode == BLT_D0_LEARNED` (discarded otherwise). Validated by a numeric-gradient test.
-- Trainer entry point: `make train-blt-d` builds `bin/train_blt_d --corpus FILE [--steps --lr --block-size --window --embed --hidden --layers --d0-mode --seed --report-every]` for full-pipeline BLT-D training runs.
+- Inference-mode diffusion forward: `blt_local_decoder_forward_diffusion_infer` (block_diffusion.h) — same decoder pass as the training forward but with the §3.1.1 INFERENCE self-attention pattern (clean rows causal; block rows bidirectional over clean + whole block) and no loss. Caller drives iterative unmasking via a hand-filled `blt_block_batch` (tokens / positions / groups = o_M for all block rows / cell_masked, t=0). `diff_ctx_build` gained an internal mask-mode parameter; TRAIN sites unchanged.
+- BLT-D / BLT-DV generation controllers (`include/blt/infer/block_generation.h`, `src/infer/block_generation.c`)
+  - `blt_unmask_select_confidence` / `blt_unmask_select_eb`: selection kernels over masked cells (α threshold with best-cell fallback; ascending-entropy budget γ prefix with lowest-entropy fallback). Both guarantee ≥1 selection.
+  - `blt_draft_block`: Algorithm 1 inner loop over frozen latents; returns decoder NFEs; never resets the scratch arena (caller owns lifetime via round markers).
+  - `blt_generate_greedy_blockdiff`: outer loop, drafts accepted verbatim (do_verify=false).
+  - `blt_generate_greedy_blockdiff_verify`: BLT-DV — drafts verified through `blt_verify_draft`; output is provably byte-identical to plain greedy generation. Gated by unit tests + `make e2e-dv`.
+  - `blt_block_gen_config {block_size, d0_mode, opts{strategy, threshold α|γ, use_top_p, top_p, seed}}`.
+- Weight checkpoints (`include/blt/models/checkpoint.h`, `src/models/checkpoint.c`)
+  - Deterministic indexed listing of every trainable tensor (encoder embed + n-gram tables, per-layer self+cross weights, global stack layers, decoder lm_head + d0_embed); RoPE caches excluded (config-derived).
+  - Format: magic "FBLT", u32 version, u32 tensor count; per tensor u16 name length, name, u32 ndim, size_t dims, float32 payload.
+  - `blt_model_num_tensors`, `blt_model_tensor_at`, `blt_model_save`, `blt_model_load`; load validates names/shapes against the config-built model and is fatal on mismatch.
+  - Trainer flags `--save-weights FILE` / `--load-weights FILE`; with `--steps 0 --load-weights F` the trainer becomes an eval-only tool. Loading skips random init entirely.
+- Trainer entry point: `make train-blt-d` builds `bin/train_blt_d` for full-pipeline BLT-D / plain-BLT runs:
+  - `--corpus FILE --steps N --lr F --block-size B --window W --embed E --hidden H --layers L --d0-mode zeros|learned --seed S --report-every K`
+  - `--diffusion 0|1`: plain causal BLT baseline vs BLT-D objective under identical dims/data (controlled comparison)
+  - `--t-min F`: diffusion timestep floor stabilizing the 1/t loss weight (default 0.05; a value of 1e9 effectively silences L_mask)
+  - `--mask-warmup N --mask-scale F`: ramp then cap the L_mask weight
+  - `--eval-corpus FILE --eval-windows K --eval-skip BYTES`: held-out causal-BPB + masked-cell top-1 report (valid for both arms — the Figure-5 TRAIN mask is plain causal, so clean-row logits never depend on block rows)
+  - First-day results and caveats: runs/PHASE_D_SUMMARY.md
 
 ------------------------------------------------------------------------------------------------------------
 ## Inference utilities (Phase 6 / Fast-BLT)

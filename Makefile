@@ -3,6 +3,8 @@
 # ============================================================================
 CC ?= gcc
 CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Iinclude -Itests -Itools -D_POSIX_C_SOURCE=200809L
+# Header dependency tracking (auto-generated .d files)
+DEPFLAGS := -MMD -MP
 LDLIBS ?= -lm
 
 # Directories
@@ -66,11 +68,12 @@ CORE_SRCS := \
 	$(SRC_DIR)/models/block_diffusion.c \
 	$(SRC_DIR)/models/global_transformer.c \
 	$(SRC_DIR)/models/model.c \
+	$(SRC_DIR)/models/checkpoint.c \
 	$(SRC_DIR)/infer/stats.c \
 	$(SRC_DIR)/infer/rope_gather.c \
 	$(SRC_DIR)/infer/kv_cache.c \
+	$(SRC_DIR)/infer/block_generation.c \
 	$(SRC_DIR)/infer/self_speculation.c
-
 TOOLS_SRCS := \
 	$(TOOLS_DIR)/generate_greedy.c \
 	$(TOOLS_DIR)/flops.c \
@@ -96,7 +99,7 @@ TEST_OBJS := $(addprefix $(OBJ_DIR)/,$(TEST_SRCS:.c=.o)) $(CORE_OBJS) $(TOOLS_OB
 # ============================================================================
 # TARGETS
 # ============================================================================
-.PHONY: all test main bench bench-harness sandbox sweep clean info help
+.PHONY: all test main bench bench-harness sandbox e2e-dv sweep clean info help
 
 all: test
 
@@ -129,6 +132,10 @@ sandbox: $(BIN_DIR)/sandbox$(EXE_EXT)
 	@echo [MAIN] Built successfully: $(BIN_DIR)/sandbox$(EXE_EXT)
 	@./$(BIN_DIR)/sandbox$(EXE_EXT)
 
+e2e-dv: $(BIN_DIR)/e2e_blt_dv$(EXE_EXT)
+	@echo [MAIN] Built successfully: $(BIN_DIR)/e2e_blt_dv$(EXE_EXT)
+	@./$(BIN_DIR)/e2e_blt_dv$(EXE_EXT)
+
 sweep: $(BIN_DIR)/train_sweep$(EXE_EXT)
 	@echo [SWEEP] Built successfully: $(BIN_DIR)/train_sweep$(EXE_EXT)
 
@@ -141,7 +148,7 @@ sweep: $(BIN_DIR)/train_sweep$(EXE_EXT)
 $(OBJ_DIR)/$(SRC_DIR)/%.o: $(SRC_DIR)/%.c
 	@echo "[CC] $< -> $@"
 	$(MKDIR_P)
-	@$(CC) $(CFLAGS) -c $< -o $@
+	@$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # Compile tool to obj files
 $(OBJ_DIR)/$(TOOLS_DIR)/%.o: $(TOOLS_DIR)/%.c
@@ -186,10 +193,10 @@ $(BIN_DIR)/bench_harness_selftest$(EXE_EXT): $(TESTS_DIR)/bench/bench_harness_se
 	@$(CC) $(CFLAGS) -I. $(TESTS_DIR)/bench/bench_harness_selftest.c $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)
 
 # Link sandbox exe
-$(BIN_DIR)/sandbox$(EXE_EXT): $(RUN_DIR)/sandbox.c $(CORE_OBJS)
+$(BIN_DIR)/sandbox$(EXE_EXT): $(RUN_DIR)/sandbox.c $(CORE_OBJS) $(TOOLS_OBJS)
 	@echo [LD] Linking main executable: $@
 	$(MKDIR_BIN)
-	@$(CC) $(CFLAGS) $(RUN_DIR)/sandbox.c $(CORE_OBJS) -o $@ $(LDLIBS)
+	@$(CC) $(CFLAGS) $(RUN_DIR)/sandbox.c $(CORE_OBJS) $(TOOLS_OBJS) -o $@ $(LDLIBS)
 
 # Link sweep trainer exe
 $(BIN_DIR)/train_sweep$(EXE_EXT): $(TOOLS_DIR)/train_sweep.c $(CORE_OBJS) $(TOOLS_OBJS) $(BENCH_LIB_OBJS)
@@ -236,3 +243,10 @@ help:
 	@echo -  make info       - Display build config
 	@echo -  make help       - Show this message
 	@echo Platform detected: $(DETECTED_OS)
+-include $(shell find $(OBJ_DIR) -name '*.d' 2>/dev/null)
+
+
+# Link Phase E end-to-end driver
+$(BIN_DIR)/e2e_blt_dv$(EXE_EXT): $(RUN_DIR)/e2e_blt_dv.c $(CORE_OBJS)
+	@mkdir -p $(BIN_DIR)
+	@$(CC) $(CFLAGS) $(RUN_DIR)/e2e_blt_dv.c $(CORE_OBJS) $(TOOLS_OBJS) -o $@ $(LDLIBS)

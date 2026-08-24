@@ -1,11 +1,10 @@
-// blt/infer/stats.h
 #ifndef BLT_INFER_STATS_H
 #define BLT_INFER_STATS_H
 
 #include <stddef.h>
 
 
-// Forward-pass counters for the Phase 6 inference controllers (BLT-S /
+// Forward-pass counters for the inference controllers (BLT-S /
 // BLT-DV). Controllers increment these at the call site; ops and models
 // stay unmodified so training numerics are never affected.
 //

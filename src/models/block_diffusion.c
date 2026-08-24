@@ -1,7 +1,4 @@
-// blt/models/block_diffusion.c
-//
-// BLT-D block-wise diffusion training (Fast-BLT §3.2). See block_diffusion.h
-// for the design contract and documented deviations from the paper.
+// BLT-D block-wise diffusion training (Fast-BLT 3.2).
 //
 // Composition notes:
 //   - Cross-attention reuses blt_cross_attention_forward/backward verbatim;
@@ -65,6 +62,7 @@ void blt_block_batch_build(blt_block_batch* out, blt_arena* arena,
     out->block_size = B;
     out->num_blocks = NB;
     out->n_block_rows = R;
+    out->loss_scale = 1.0f;   // paper objective by default
 
     out->tokens = (uint32_t*)blt_arena_alloc(arena, R * sizeof(uint32_t), sizeof(uint32_t));
     out->positions = (size_t*)blt_arena_alloc(arena, R * sizeof(size_t), sizeof(size_t));
@@ -118,6 +116,7 @@ static void diff_ctx_build(diff_ctx* c, const blt_local_decoder* model,
                            const blt_patch_info* patches, size_t num_patches,
                            const blt_block_batch* batch,
                            blt_d0_mode d0_mode,
+                           blt_block_diffusion_mode mask_mode,
                            blt_arena* arena) {
     const blt_local_decoder_config* cfg = &model->config;
     c->N = batch->num_clean;
@@ -195,7 +194,7 @@ static void diff_ctx_build(diff_ctx* c, const blt_local_decoder* model,
     }
 
     blt_block_diffusion_config mc = {
-        .mode = BLT_BDM_TRAIN,
+        .mode = mask_mode,
         .seq_len = c->S,
         .num_clean = c->N,
         .block_size = batch->block_size,
@@ -449,7 +448,7 @@ void blt_local_decoder_forward_diffusion(
 
     diff_ctx c;
     diff_ctx_build(&c, model, byte_hidden_in, patch_in, patches, num_patches,
-        batch, d0_mode, arena);
+        batch, d0_mode, BLT_BDM_TRAIN, arena);
 
     size_t out_shape[2] = {c.S, c.V};
     blt_check_nd_fp32(logits_out, 2, out_shape,
@@ -494,9 +493,10 @@ void blt_local_decoder_forward_diffusion(
                 sum += e;
                 if (v == (size_t)batch->targets[r]) pt = e;
             }
-            l_mask += -logf(pt / sum);
+            // floor guards -log(0) when the target probability underflows
+            l_mask += -logf(fmaxf(pt / sum, 1e-9f));
         }
-        loss += l_mask / batch->t;
+        loss += batch->loss_scale * l_mask / batch->t;
     }
 
     ((float*)loss_out->data)[0] = loss;
@@ -525,7 +525,7 @@ void blt_local_decoder_backward_diffusion(
 
     diff_ctx c;
     diff_ctx_build(&c, model, byte_hidden_in, patch_in, patches, num_patches,
-        batch, d0_mode, arena);
+        batch, d0_mode, BLT_BDM_TRAIN, arena);
 
     blt_check_nd_fp32(grad_byte_hidden_in, 2, (const size_t[]){c.N, c.E},
         "backward_diffusion: grad_byte_hidden_in must be [N, embed_dim] FP32");
@@ -559,8 +559,8 @@ void blt_local_decoder_backward_diffusion(
         memcpy(grad_logits.data, grad_view.data, (c.N - 1) * c.V * sizeof(float));
     }
 
-    if (batch->t > 0.0f) {
-        const float inv_t = 1.0f / batch->t;
+    if (batch->t > 0.0f && batch->loss_scale != 0.0f) {
+        const float inv_t = batch->loss_scale / batch->t;
         float* gl = (float*)grad_logits.data;
         for (size_t r = 0; r < c.R; r++) {
             if (!batch->cell_masked[r]) continue;
@@ -799,4 +799,46 @@ void blt_local_decoder_backward_diffusion(
     blt_tensor dP;
     blt_tensor_view_2d(&dP, dP_split.data, num_patches, c.pdim, dP_split.backend);
     memcpy(grad_patch_in->data, dP.data, num_patches * c.pdim * sizeof(float));
+}
+
+//----------------------------------------------------------------------
+// Public inference forward (Fast-BLT section 3.1.1 / Algorithm 1)
+//
+// Same decoder pass as blt_local_decoder_forward_diffusion but with the
+// INFERENCE self-attention pattern: clean rows causal; every block row
+// attends all clean positions plus the whole block section
+// bidirectionally. No loss is computed -- the caller drives iterative
+// unmasking over batch->tokens / cell_masked between passes.
+//
+// The caller owns the batch: fill tokens (byte ids or BLT_MASK_TOKEN_ID),
+// positions (true future positions for RoPE), groups (latent index each
+// block row cross-attends; the paper's rule is o_M for ALL block rows),
+// cell_masked, num_clean = N, n_block_rows = B, t = 0.
+void blt_local_decoder_forward_diffusion_infer(
+    const blt_local_decoder* model,
+    const blt_tensor* byte_hidden_in,
+    const blt_tensor* patch_in,
+    const blt_patch_info* patches, size_t num_patches,
+    const blt_block_batch* batch,
+    blt_d0_mode d0_mode,
+    blt_tensor* logits_out,
+    blt_arena* arena
+) {
+    BLT_REQUIRE(model != NULL && logits_out != NULL && arena != NULL &&
+                batch != NULL,
+        "forward_diffusion_infer: arguments cannot be NULL");
+
+    diff_ctx c;
+    diff_ctx_build(&c, model, byte_hidden_in, patch_in, patches, num_patches,
+        batch, d0_mode, BLT_BDM_INFER, arena);
+
+    size_t out_shape[2] = {c.S, c.V};
+    blt_check_nd_fp32(logits_out, 2, out_shape,
+        "forward_diffusion_infer: logits_out must be [N + n_block_rows, vocab_size] FP32");
+
+    diff_layer_cache* caches;
+    blt_tensor logits, final_states;
+    forward_with_caches(model, &c, num_patches, &logits, &final_states,
+        &caches, arena);
+    memcpy(logits_out->data, logits.data, c.S * c.V * sizeof(float));
 }
