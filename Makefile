@@ -99,7 +99,7 @@ TEST_OBJS := $(addprefix $(OBJ_DIR)/,$(TEST_SRCS:.c=.o)) $(CORE_OBJS) $(TOOLS_OB
 # ============================================================================
 # TARGETS
 # ============================================================================
-.PHONY: all test main bench bench-harness sandbox e2e-dv sweep clean info help
+.PHONY: all test main bench bench-harness sandbox e2e-dv bench-infer sweep clean info help
 
 all: test
 
@@ -123,6 +123,10 @@ main: $(BIN_DIR)/main$(EXE_EXT)
 
 bench: $(BIN_DIR)/bench_patcher$(EXE_EXT)
 	@echo [BENCH] Built successfully: $(BIN_DIR)/bench$(EXE_EXT)
+
+bench-infer: $(BIN_DIR)/infer_bench$(EXE_EXT)
+	@echo [BENCH] Built successfully: $(BIN_DIR)/infer_bench$(EXE_EXT)
+	@./$(BIN_DIR)/infer_bench$(EXE_EXT)
 
 bench-harness: $(BIN_DIR)/bench_harness_selftest$(EXE_EXT)
 	@echo [BENCH] Running harness self-test...
@@ -250,3 +254,9 @@ help:
 $(BIN_DIR)/e2e_blt_dv$(EXE_EXT): $(RUN_DIR)/e2e_blt_dv.c $(CORE_OBJS)
 	@mkdir -p $(BIN_DIR)
 	@$(CC) $(CFLAGS) $(RUN_DIR)/e2e_blt_dv.c $(CORE_OBJS) $(TOOLS_OBJS) -o $@ $(LDLIBS)
+
+# Link Phase F inference benchmark
+$(BIN_DIR)/infer_bench$(EXE_EXT): bench/infer_bench.c $(CORE_OBJS) $(TOOLS_OBJS) $(BENCH_LIB_OBJS)
+	@mkdir -p $(BIN_DIR)
+	@echo "[CC] $< -> $@"
+	@$(CC) $(CFLAGS) -I$(BENCH_DIR) bench/infer_bench.c $(CORE_OBJS) $(TOOLS_OBJS) $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)

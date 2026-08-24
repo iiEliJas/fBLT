@@ -136,7 +136,7 @@ static int load_patch_boundaries(const char* path, size_t* starts, size_t* lengt
 int run_patcher_parity_tests(void) {
     blt_arena* arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
     if (!arena) {
-        fprintf(stderr, "[FAIL] arena creation for phase1 tests\n");
+        fprintf(stderr, "[FAIL] arena creation for patcher tests\n");
         return 0;
     }
 

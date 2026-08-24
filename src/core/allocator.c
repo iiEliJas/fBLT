@@ -41,7 +41,7 @@ blt_arena* blt_arena_create(size_t capacity_bytes, blt_backend backend) {
     arena->backend = backend;
 
     if (backend == BLT_BACKEND_CUDA) {
-        BLT_FATAL("CUDA backend is not supported in Phase 0");
+        BLT_FATAL("CUDA backend is not supported yet");
     }
 
     arena->buffer = aligned_malloc(capacity_bytes, 64);

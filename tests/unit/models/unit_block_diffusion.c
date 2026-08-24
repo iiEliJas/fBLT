@@ -353,7 +353,7 @@ int run_block_diffusion_gradcheck(void) {
 // Test 3: fast overfit gate. A tiny full pipeline (encoder -> global ->
 // diffusion decoder) trained with plain SGD must drive the combined
 // L_clean + L_mask/t loss down sharply on memorized snippets. This proves
-// the whole Phase D machinery (masks, preprocessing, forward, backward,
+// the whole block-diffusion machinery (masks, preprocessing, forward, backward,
 // D_0 table gradient) learns end-to-end. The real corpus-scale training
 // comparison against plain BLT happens via bin/train_blt_d (Phase D exit).
 

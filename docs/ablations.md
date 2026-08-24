@@ -1,4 +1,4 @@
-# Phase 5 Ablation Protocol
+# Architecture Ablation Protocol
 
 All ablation sweeps (5.1 ngram, 5.2 cross-attention placement, 5.3 depth,
 5.5 patcher) follow this protocol.
@@ -106,7 +106,7 @@ column is inverted in sign by bench_report - positive % there means slower).
 
 All variants are within +-0.11% of baseline and every single one is slightly
 WORSE than the baseline n-gram config {3,4} @ 50k/table. At this model/data
-scale the hash-ngram knob does not pay for itself beyond the small baseline
+scaling up the hash-ngram tables does not pay for itself beyond the small baseline
 setup; bigger vocabs only cost throughput (dense full-tensor SGD).
 
 | name | tag | n | mean_ms | p50_ms | p90_ms | p99_ms | bpb* | bpb_c* | bpb_h* | avg_patch_len* | train_steps* | wall_clock_sec* | flops_per_byte* | throughput_bytes_per_sec* |
@@ -157,7 +157,7 @@ delta vs baseline tag 'baseline_p4': (+) improvement, (-) regression; latency/me
 ### 5.3 depth (total local layers fixed at 10)
 
 All four splits are WORSE than the 3-local-layer baseline (+0.20..0.23%).
-Expected caveat: step count was frozen at 2000 for comparability, so deeper
+Note: step count was frozen at 2000 for comparability, so deeper
 stacks are under-trained here; wall clock confirms they do ~2x work per byte.
 Within the sweep, shallow-encoder/deep-decoder (1,9) wins as the paper found,
 and the ordering (enc1 < enc3 < enc5 < enc9 by BPB) matches the paper's
@@ -206,7 +206,7 @@ delta vs baseline tag 'baseline_p4': (+) improvement, (-) regression; latency/me
 
 ## Winner analysis
 
-Per-knob winners:
+Winners per setting:
 - 5.1 ngram: baseline {3,4} @ 50k (every alternative is worse)
 - 5.2 placement: decoder_all (-0.02%, also cheapest of the top group)
 - 5.3 depth: baseline depth (deeper loses at frozen budget)
@@ -235,7 +235,7 @@ the winner on every axis; our grid shows each such choice costs throughput
 without improving BPB at this scale (see 5.1/5.2 tables and the saturated
 threshold rows in 5.5).
 
-Caveats: single seed per sweep point (determinism verified for baseline only),
+Notes: single seed per sweep point (determinism verified for baseline only),
 2000-step frozen budget under-trains deeper stacks (5.3), and the entropy-
 patcher threshold targets missed calibration so dynamic-vs-fixed patching was
 only compared in its saturating regime. None of these change the direction of

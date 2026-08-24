@@ -159,7 +159,7 @@ static void parse_ngram(const blt_json_value* enc, sweep_config* c) {
 }
 
 // placement strings -> (encoder, decoder) modes. "both" = all layers in both
-// modules (matches the Phase 4 unit_model wiring used by the baseline).
+// modules (matches the unit_model wiring used by the baseline).
 static void parse_placement(const char* s, sweep_config* c) {
     if (strcmp(s, "none") == 0) {
         c->enc_xattn = BLT_XATTN_NONE; c->dec_xattn = BLT_XATTN_NONE;

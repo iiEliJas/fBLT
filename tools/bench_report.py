@@ -23,7 +23,7 @@ def parse_args(argv=None):
     p.add_argument("--results", default="bench/results.jsonl",
                    help="path to results.jsonl (default: bench/results.jsonl)")
     p.add_argument("--phase", action="append", default=[],
-                   help="keep only these phases (repeatable)")
+                   help="keep only these experiment groups (repeatable)")
     p.add_argument("--tag", action="append", default=[],
                    help="keep only these tags (repeatable)")
     p.add_argument("--name", action="append", default=[],

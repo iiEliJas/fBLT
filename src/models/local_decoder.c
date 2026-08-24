@@ -208,8 +208,8 @@ blt_local_decoder* blt_local_decoder_create(blt_arena* arena, const blt_local_de
     m->lm_head_weight = blt_tensor_create(arena, lm_head_shape, 2, BLT_DTYPE_FP32);
 
     // D_0 table for draft/MASK rows (BLT_D0_LEARNED); zero-initialized.
-    // Backward support lands with Phase D -- until then the gradient stays
-    // zero and SGD steps on it are no-ops.
+    // The diffusion backward accumulates into d0_embed_grad; the legacy
+    // decoder backward leaves it zero, so SGD steps on it are no-ops there.
     size_t d0_embed_shape[2] = { BLT_D0_VOCAB, E };
     m->d0_embed_weight = blt_tensor_create(arena, d0_embed_shape, 2, BLT_DTYPE_FP32);
 

@@ -179,6 +179,124 @@ void blt_model_save(const blt_model* model, const char* path) {
     fclose(f);
 }
 
+void blt_entropy_lm_save(const blt_entropy_lm* lm, const char* path) {
+    FILE* f = fopen(path, "wb");
+    if (!f) BLT_FATAL("entropy lm save: cannot open '%s'", path);
+
+    const uint32_t version = 1;
+    const uint32_t num = 2 + lm->stack.num_layers * 7;
+
+    if (fwrite("FBLT", 1, 4, f) != 4 ||
+        fwrite(&version, sizeof(uint32_t), 1, f) != 1 ||
+        fwrite(&num, sizeof(uint32_t), 1, f) != 1)
+        BLT_FATAL("entropy lm save: header write failed (%s)", path);
+
+    for (uint32_t i = 0; i < num; i++) {
+        blt_tensor* t;
+        char namebuf[32];
+        const char* name;
+        if (i == 0) {
+            name = "ent.embed";
+            t = (blt_tensor*)&lm->embedding_weight;
+        } else if (i == num - 1) {
+            name = "ent.lm_head";
+            t = (blt_tensor*)&lm->lm_head_weight;
+        } else {
+            static const char* NAMES[] = {
+                "norm1", "attn_qkv", "attn_proj", "norm2",
+                "ffn_up", "ffn_gate", "ffn_down",
+            };
+            const size_t layer = (i - 1) / 7;
+            snprintf(namebuf, sizeof(namebuf), "ent.L%zu.%s", layer,
+                     NAMES[(i - 1) % 7]);
+            name = namebuf;
+            blt_transformer_layer_storage* l =
+                (blt_transformer_layer_storage*)&lm->stack.layer_storage[layer];
+            blt_tensor* all[] = {
+                &l->norm1_weight, &l->attn_qkv_w, &l->attn_proj_w,
+                &l->norm2_weight, &l->ffn_up_w, &l->ffn_gate_w,
+                &l->ffn_down_w,
+            };
+            t = all[(i - 1) % 7];
+        }
+
+        const uint16_t name_len = (uint16_t)strlen(name);
+        const uint32_t ndim = (uint32_t)t->ndim;
+        if (fwrite(&name_len, sizeof(uint16_t), 1, f) != 1 ||
+            fwrite(name, 1, name_len, f) != name_len ||
+            fwrite(&ndim, sizeof(uint32_t), 1, f) != 1 ||
+            fwrite(t->shape, sizeof(size_t), ndim, f) != ndim ||
+            fwrite(t->data, sizeof(float), t->numel, f) != t->numel)
+            BLT_FATAL("entropy lm save: write failed at '%s'", name);
+    }
+    fclose(f);
+}
+
+void blt_entropy_lm_load(blt_entropy_lm* lm, const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) BLT_FATAL("entropy lm load: cannot open '%s'", path);
+
+    char magic[4];
+    uint32_t version = 0, num = 0;
+    if (fread(magic, 1, 4, f) != 4 || memcmp(magic, "FBLT", 4) != 0)
+        BLT_FATAL("entropy lm load: bad magic in '%s'", path);
+    if (fread(&version, sizeof(uint32_t), 1, f) != 1 || version != 1)
+        BLT_FATAL("entropy lm load: unsupported version %u", version);
+    const uint32_t want = 2 + lm->stack.num_layers * 7;
+    if (fread(&num, sizeof(uint32_t), 1, f) != 1 || num != want)
+        BLT_FATAL("entropy lm load: tensor count %u != %u", num, want);
+
+    for (uint32_t i = 0; i < num; i++) {
+        blt_tensor* t;
+        char want_name[32];
+        if (i == 0) {
+            strcpy(want_name, "ent.embed");
+            t = &lm->embedding_weight;
+        } else if (i == num - 1) {
+            strcpy(want_name, "ent.lm_head");
+            t = &lm->lm_head_weight;
+        } else {
+            static const char* NAMES[] = {
+                "norm1", "attn_qkv", "attn_proj", "norm2",
+                "ffn_up", "ffn_gate", "ffn_down",
+            };
+            snprintf(want_name, sizeof(want_name), "ent.L%zu.%s",
+                     (size_t)(i - 1) / 7, NAMES[(i - 1) % 7]);
+            blt_transformer_layer_storage* l =
+                &lm->stack.layer_storage[(i - 1) / 7];
+            blt_tensor* all[] = {
+                &l->norm1_weight, &l->attn_qkv_w, &l->attn_proj_w,
+                &l->norm2_weight, &l->ffn_up_w, &l->ffn_gate_w,
+                &l->ffn_down_w,
+            };
+            t = all[(i - 1) % 7];
+        }
+
+        uint16_t name_len = 0;
+        char name[256];
+        uint32_t ndim = 0;
+        if (fread(&name_len, sizeof(uint16_t), 1, f) != 1 ||
+            fread(name, 1, name_len, f) != name_len ||
+            fread(&ndim, sizeof(uint32_t), 1, f) != 1)
+            BLT_FATAL("entropy lm load: truncated entry %u", i);
+        name[name_len] = '\0';
+        if (strcmp(name, want_name) != 0)
+            BLT_FATAL("entropy lm load: entry %u is '%s', expected '%s'",
+                      i, name, want_name);
+        if (ndim != t->ndim || ndim > BLT_MAX_NDIM)
+            BLT_FATAL("entropy lm load: '%s' ndim mismatch", name);
+        for (uint32_t d = 0; d < ndim; d++) {
+            size_t dim = 0;
+            if (fread(&dim, sizeof(size_t), 1, f) != 1 ||
+                dim != t->shape[d])
+                BLT_FATAL("entropy lm load: '%s' shape mismatch", name);
+        }
+        if (fread(t->data, sizeof(float), t->numel, f) != t->numel)
+            BLT_FATAL("entropy lm load: '%s' truncated payload", name);
+    }
+    fclose(f);
+}
+
 void blt_model_load(blt_model* model, const char* path) {
     FILE* f = fopen(path, "rb");
     if (!f) BLT_FATAL("checkpoint load: cannot open '%s'", path);

@@ -103,6 +103,38 @@ size_t blt_verify_draft(
     size_t num_patches = blt_segment_patches(
         &entropy_vals, x, patches, BLT_SELFSPEC_MAX_PATCHES, patcher_config);
 
+    // Force a patch boundary at the commit point l. Without this, the
+    // final prefix patch can absorb draft bytes; its latent o then changes
+    // and verification predictions diverge from what greedy decoding would
+    // produce at the same committed prefix (breaking the DV == greedy
+    // guarantee whenever l lands mid-patch). Splitting at l makes the
+    // prefix-side segmentation identical to greedy's own re-segmentation.
+    {
+        blt_patch_info forced[BLT_SELFSPEC_MAX_PATCHES];
+        size_t n2 = 0;
+        for (size_t pi = 0; pi < num_patches && n2 < BLT_SELFSPEC_MAX_PATCHES; pi++) {
+            const size_t s = patches[pi].start_idx;
+            const size_t e = s + patches[pi].length;
+            if (s < l && e > l) {
+                forced[n2++] = patches[pi];  // prefix part [s, l)
+                forced[n2 - 1].length = l - s;
+                if (n2 < BLT_SELFSPEC_MAX_PATCHES) {
+                    forced[n2] = patches[pi];  // draft part [l, e)
+                    forced[n2].start_idx = l;
+                    forced[n2].length = e - l;
+                    forced[n2].peak_entropy = patches[pi].peak_entropy;
+                    n2++;
+                }
+            } else {
+                forced[n2++] = patches[pi];
+            }
+        }
+        BLT_REQUIRE(n2 <= BLT_SELFSPEC_MAX_PATCHES,
+            "blt_verify_draft: forced-boundary patch array overflow");
+        num_patches = n2;
+        memcpy(patches, forced, n2 * sizeof(blt_patch_info));
+    }
+
     // -------------------------------------------------------------
     // Algorithm 2 line 2: T' = E(x'); O' = G(T'); y = D(x'; O')
     // -------------------------------------------------------------

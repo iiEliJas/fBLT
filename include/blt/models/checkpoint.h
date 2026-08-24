@@ -2,6 +2,7 @@
 #define BLT_MODELS_CHECKPOINT_H
 
 #include "blt/models/model.h"
+#include "blt/models/entropy_lm.h"
 
 //----------------------------------------------------------------------
 // Model weight serialization (checkpoints).
@@ -42,5 +43,11 @@ void blt_model_save(const blt_model* model, const char* path);
 // Read a checkpoint written by blt_model_save into model. Fatal on any
 // format/validation mismatch.
 void blt_model_load(blt_model* model, const char* path);
+
+// Entropy-LM weight serialization (same FBLT container, tensor set:
+// embedding, per-layer self-attention weights, lm_head). Load validates
+// names/shapes against the target model.
+void blt_entropy_lm_save(const blt_entropy_lm* lm, const char* path);
+void blt_entropy_lm_load(blt_entropy_lm* lm, const char* path);
 
 #endif // BLT_MODELS_CHECKPOINT_H

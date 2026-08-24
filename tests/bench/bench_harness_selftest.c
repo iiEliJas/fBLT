@@ -5,7 +5,7 @@
 #include <math.h>
 
 // ============================================================================
-// Harness self-test — exit criteria from docs/Plan ("Before Phase 5"):
+// Harness self-test — exit criteria from docs/Plan:
 //
 //   1. Running the same fixed config twice produces latency stats whose means
 //      agree within ~2%.

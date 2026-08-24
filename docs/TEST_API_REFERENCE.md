@@ -19,8 +19,8 @@ The test system is organized into a small set of entrypoints and helper modules:
 - Provide reusable helpers for common test operations.
 - Include assertion macros and tensor-loading helpers.
 
-### tests/test_phase1.c
-- Contains the reference-style parity test for the Phase 1 pipeline.
+### tests/parity/
+- Reference-style parity tests for the core pipeline (golden files under `data/`).
 - Useful as a model for creating end-to-end tests that compare computed output to expected data.
 
 ### tests/unit/*

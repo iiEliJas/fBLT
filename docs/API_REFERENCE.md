@@ -228,7 +228,7 @@ Minimal JSON parser for config files (objects, arrays of scalars, string/int/flo
 - `blt_sgd_step(blt_tensor* param, const blt_tensor* grad, float lr)`
   - Input: `param` tensor to update in place, `grad` tensor (same shape/dtype as `param`), and learning rate `lr`.
   - Output: none; updates `param` in place.
-  - Behavior: elementwise `param -= lr * grad`. CPU-only, stateless (no momentum/second-moment buffers) — the minimal Phase 1a optimizer. Requires `param` and `grad` to be FP32 and elementwise-compatible (validated via `blt_check_elementwise_fp32`) and `param->backend == BLT_BACKEND_CPU`.
+  - Behavior: elementwise `param -= lr * grad`. CPU-only, stateless (no momentum/second-moment buffers) — the minimal optimizer. Requires `param` and `grad` to be FP32 and elementwise-compatible (validated via `blt_check_elementwise_fp32`) and `param->backend == BLT_BACKEND_CPU`.
 
 ## blt/ops/mask_builder.h
 - `blt_mask_config` struct
@@ -590,7 +590,7 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
   - Behavior: allocates all tensors of a shared layer storage (zero-initialized).
 - `blt_local_layer_grad_alloc(arena, grad, embed_dim, hidden_dim)`
   - Behavior: allocates all tensors of a shared layer grad (zero-initialized).
-- `blt_xattn_placement` enum: `BLT_XATTN_DEFAULT` (legacy bool behavior), `BLT_XATTN_NONE`, `BLT_XATTN_LAST`, `BLT_XATTN_ALL`, `BLT_XATTN_FIRST` (decoder-only). Sweep knob for cross-attention placement (paper Table 7).
+- `blt_xattn_placement` enum: `BLT_XATTN_DEFAULT` (legacy bool behavior), `BLT_XATTN_NONE`, `BLT_XATTN_LAST`, `BLT_XATTN_ALL`, `BLT_XATTN_FIRST` (decoder-only). Sweep option for cross-attention placement (paper Table 7).
 - `blt_local_cross_attn_fires(blt_xattn_placement placement, bool cross_attn_all_layers, size_t num_layers, size_t layer)`
   - Output: whether cross-attention fires on `layer`. An explicit placement overrides the legacy bool; `BLT_XATTN_DEFAULT` falls back to `cross_attn_all_layers || (layer + 1 == num_layers)`.
 - `blt_local_byte_weights_view(const blt_local_layer_storage* s)`
@@ -612,7 +612,7 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
     - `size_t num_heads`: Number of byte self-attention heads.
     - `size_t cross_attn_heads`: Number of cross-attention heads ($U_E$).
     - `bool cross_attn_all_layers`: If `false`, cross-attention fires only after the final layer.
-    - `blt_xattn_placement cross_attn_placement`: sweep knob overriding the bool above when not `BLT_XATTN_DEFAULT`.
+    - `blt_xattn_placement cross_attn_placement`: sweep option overriding the bool above when not `BLT_XATTN_DEFAULT`.
     - `blt_patch_pool_type pool_type`: Initialization strategy for initial patch representations $P_0$ (default: MEAN).
     - `blt_hash_ngram_config ngram_config`: Hash n-gram config; `ngram_config.embed_dim` must match `embed_dim`.
     - `float rope_theta`: Base frequency for Rotary Position Embeddings.
@@ -665,7 +665,7 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
     - `float rope_theta`: Base frequency for Rotary Position Embeddings.
     - `size_t max_seq_len`: Maximum sequence length used to size the shared RoPE cache.
     - `size_t vocab_size`: Vocabulary size for the LM head (typically 256).
-    - `blt_xattn_placement cross_attn_placement`: sweep knob (`NONE`/`FIRST`/`ALL`) overriding `cross_attn_all_layers` when not `BLT_XATTN_DEFAULT`.
+    - `blt_xattn_placement cross_attn_placement`: sweep option (`NONE`/`FIRST`/`ALL`) overriding `cross_attn_all_layers` when not `BLT_XATTN_DEFAULT`.
 - `BLT_D0_VOCAB` constant (`257`)
   - Row count of the decoder-owned D_0 embedding table: 256 byte values plus a MASK token at index 256.
 - `blt_d0_mode` enum
@@ -687,14 +687,14 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
     - `blt_tensor rope_cos_cache`, `rope_sin_cache`: Precomputed RoPE tables `[max_seq_len, head_dim/2]`.
     - `blt_local_decoder_layer_storage* layers`: Array of per-layer storage blocks `[num_layers]`.
     - `blt_tensor lm_head_weight`: Language-model head weights `[embed_dim, vocab_size]`.
-    - `blt_tensor d0_embed_weight`: D_0 table `[BLT_D0_VOCAB, embed_dim]` consulted in `BLT_D0_LEARNED` mode; row 256 doubles as the MASK embedding. No backward support yet (Phase D wires it) — its gradient stays zero until then.
+    - `blt_tensor d0_embed_weight`: D_0 table `[BLT_D0_VOCAB, embed_dim]` consulted in `BLT_D0_LEARNED` mode; row 256 doubles as the MASK embedding. Its gradient is written by the diffusion backward; the legacy decoder backward leaves it zero.
 - `blt_local_decoder_layer_grad` struct
   - Alias of `blt_local_layer_grad` (see blt/models/local_common.h) — per-layer gradient storage mirroring `blt_local_decoder_layer_storage`.
 - `blt_local_decoder_grad` struct
   - Fields:
     - `blt_local_decoder_layer_grad* layer_grads`: Layer gradient structures `[num_layers]` (overwritten).
     - `blt_tensor lm_head_grad`: Gradient for LM head weights.
-    - `blt_tensor d0_embed_grad`: Gradient for the D_0 table `[BLT_D0_VOCAB, embed_dim]` (stays zero until Phase D).
+    - `blt_tensor d0_embed_grad`: Gradient for the D_0 table `[BLT_D0_VOCAB, embed_dim]` (zero except under the diffusion backward).
 - `blt_local_decoder_create(arena, config)`
   - Input: `arena` for allocations and `config` parameters.
   - Output: Allocated `blt_local_decoder*` handle with zero-initialized weights and precomputed RoPE caches.
@@ -714,7 +714,7 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
 - `blt_local_decoder_backward(model, byte_hidden_in, patch_in, patches, num_patches, bytes_in, doc_boundaries, num_docs, grad_byte_hidden_in, grad_patch_in, grad, arena)`
   - Input: Same forward parameters plus destination gradients `grad_byte_hidden_in` `[seq_len, embed_dim]` (feeds back into local encoder), `grad_patch_in` `[num_patches, embed_dim]` (feeds back into global transformer), destination gradient handle `grad`, and scratch `arena`.
   - Output: Populates `grad` struct with parameter gradients and writes upstream gradients into `grad_byte_hidden_in` and `grad_patch_in` when provided.
-  - Behavior: Full-sequence backward only (legacy layout); diffusion/draft-row branches arrive with Phase D.
+  - Behavior: Full-sequence backward; includes the diffusion/draft-row branches (see block_diffusion).
 
 
 ### blt/models/model.h
@@ -780,6 +780,9 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
 - `blt_local_decoder_backward_diffusion(model, ..., grad_byte_hidden_in [N,E], grad_patch_in [M,pdim], grad, arena)`
   - Behavior: mirrors the forward exactly (recompute + cached intermediates). Cross-attention backward reuses `blt_cross_attention_backward`; self-attention backward mirrors attention.c with saved post-softmax weights; RoPE gradients rotate back through the same gathered tables. Block-row D_0 gradients scatter into `d0_embed_grad` when `d0_mode == BLT_D0_LEARNED` (discarded otherwise). Validated by a numeric-gradient test.
 - Inference-mode diffusion forward: `blt_local_decoder_forward_diffusion_infer` (block_diffusion.h) — same decoder pass as the training forward but with the §3.1.1 INFERENCE self-attention pattern (clean rows causal; block rows bidirectional over clean + whole block) and no loss. Caller drives iterative unmasking via a hand-filled `blt_block_batch` (tokens / positions / groups = o_M for all block rows / cell_masked, t=0). `diff_ctx_build` gained an internal mask-mode parameter; TRAIN sites unchanged.
+- Entropy-LM serialization: `blt_entropy_lm_save` / `blt_entropy_lm_load` (checkpoint.h) — same FBLT container over the LM tensor set (embedding, per-layer self-attention weights, lm_head).
+- Post-benchmark experiment flags: `bin/train_blt_d --train-entropy-lm FILE` (standalone entropy-LM training mode, plain byte CE), `--entropy-lm FILE` (load trained LM for `--entropy-patches` segmentation in training and eval), `--mask-late-step N --mask-late-scale F` (lambda-cap schedule; destabilized at toy scale — see runs/benchmark_notes.md). `bin/infer_bench --entropy-lm FILE --fixed-patches` select the patching regime; DV bench gate is agreement >= 0.90 (exact equality holds only for boundary-aligned patchers — blt_verify_draft now forces a patch boundary at the commit point).
+- Inference benchmark: `make bench-infer` builds `bin/infer_bench` (bench/infer_bench.c). Loads the plain + BLT-D checkpoints, generates from deep held-out prompts, and appends per-config JSONL rows (phase "6_infer") to bench/results.jsonl via the shared harness: decoder/encoder NFEs per byte, speculative acceptance, agreement with the same model's greedy output (DV rows hard-fail on any mismatch), wall-clock stats. Configs: greedy baseline, BLT-S k in {4,8,16} (both models), BLT-D / BLT-DV with B in {4,8,16}, confidence alpha=0.7, one-step (alpha=0), and EB gamma variants. Plots: `python3 tools/bench_plots.py` renders four PNGs (quality frontier, NFE map, acceptance, latency) into runs/bench_graphs/.
 - BLT-D / BLT-DV generation controllers (`include/blt/infer/block_generation.h`, `src/infer/block_generation.c`)
   - `blt_unmask_select_confidence` / `blt_unmask_select_eb`: selection kernels over masked cells (α threshold with best-cell fallback; ascending-entropy budget γ prefix with lowest-entropy fallback). Both guarantee ≥1 selection.
   - `blt_draft_block`: Algorithm 1 inner loop over frozen latents; returns decoder NFEs; never resets the scratch arena (caller owns lifetime via round markers).
@@ -797,14 +800,14 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
   - `--t-min F`: diffusion timestep floor stabilizing the 1/t loss weight (default 0.05; a value of 1e9 effectively silences L_mask)
   - `--mask-warmup N --mask-scale F`: ramp then cap the L_mask weight
   - `--eval-corpus FILE --eval-windows K --eval-skip BYTES`: held-out causal-BPB + masked-cell top-1 report (valid for both arms — the Figure-5 TRAIN mask is plain causal, so clean-row logits never depend on block rows)
-  - First-day results and caveats: runs/PHASE_D_SUMMARY.md
+  - Results and training notes: runs/training_notes.md
 
 ------------------------------------------------------------------------------------------------------------
-## Inference utilities (Phase 6 / Fast-BLT)
+## Inference utilities (Fast-BLT)
 
 ### blt/infer/stats.h
 - `blt_infer_stats` struct
-  - Forward-pass counters for the Phase 6 inference controllers (BLT-S / BLT-DV). Controllers increment at the call site; ops/models stay unmodified.
+  - Forward-pass counters for the inference controllers (BLT-S / BLT-DV). Controllers increment at the call site; ops/models stay unmodified.
   - Fields:
     - `size_t nfe_encoder_global`: encode-stage invocations (encoder + global transformer; the expensive tier).
     - `size_t nfe_decoder`: decoder-only invocations (drafting steps, verification decodes).
@@ -832,7 +835,7 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
 - `blt_verify_draft(model, entropy_model, patcher_config, x, l, r, target_len, stats, arena)`
   - Input: model handle, entropy LM (drives the entropy patcher), patcher config, buffer `x` holding committed prefix `x[0..l)` plus draft `x[l..l+r)`, generation budget `target_len`, nullable stats handle, scratch arena.
   - Output: overwrites the draft region with accepted/replaced bytes; returns the new committed length in `[l+1, l+r+1]`. Never exceeds `target_len` (the free byte is skipped at the budget edge).
-  - Behavior: Fast-BLT Algorithm 2 — re-segments the whole candidate via the entropy patcher, runs one full encoder+global pass and a logits-only decode, accepts drafted bytes up to the first mismatch (replacing it with the verified prediction) or commits all of them plus one free byte on a full match. Updates `stats` (`nfe_encoder_global`, `nfe_decoder`, `bytes_accepted`) when provided. This is the shared verification step reused by BLT-DV (Phase E).
+  - Behavior: Fast-BLT Algorithm 2 — re-segments the whole candidate via the entropy patcher, runs one full encoder+global pass and a logits-only decode, accepts drafted bytes up to the first mismatch (replacing it with the verified prediction) or commits all of them plus one free byte on a full match. Updates `stats` (`nfe_encoder_global`, `nfe_decoder`, `bytes_accepted`) when provided. This is the shared verification step reused by BLT-DV.
 - `blt_generate_greedy_selfspec(model, entropy_model, patcher_config, prompt_bytes, prompt_len, max_new_bytes, output_bytes, config, stats, arena)`
   - Input: model + entropy LM + patcher config, prompt bytes (`prompt_len >= 2`), generation budget, output buffer `[prompt_len + max_new_bytes]`, BLT-S config, nullable stats handle, scratch arena.
   - Output: writes exactly `prompt_len + max_new_bytes` generated bytes into `output_bytes`.
@@ -863,7 +866,7 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
 
 ### src/core/allocator.c
 - `blt_arena_create(...)`
-  - Allocates and initializes an arena, rejects CUDA backends in Phase 0, and allocates aligned storage.
+  - Allocates and initializes an arena, rejects CUDA backends (not yet implemented), and allocates aligned storage.
 - `blt_arena_destroy(...)`
   - Frees the arena buffer and struct.
 - `blt_arena_reset(...)`
@@ -904,7 +907,7 @@ Shared per-layer weight layout used by both the local encoder and local decoder.
 ## Benchmark Harness
 
 ### bench/harness.h / bench/harness.c
-Shared, backend-agnostic benchmark infrastructure used by the Phase 5/6 ablation sweeps. Latency samples are collected as `double` seconds; the raw timer works in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`.
+Shared, backend-agnostic benchmark infrastructure used by the ablation and inference sweeps. Latency samples are collected as `double` seconds; the raw timer works in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`.
 
 - `void bench_timer_start(void)`
   - Records the current monotonic clock reading into a static timestamp.

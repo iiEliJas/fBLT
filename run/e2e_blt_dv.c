@@ -2,7 +2,7 @@
 //
 // Loads the real trained BLT-D checkpoint (runs/bltd_l03_40k.fblt by
 // default), continues a deep held-out prompt three ways, and checks the
-// load-bearing Phase E invariant:
+// load-bearing correctness invariant:
 //
 //   BLT-DV output == plain greedy BLT output, byte for byte.
 //

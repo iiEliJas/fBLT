@@ -9,9 +9,9 @@
 #include <stdio.h>
 
 // Absolute tolerance
-#define PHASE2_ATOL 1e-4f
+#define PARITY_ATOL 1e-4f
 
-#define PHASE2_ARENA_BYTES (16 * 1024 * 1024)
+#define PARITY_ARENA_BYTES (16 * 1024 * 1024)
 
 
 
@@ -19,7 +19,7 @@
 // Attention parity test
 
 int run_attention_parity_test(void) {
-    blt_arena* arena = blt_arena_create(PHASE2_ARENA_BYTES, BLT_BACKEND_CPU);
+    blt_arena* arena = blt_arena_create(PARITY_ARENA_BYTES, BLT_BACKEND_CPU);
     if (!arena) {
         return 0;
     }
@@ -55,7 +55,7 @@ int run_attention_parity_test(void) {
 
     blt_multihead_attention(&input, &qkv_w, &proj_w, &output, &config, arena);
 
-    TEST_ASSERT_CLOSE(&output, &expected_out, PHASE2_ATOL);
+    TEST_ASSERT_CLOSE(&output, &expected_out, PARITY_ATOL);
 
     blt_arena_destroy(arena);
     return 1;
@@ -64,7 +64,7 @@ int run_attention_parity_test(void) {
 
 
 int run_attention_backward_parity_test(void) {
-    blt_arena* arena = blt_arena_create(PHASE2_ARENA_BYTES, BLT_BACKEND_CPU);
+    blt_arena* arena = blt_arena_create(PARITY_ARENA_BYTES, BLT_BACKEND_CPU);
     if (!arena) {
         return 0;
     }
@@ -102,7 +102,7 @@ int run_attention_backward_parity_test(void) {
     blt_tensor grad_weight_qkv = blt_tensor_create(arena, qkv_shape, 2, BLT_DTYPE_FP32);
     blt_tensor grad_weight_proj = blt_tensor_create(arena, proj_shape, 2, BLT_DTYPE_FP32);
  
-    // same config as the forward parity test (run_phase2_attention_parity_test)
+    // same config as the forward parity test
     blt_attention_config config = {0};
     config.embed_dim = embed_dim;
     config.num_heads = 4;
@@ -113,9 +113,9 @@ int run_attention_backward_parity_test(void) {
                                       &grad_input, &grad_weight_qkv, &grad_weight_proj,
                                       &config, arena);
  
-    TEST_ASSERT_CLOSE(&grad_input, &expected_grad_input, PHASE2_ATOL);
-    TEST_ASSERT_CLOSE(&grad_weight_qkv, &expected_grad_qkv_w, PHASE2_ATOL);
-    TEST_ASSERT_CLOSE(&grad_weight_proj, &expected_grad_proj_w, PHASE2_ATOL);
+    TEST_ASSERT_CLOSE(&grad_input, &expected_grad_input, PARITY_ATOL);
+    TEST_ASSERT_CLOSE(&grad_weight_qkv, &expected_grad_qkv_w, PARITY_ATOL);
+    TEST_ASSERT_CLOSE(&grad_weight_proj, &expected_grad_proj_w, PARITY_ATOL);
  
     blt_arena_destroy(arena);
     return 1;
@@ -126,7 +126,7 @@ int run_attention_backward_parity_test(void) {
 // Transformer block parity test
 
 int run_transformer_block_parity_test(void) {
-    blt_arena* arena = blt_arena_create(PHASE2_ARENA_BYTES, BLT_BACKEND_CPU);
+    blt_arena* arena = blt_arena_create(PARITY_ARENA_BYTES, BLT_BACKEND_CPU);
     if (!arena) {
         return 0;
     }
@@ -206,7 +206,7 @@ int run_transformer_block_parity_test(void) {
     TEST_ASSERT(offset_after <= arena->capacity);
     TEST_ASSERT(offset_after >= offset_before);
 
-    TEST_ASSERT_CLOSE(&output, &expected_out, PHASE2_ATOL);
+    TEST_ASSERT_CLOSE(&output, &expected_out, PARITY_ATOL);
 
     blt_arena_destroy(arena);
     return 1;

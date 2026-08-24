@@ -18,8 +18,8 @@ typedef struct {
     size_t num_heads;               // byte self-attention heads
     size_t cross_attn_heads;
     size_t local_window;            // 0 = full causal, else causal sliding window
-    bool cross_attn_all_layers;     // paper finding: decoder wants "All Layers" (Table 7), unlike encoder's "Last Layer" default — still a config knob, not hardcoded
-    blt_xattn_placement cross_attn_placement; // sweep knob; DEFAULT = use the bool above
+    bool cross_attn_all_layers;     // paper finding: decoder wants "All Layers" (Table 7), unlike encoder's "Last Layer" default — still configurable, not hardcoded
+    blt_xattn_placement cross_attn_placement; // sweep option; DEFAULT = use the bool above
     float rope_theta;
     size_t max_seq_len;
     size_t vocab_size;              // 256, for the LM head
@@ -66,8 +66,8 @@ typedef struct {
     blt_tensor d0_embed_weight;                 // [BLT_D0_VOCAB, embed_dim] — D_0 rows for
                                                 // draft/MASK positions when d0_mode == BLT_D0_LEARNED;
                                                 // row 256 doubles as the MASK embedding.
-                                                // NOTE: no backward support yet (Phase D wires it);
-                                                // until then its gradient stays zero and training
+                                                // Gradient written by the diffusion backward;
+                                                // the legacy decoder backward leaves it zero, so training
                                                 // leaves it untouched.
 } blt_local_decoder;
 
@@ -78,7 +78,7 @@ typedef blt_local_layer_grad blt_local_decoder_layer_grad;
 typedef struct {
     blt_local_decoder_layer_grad* layer_grads;   // [num_layers]
     blt_tensor lm_head_grad;
-    blt_tensor d0_embed_grad;                    // [BLT_D0_VOCAB, embed_dim] (stays zero until Phase D)
+    blt_tensor d0_embed_grad;                    // [BLT_D0_VOCAB, embed_dim] (zero except under the diffusion backward)
 } blt_local_decoder_grad;
 
 
@@ -113,7 +113,7 @@ void blt_local_decoder_forward(
 );
 
 
-// Extended decoder forward (Fast-BLT Phase A).
+// Extended decoder forward (Fast-BLT).
 // - loss_out may be NULL: skips the shifted cross-entropy entirely; bytes_in
 //   must then also be NULL (logits-only inference path).
 // - d0_opts may be NULL: legacy behavior (D_0 = byte_hidden_in everywhere).

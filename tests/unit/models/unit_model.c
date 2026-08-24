@@ -468,8 +468,7 @@ int run_blt_model_overfit(void) {
 //----------------------------------------------------------------------
 // Test 2: Greedy generation sanity check
 //
-// Not automated pass/fail (same spirit as the qualitative-sampling note
-// for Phase 8, just pulled forward here informally): lightly bias a
+// Not automated pass/fail (qualitative sampling, informal): lightly bias a
 // fresh model toward the same snippets, then greedily generate from a
 // small fixed prompt set and print the completions for a human to read.
 // The only hard assertions are structural (non-NULL arenas, correct

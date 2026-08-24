@@ -22,7 +22,6 @@ compile_commands.json
 .opencode/
 opencode.json
 
-runs/
 data/raw/
 data/train.bin
 data/heldout.bin

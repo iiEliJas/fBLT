@@ -30,6 +30,10 @@
 #include "blt/core/backend.h"
 #include "blt/models/model.h"
 #include "blt/models/checkpoint.h"
+#include "blt/models/entropy_lm.h"
+#include "blt/models/patcher.h"
+#include "blt/models/entropy.h"
+#include "blt/ops/softmax.h"
 #include "blt/models/local_encoder.h"
 #include "blt/models/global_transformer.h"
 #include "blt/models/local_common.h"
@@ -62,6 +66,17 @@ typedef struct {
     int lr_decay;               // x0.3 at 60% and 85% of steps
     size_t mask_warmup;         // ramp L_mask scale 0->1 over this many steps
     float mask_scale;           // ceiling for the L_mask weight (1.0 = paper Eq. 7)
+    const char* train_entlm;    // train the entropy LM (plain CE) and
+                                // save it to this path instead of the
+                                // main model
+    const char* entropy_lm;     // load pretrained entropy-LM weights for
+                                // --entropy-patches segmentation
+    size_t mask_late_step;      // raise the cap from mask_scale to
+    float mask_late_scale;      // mask_late_scale between this step and
+                                // the end (paper section 6 reweighting
+                                // schedule; 0 = disabled)
+    int entropy_patches;        // segment training/eval windows with the
+                                // entropy LM + patcher (matches inference)
 } args_t;
 
 
@@ -236,7 +251,7 @@ static double window_causal_ce(blt_arena* arena, const blt_model* model,
             count++;
         }
 
-        // masked-block cell accuracy (Phase-E drafting capability)
+        // masked-block cell accuracy (the capability block drafting relies on)
         if (masked_hits != NULL && masked_total != NULL) {
             for (size_t r = 0; r < batch_or_null->n_block_rows; r++) {
                 if (!batch_or_null->cell_masked[r]) continue;
@@ -290,6 +305,78 @@ static size_t fixed_stride(size_t seq_len, size_t patch_len, blt_patch_info* out
     return np;
 }
 
+// Entropy LM used for --entropy-patches. Initialization mirrors
+// bench/infer_bench.c make_entropy_lm exactly (srand(11), same fill
+// order) so training and inference segment identically.
+static blt_entropy_lm* make_train_entropy_lm(blt_arena* arena, size_t ms) {
+    blt_entropy_lm_config ecfg;
+    memset(&ecfg, 0, sizeof(ecfg));
+    ecfg.embed_dim = 32; ecfg.num_layers = 1; ecfg.num_heads = 2;
+    ecfg.hidden_dim = 64; ecfg.max_seq_len = ms; ecfg.rope_theta = 10000.0f;
+    blt_entropy_lm* lm = blt_entropy_lm_create(arena, &ecfg);
+
+    srand(11);
+    float* emb = (float*)lm->embedding_weight.data;
+    for (size_t i = 0; i < lm->embedding_weight.numel; i++)
+        emb[i] = (((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f) * 0.1f;
+    for (size_t i = 0; i < lm->stack.num_layers; i++) {
+        blt_transformer_layer_storage* l = &lm->stack.layer_storage[i];
+        float* d;
+        d = (float*)l->attn_qkv_w.data;
+        for (size_t j = 0; j < l->attn_qkv_w.numel; j++)
+            d[j] = (((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f) * 0.1f;
+        d = (float*)l->attn_proj_w.data;
+        for (size_t j = 0; j < l->attn_proj_w.numel; j++)
+            d[j] = (((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f) * 0.1f;
+        d = (float*)l->ffn_up_w.data;
+        for (size_t j = 0; j < l->ffn_up_w.numel; j++)
+            d[j] = (((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f) * 0.1f;
+        d = (float*)l->ffn_gate_w.data;
+        for (size_t j = 0; j < l->ffn_gate_w.numel; j++)
+            d[j] = (((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f) * 0.1f;
+        d = (float*)l->ffn_down_w.data;
+        for (size_t j = 0; j < l->ffn_down_w.numel; j++)
+            d[j] = (((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f) * 0.1f;
+    }
+    float* d = (float*)lm->lm_head_weight.data;
+    for (size_t j = 0; j < lm->lm_head_weight.numel; j++)
+        d[j] = (((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f) * 0.1f;
+    return lm;
+}
+
+// Entropy-LM patching (same numerics as the inference controllers).
+static size_t entropy_segment(blt_arena* arena, blt_entropy_lm* lm,
+                              const uint8_t* bytes, size_t len,
+                              blt_patch_info* out, size_t max_patches) {
+    size_t shape1[1] = {len};
+    blt_tensor bytes_in = blt_tensor_create(arena, shape1, 1, BLT_DTYPE_UINT8);
+    memcpy(bytes_in.data, bytes, len);
+
+    size_t logits_shape[2] = {len, 256};
+    blt_tensor logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
+    size_t scalar_shape[1] = {1};
+    blt_tensor discard = blt_tensor_create(arena, scalar_shape, 1, BLT_DTYPE_FP32);
+    blt_entropy_lm_forward(lm, &bytes_in, &logits, &discard, arena);
+
+    size_t probs_shape[2] = {len, 256};
+    blt_tensor probs = blt_tensor_create(arena, probs_shape, 2, BLT_DTYPE_FP32);
+    blt_softmax(&logits, &probs);
+
+    size_t vals_shape[1] = {len};
+    blt_tensor vals = blt_tensor_create(arena, vals_shape, 1, BLT_DTYPE_FP32);
+    blt_entropy_config ecfg = {.vocab_size = 256, .use_log2 = false};
+    blt_compute_entropy(&probs, &vals, &ecfg);
+
+    blt_patcher_config pcfg;
+    memset(&pcfg, 0, sizeof(pcfg));
+    pcfg.threshold_global = 2.5f;
+    pcfg.threshold_monotonic = 1.0f;
+    pcfg.max_patch_length = 16;
+    pcfg.rule = BLT_PATCH_RULE_GLOBAL;
+    pcfg.reset_on_newline = false;
+    return blt_segment_patches(&vals, bytes, out, max_patches, &pcfg);
+}
+
 int main(int argc, char** argv) {
     args_t a = { .corpus_path = NULL, .steps = 2000, .lr = 0.05f,
                  .block_size = 4, .window = 48, .embed = 64, .hidden = 128,
@@ -298,7 +385,9 @@ int main(int argc, char** argv) {
                  .save_path = NULL, .load_path = NULL,
                  .eval_skip = 0,
                  .t_min = 0.05f, .lr_decay = 0, .mask_warmup = 0,
-                 .mask_scale = 1.0f };
+                 .mask_scale = 1.0f, .mask_late_step = 0,
+                 .mask_late_scale = 1.0f, .entropy_patches = 0,
+                 .train_entlm = NULL, .entropy_lm = NULL };
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--corpus") && i + 1 < argc) a.corpus_path = argv[++i];
@@ -329,6 +418,16 @@ int main(int argc, char** argv) {
             a.mask_warmup = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--mask-scale") && i + 1 < argc)
             a.mask_scale = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--mask-late-step") && i + 1 < argc)
+            a.mask_late_step = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--mask-late-scale") && i + 1 < argc)
+            a.mask_late_scale = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--entropy-patches"))
+            a.entropy_patches = 1;
+        else if (!strcmp(argv[i], "--train-entropy-lm") && i + 1 < argc)
+            a.train_entlm = argv[++i];
+        else if (!strcmp(argv[i], "--entropy-lm") && i + 1 < argc)
+            a.entropy_lm = argv[++i];
         else { usage(); return 1; }
     }
     if (a.corpus_path == NULL) { usage(); return 1; }
@@ -388,6 +487,88 @@ int main(int argc, char** argv) {
         printf("[CKPT] loaded weights from %s\n", a.load_path);
     }
     blt_model_grad* grad = blt_model_grad_create(model_arena, model);
+    blt_entropy_lm* train_lm = a.entropy_patches
+        ? make_train_entropy_lm(model_arena, MS) : NULL;
+    if (train_lm && a.entropy_lm) {
+        blt_entropy_lm_load(train_lm, a.entropy_lm);
+        printf("[TRAIN] entropy-patch segmentation (trained LM: %s)\n",
+               a.entropy_lm);
+    } else if (train_lm) {
+        printf("[TRAIN] entropy-patch segmentation (random LM)\n");
+    }
+
+    // Standalone entropy-LM training mode: plain byte CE on corpus
+    // windows, SGD+clip, then save. Skips the main model entirely.
+    if (a.train_entlm) {
+        const size_t num_windows_ = (size_t)fsize / a.window;
+        blt_entropy_lm* lm0 = make_train_entropy_lm(model_arena, MS);
+        if (a.entropy_lm) blt_entropy_lm_load(lm0, a.entropy_lm);
+        blt_entropy_lm_grad* lm_grad =
+            blt_entropy_lm_grad_create(model_arena, lm0);
+        printf("[ENTLM] training entropy LM -> %s\n", a.train_entlm);
+        blt_tensor* lm_ts[9];
+        blt_tensor* lm_gs[9];
+        {
+            blt_transformer_layer_storage* l = &lm0->stack.layer_storage[0];
+            blt_transformer_layer_grad* g =
+                &lm_grad->stack_grad->layer_grads[0];
+            blt_tensor* wtmp[] = {&l->norm1_weight, &l->attn_qkv_w,
+                &l->attn_proj_w, &l->norm2_weight, &l->ffn_up_w,
+                &l->ffn_gate_w, &l->ffn_down_w};
+            blt_tensor* gtmp[] = {&g->norm1_weight, &g->attn_qkv_w,
+                &g->attn_proj_w, &g->norm2_weight, &g->ffn_up_w,
+                &g->ffn_gate_w, &g->ffn_down_w};
+            lm_ts[2] = wtmp[0]; lm_gs[2] = gtmp[0];
+            lm_ts[3] = wtmp[1]; lm_gs[3] = gtmp[1];
+            lm_ts[4] = wtmp[2]; lm_gs[4] = gtmp[2];
+            lm_ts[5] = wtmp[3]; lm_gs[5] = gtmp[3];
+            lm_ts[6] = wtmp[4]; lm_gs[6] = gtmp[4];
+            lm_ts[7] = wtmp[5]; lm_gs[7] = gtmp[5];
+            lm_ts[8] = wtmp[6]; lm_gs[8] = gtmp[6];
+        }
+        lm_ts[0] = &lm0->embedding_weight;
+        lm_gs[0] = &lm_grad->embedding_grad;
+        lm_ts[1] = &lm0->lm_head_weight;
+        lm_gs[1] = &lm_grad->lm_head_grad;
+
+        for (size_t step = 0; step < a.steps; step++) {
+            blt_arena_reset(scratch);
+            const size_t w = step % num_windows_;
+            const uint8_t* text = corpus + w * a.window;
+            const size_t N = a.window;
+            size_t sh1[1] = {N};
+            blt_tensor bytes_in = blt_tensor_create(scratch, sh1, 1, BLT_DTYPE_UINT8);
+            memcpy(bytes_in.data, text, N);
+            size_t sh2[2] = {N, 256};
+            blt_tensor logits = blt_tensor_create(scratch, sh2, 2, BLT_DTYPE_FP32);
+            size_t shs[1] = {1};
+            blt_tensor loss = blt_tensor_create(scratch, shs, 1, BLT_DTYPE_FP32);
+            blt_entropy_lm_forward(lm0, &bytes_in, &logits, &loss, scratch);
+            for (size_t ti = 0; ti < 9; ti++) zero_tensor(lm_gs[ti]);
+            blt_entropy_lm_backward(lm0, &bytes_in, lm_grad, scratch);
+            // global grad clip
+            float sq = 0.0f;
+            for (size_t ti = 0; ti < 9; ti++) {
+                const float* d = (const float*)lm_gs[ti]->data;
+                for (size_t j = 0; j < lm_gs[ti]->numel; j++)
+                    sq += d[j] * d[j];
+            }
+            const float nrm = sqrtf(sq);
+            if (nrm > 5.0f && nrm > 0.0f) {
+                const float scl = 5.0f / nrm;
+                for (size_t ti = 0; ti < 9; ti++)
+                    blt_scale(lm_gs[ti], scl);
+            }
+            for (size_t ti = 0; ti < 9; ti++)
+                blt_sgd_step(lm_ts[ti], lm_gs[ti], a.lr);
+            if (a.report_every && step % a.report_every == 0)
+                printf("[ENTLM] step %zu/%zu loss %.4f\n", step, a.steps,
+                       ((const float*)loss.data)[0]);
+        }
+        blt_entropy_lm_save(lm0, a.train_entlm);
+        printf("[ENTLM] saved %s\n", a.train_entlm);
+        return 0;
+    }
 
     // Deterministic random init (libc-independent LCG). Skipped entirely
     // when --load-weights supplied the full parameter set.
@@ -462,7 +643,10 @@ int main(int argc, char** argv) {
         const size_t N = a.window;
 
         blt_patch_info patches[128];
-        size_t M = fixed_stride(N, 4, patches);
+        const size_t M = train_lm
+            ? entropy_segment(scratch, train_lm, text, N, patches, 128)
+            : fixed_stride(N, 4, patches);
+        BLT_REQUIRE(M >= 2, "training window produced < 2 patches");
         if (M < 2) continue;
 
         blt_block_batch batch;
@@ -479,7 +663,15 @@ int main(int argc, char** argv) {
             if (a.mask_warmup > 0) {
                 batch.loss_scale = (float)step / (float)a.mask_warmup;
             }
-            if (batch.loss_scale > a.mask_scale) batch.loss_scale = a.mask_scale;
+            float cap = a.mask_scale;
+            if (a.mask_late_step > 0 && step >= a.mask_late_step &&
+                a.steps > a.mask_late_step) {
+                const float frac = (float)(step - a.mask_late_step) /
+                                   (float)(a.steps - a.mask_late_step);
+                cap = a.mask_scale +
+                      (a.mask_late_scale - a.mask_scale) * frac;
+            }
+            if (batch.loss_scale > cap) batch.loss_scale = cap;
         }
 
         size_t bshape[1] = {N};
@@ -604,7 +796,9 @@ int main(int argc, char** argv) {
             const uint8_t* text = base + wi * a.window;
 
             blt_patch_info ep[128];
-            size_t eM = fixed_stride(a.window, 4, ep);
+            size_t eM = train_lm
+                ? entropy_segment(scratch, train_lm, text, a.window, ep, 128)
+                : fixed_stride(a.window, 4, ep);
 
             blt_block_batch ebatch;
             if (a.diffusion) {
