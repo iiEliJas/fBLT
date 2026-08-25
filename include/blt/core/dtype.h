@@ -1,6 +1,10 @@
 #ifndef BLT_CORE_DTYPE_H
 #define BLT_CORE_DTYPE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -20,5 +24,9 @@ static inline size_t blt_dtype_sizeof(blt_dtype dtype) {
         default: return 0;
     }
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_CORE_DTYPE_H

@@ -1,6 +1,10 @@
 #ifndef BLT_PATCH_POOL_H
 #define BLT_PATCH_POOL_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "blt/core/backend.h"
 #include "blt/core/allocator.h"
 #include "blt/ops/mask_builder.h"
@@ -54,5 +58,9 @@ void blt_patch_expand_group_ids(const size_t* group_ids_in, size_t n, size_t k,
                                 size_t* group_ids_out);
 
 
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_PATCH_POOL_H

@@ -5,6 +5,7 @@ int run_tensor_core_tests(void);
 int run_json_parser_tests(void);
 int run_allocator_core_tests(void);
 int run_backend_core_tests(void);
+int run_cuda_arena_transfer_tests(void);
 
 int run_elementwise_backend_tests(void);
 int run_gelu_backend_tests(void);
@@ -54,6 +55,10 @@ int run_block_diffusion_overfit_gate(void);
 
 int run_matmul_parity_test(void);
 int run_softmax_parity_test(void);
+int run_cuda_parity_elementwise(void);
+int run_cuda_parity_reductions(void);
+int run_cuda_parity_matmul(void);
+int run_cuda_parity_composites(void);
 int run_transformer_parity_tests(void);
 int run_patcher_parity_tests(void);
 int run_elm_overfit_tests(void);

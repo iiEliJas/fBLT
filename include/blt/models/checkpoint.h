@@ -1,6 +1,10 @@
 #ifndef BLT_MODELS_CHECKPOINT_H
 #define BLT_MODELS_CHECKPOINT_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "blt/models/model.h"
 #include "blt/models/entropy_lm.h"
 
@@ -49,5 +53,9 @@ void blt_model_load(blt_model* model, const char* path);
 // names/shapes against the target model.
 void blt_entropy_lm_save(const blt_entropy_lm* lm, const char* path);
 void blt_entropy_lm_load(blt_entropy_lm* lm, const char* path);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_MODELS_CHECKPOINT_H

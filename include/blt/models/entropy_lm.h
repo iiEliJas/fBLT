@@ -1,6 +1,10 @@
 #ifndef BLT_MODEL_ENTROPY_LM_H
 #define BLT_MODEL_ENTROPY_LM_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "blt/core/tensor.h"
 #include "blt/core/allocator.h"
 #include "blt/models/transformer.h"
@@ -72,5 +76,9 @@ void blt_entropy_lm_backward(
     blt_entropy_lm_grad* grad_out,
     blt_arena* arena
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_MODEL_ENTROPY_LM_H

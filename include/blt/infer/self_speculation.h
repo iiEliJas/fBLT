@@ -1,6 +1,10 @@
 #ifndef BLT_INFER_SELF_SPECULATION_H
 #define BLT_INFER_SELF_SPECULATION_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 
 #include "blt/core/tensor.h"
@@ -72,5 +76,9 @@ void blt_generate_greedy_selfspec(
     blt_infer_stats* stats,              // nullable
     blt_arena* arena
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_INFER_SELF_SPECULATION_H

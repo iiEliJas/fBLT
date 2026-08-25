@@ -94,6 +94,14 @@
 - `blt_tensor_create(blt_arena* arena, const size_t* shape, size_t ndim, blt_dtype dtype)`
   - Input: arena for storage, shape, rank, and element type.
   - Output: blt_tensor - a zero-initialized tensor with allocated storage.
+- `blt_tensor_to_device(const blt_tensor* src, blt_arena* device_arena)`
+  - Input: host (CPU-backend) tensor and a CUDA-backend arena.
+  - Output: blt_tensor - fresh tensor in `device_arena` holding a copy of `src`'s contents. Requires a build with `make CUDA=1`; aborts otherwise.
+- `blt_tensor_to_host(const blt_tensor* src, blt_arena* host_arena)`
+  - Input: any tensor and a CPU-backend arena.
+  - Output: blt_tensor - fresh tensor in `host_arena` holding a copy of `src`'s contents; device sources are copied D2H, host sources memcpy.
+
+Build modes: the default `make <target>` builds CPU-only. `make CUDA=1 <target>` additionally compiles the CUDA backend (`src/backend_cuda/*.cu`) and enables device arenas / transfers; CUDA binaries live in `bin-cuda/`.
 
 
 ### blt/core/json.h
@@ -207,12 +215,13 @@ Minimal JSON parser for config files (objects, arrays of scalars, string/int/flo
   - Output: computes backward gradients for `gate` and `up`.
 
 ### blt/ops/vecmath.h
-- `blt_vec_dot(a, b, n)`
-  - Input: two input data floats and size_t n.
+Backend-keyed raw-pointer utilities: the first argument selects which memory space the buffers live in (`BLT_BACKEND_CPU` host pointers or `BLT_BACKEND_CUDA` device pointers). Dispatched like tensor ops; CUDA paths require a `make CUDA=1` build.
+- `blt_vec_dot(backend, a, b, n)`
+  - Input: backend enum, two input data floats, and size_t n.
   - Output: float dot product.
   - Behavior: computes the dot product in length n.
-- `blt_softmax_masked_row_inplace(row, row_len, row_idx, is_causal, mask_row, scale)`
-  - Input: contiguous FP32 row of length `row_len`, the row's index (for causal masking), `is_causal` flag, optional additive `mask_row` (same length; e.g. 0 or `-INFINITY` entries), and score `scale`.
+- `blt_softmax_masked_row_inplace(backend, row, row_len, row_idx, is_causal, mask_row, scale)`
+  - Input: backend enum, contiguous FP32 row of length `row_len`, the row's index (for causal masking), `is_causal` flag, optional additive `mask_row` (same length; e.g. 0 or `-INFINITY` entries), and score `scale`.
   - Output: softmaxed row in place.
   - Behavior: numerically stable masked/causal row-softmax shared by self-attention and cross-attention. Masking takes precedence over causal masking when `mask_row != NULL`. Non-finite entries after masking contribute zero; a fully masked row yields all zeros. Raw-pointer utility, not a `blt_tensor` op.
 
@@ -228,7 +237,13 @@ Minimal JSON parser for config files (objects, arrays of scalars, string/int/flo
 - `blt_sgd_step(blt_tensor* param, const blt_tensor* grad, float lr)`
   - Input: `param` tensor to update in place, `grad` tensor (same shape/dtype as `param`), and learning rate `lr`.
   - Output: none; updates `param` in place.
-  - Behavior: elementwise `param -= lr * grad`. CPU-only, stateless (no momentum/second-moment buffers) — the minimal optimizer. Requires `param` and `grad` to be FP32 and elementwise-compatible (validated via `blt_check_elementwise_fp32`) and `param->backend == BLT_BACKEND_CPU`.
+  - Behavior: elementwise `param -= lr * grad`. Stateless (no momentum/second-moment buffers) — the minimal optimizer. Dispatched by backend: CUDA requires a `make CUDA=1` build and device-resident tensors.
+- `blt_adamw_config` struct
+  - Fields: `float lr`, `float beta1`, `float beta2`, `float eps`, `float weight_decay` (decoupled L2 applied as `p -= lr*wd*p`), `size_t step` (1-based, drives the bias correction).
+- `blt_adamw_step(param, grad, exp_avg, exp_avg_sq, config)`
+  - Input: in-place `param`, matching-shape FP32 `grad`, persistent state tensors `exp_avg` and `exp_avg_sq` (same shape as `param`; zero-initialized before the very first step), and the config.
+  - Output: none; updates `param`, `exp_avg`, and `exp_avg_sq` in place.
+  - Behavior: single-tensor AdamW with PyTorch-compatible math (`m = b1*m + (1-b1)*g`, `v = b2*v + (1-b2)*g²`, bias-corrected update with decoupled weight decay). Dispatched by backend.
 
 ## blt/ops/mask_builder.h
 - `blt_mask_config` struct
@@ -245,6 +260,7 @@ Minimal JSON parser for config files (objects, arrays of scalars, string/int/flo
 - `blt_build_attention_mask(config, out_mask, arena)`
     - Input: `blt_mask_config` struct defining attention constraints, output tensor, and arena for storage
     - Output: Writes a 2D FP32 mask tensor of shape `[seq_len_q, seq_len_kv]` to `out_mask`. Uses `0` for allowed attention and `-INFINITY` for masked attention
+  - Behavior: dispatched on the arena's backend — a CUDA-backend arena produces a device-resident mask (config arrays are mirrored to device memory internally); fully-masked rows abort.
 - `blt_block_diffusion_mode` enum
   - BLT-D block-diffusion self-attention mask modes (Fast-BLT §3.1.1 / §3.2.2).
   - Values:
@@ -259,20 +275,21 @@ Minimal JSON parser for config files (objects, arrays of scalars, string/int/flo
 - `blt_build_block_diffusion_mask(config, out_mask, arena)`
   - Input: config as above, output tensor, scratch arena.
   - Output: square FP32 additive mask `[S, S]`, `0` allowed / `-INFINITY` blocked.
-  - Behavior: builds the BLT-D self-attention mask for the given mode; both modes are pinned by hardcoded-matrix fixture tests.
+  - Behavior: builds the BLT-D self-attention mask for the given mode; both modes are pinned by hardcoded-matrix fixture tests. Dispatched on the arena's backend like `blt_build_attention_mask`.
 
 ### blt/ops/patch_pool.h
 - `blt_patch_pool_type` enum
   - `BLT_POOL_MEAN` = 0: Mean pooling; averages byte representations within each patch boundary.
   - `BLT_POOL_MAX` = 1: Max pooling; selects per-channel maximum byte representation within each patch.
 - `blt_patch_pool_forward(byte_hidden, patches, num_patches, pool_type, out)`
-  - Input: `byte_hidden` tensor `[seq_len, embed_dim]` (FP32), `patches` metadata array `[num_patches]`, count `num_patches`, `pool_type` strategy, and target output tensor `out`.
+  - Input: `byte_hidden` tensor `[seq_len, embed_dim]` (FP32), `patches` metadata array `[num_patches]` (host memory), count `num_patches`, `pool_type` strategy, and target output tensor `out`.
   - Output: Writes pooled patch representations into `out` `[num_patches, embed_dim]` (FP32).
-  - Behavior: Computes row-wise patch features (mean or per-channel max) over contiguous byte spans defined by `patches`. Validates that patch spans cover valid ranges in `seq_len`.
+  - Behavior: Computes row-wise patch features (mean or per-channel max) over contiguous byte spans defined by `patches`. Validates that patch spans cover valid ranges in `seq_len`. Dispatched by backend; on CUDA the patch table is mirrored to device memory internally.
 - `blt_patch_pool_backward(grad_out, byte_hidden, patches, num_patches, pool_type, grad_byte_hidden)`
   - Input: `grad_out` `[num_patches, embed_dim]`, original `byte_hidden` `[seq_len, embed_dim]`, `patches` metadata, `num_patches`, `pool_type`, and `grad_byte_hidden` `[seq_len, embed_dim]`.
   - Output: Accumulates input gradients into `grad_byte_hidden` (must be zero-initialized prior to call).
-  - Behavior: For `MEAN`, scatters `grad_out[j] / patch.length` across all constituent bytes in patch $j$. For `MAX`, recomputes the per-channel argmax using `byte_hidden` and routes the total channel gradient exclusively to the argmax byte position.
+  - Behavior: For `MEAN`, scatters `grad_out[j] / patch.length` across all constituent bytes in patch $j$. For `MAX`, recomputes the per-channel argmax using `byte_hidden` and routes the total channel gradient exclusively to the argmax byte position. Dispatched by backend.
+- `blt_patch_build_group_ids(...)` / `blt_patch_expand_group_ids(...)`: host-array utilities operating on plain `size_t*` buffers; not dispatched (they never touch tensor payload).
 - `blt_patch_build_group_ids(patches, num_patches, seq_len, query_group_ids_out, kv_group_ids_out)`
   - Input: `patches` metadata array `[num_patches]`, `num_patches`, `seq_len` (total bytes), caller-allocated `query_group_ids_out` `[num_patches]`, and `kv_group_ids_out` `[seq_len]`.
   - Output: Fills `query_group_ids_out` with query patch indices ($0 \dots \text{num\_patches}-1$) and `kv_group_ids_out` with parent patch indices for each byte position.

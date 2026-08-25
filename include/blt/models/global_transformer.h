@@ -1,6 +1,10 @@
 #ifndef BLT_MODELS_GLOBAL_TRANSFORMER_H
 #define BLT_MODELS_GLOBAL_TRANSFORMER_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "blt/core/tensor.h"
 #include "blt/core/allocator.h"
 #include "blt/models/transformer.h"
@@ -99,4 +103,8 @@ void blt_global_transformer_backward(
 
 
     
+#ifdef __cplusplus
+}
+#endif
+
 #endif // BLT_MODELS_GLOBAL_TRANSFORMER_H

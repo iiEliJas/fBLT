@@ -7,6 +7,12 @@ CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Iinclude -Itests -Itools -D_POSIX_C_SOURCE
 DEPFLAGS := -MMD -MP
 LDLIBS ?= -lm
 
+# CUDA backend: build with `make CUDA=1 <target>` (Linux only).
+# Uses the system toolkit at /usr/local/cuda (must be >= driver version;
+# the apt nvcc package shadows /usr/local/cuda/bin/nvcc and produces
+# binaries that fail against newer drivers, hence the explicit default).
+CUDA ?= 0
+
 # Directories
 SRC_DIR := src
 TESTS_DIR := tests
@@ -53,6 +59,7 @@ CORE_SRCS := \
     $(SRC_DIR)/backend_cpu/optim_cpu.c \
  	$(SRC_DIR)/backend_cpu/mask_builder_cpu.c \
  	$(SRC_DIR)/backend_cpu/patch_pool_cpu.c \
+	$(SRC_DIR)/backend_cpu/vecmath_cpu.c \
     $(SRC_DIR)/models/entropy.c \
     $(SRC_DIR)/models/byte_embedding.c \
     $(SRC_DIR)/models/patcher.c \
@@ -78,6 +85,36 @@ TOOLS_SRCS := \
 	$(TOOLS_DIR)/generate_greedy.c \
 	$(TOOLS_DIR)/flops.c \
 
+# CUDA backend sources (compiled by nvcc when CUDA=1). Kernel files are .cu;
+# public signatures stay in the shared headers under include/blt/.
+CUDA_SRCS := \
+	$(SRC_DIR)/backend_cuda/memory.cu \
+	$(SRC_DIR)/backend_cuda/vecmath.cu \
+	$(SRC_DIR)/backend_cuda/elementwise.cu \
+	$(SRC_DIR)/backend_cuda/reductions.cu \
+	$(SRC_DIR)/backend_cuda/linalg.cu \
+	$(SRC_DIR)/backend_cuda/mask_builder.cu \
+	$(SRC_DIR)/backend_cuda/patch_pool.cu \
+	$(SRC_DIR)/backend_cuda/optim.cu
+CUDA_SMOKE_SRCS := \
+	$(SRC_DIR)/backend_cuda/smoke.cu
+
+ifeq ($(CUDA),1)
+NVCC ?= /usr/local/cuda/bin/nvcc
+NVCC_FLAGS := -O2 -std=c++17 -gencode arch=compute_89,code=sm_89 \
+              -Iinclude -DBLT_WITH_CUDA -MMD -MP
+# Static cudart is required here: the shared libcudart.so.13 init path picks
+# up the system-installed (older) libnvidia-ptxjitcompiler under WSL2 and
+# segfaults; the static runtime avoids that dependency entirely.
+CUDA_LIBS := -L/usr/local/cuda/lib64 -lcublas -lcudart_static -ldl -lpthread -lrt -lstdc++
+CFLAGS += -DBLT_WITH_CUDA
+LDLIBS += $(CUDA_LIBS)
+# Separate trees so CPU and CUDA objects never mix: core sources are
+# compiled with -DBLT_WITH_CUDA only in the CUDA tree.
+OBJ_DIR := obj-cuda
+BIN_DIR := bin-cuda
+endif
+
 TEST_SRCS := \
     $(wildcard $(TESTS_DIR)/unit/*/*.c) \
 	$(wildcard $(TESTS_DIR)/parity/*.c) \
@@ -90,6 +127,11 @@ TEST_SRCS := \
 # ============================================================================
 CORE_OBJS := $(addprefix $(OBJ_DIR)/,$(CORE_SRCS:.c=.o))
 TOOLS_OBJS := $(addprefix $(OBJ_DIR)/,$(TOOLS_SRCS:.c=.o))
+ifeq ($(CUDA),1)
+CUDA_OBJS := $(addprefix $(OBJ_DIR)/,$(CUDA_SRCS:.cu=.o))
+CUDA_SMOKE_OBJS := $(addprefix $(OBJ_DIR)/,$(CUDA_SMOKE_SRCS:.cu=.o))
+CORE_OBJS += $(CUDA_OBJS)
+endif
 BENCH_LIB_SRCS := \
 	$(BENCH_DIR)/harness.c
 BENCH_LIB_OBJS := $(addprefix $(OBJ_DIR)/,$(BENCH_LIB_SRCS:.c=.o))
@@ -99,7 +141,7 @@ TEST_OBJS := $(addprefix $(OBJ_DIR)/,$(TEST_SRCS:.c=.o)) $(CORE_OBJS) $(TOOLS_OB
 # ============================================================================
 # TARGETS
 # ============================================================================
-.PHONY: all test main bench bench-harness sandbox e2e-dv bench-infer sweep clean info help
+.PHONY: all test main bench bench-harness sandbox e2e-dv bench-infer sweep cuda-smoke clean info help
 
 all: test
 
@@ -143,6 +185,10 @@ e2e-dv: $(BIN_DIR)/e2e_blt_dv$(EXE_EXT)
 sweep: $(BIN_DIR)/train_sweep$(EXE_EXT)
 	@echo [SWEEP] Built successfully: $(BIN_DIR)/train_sweep$(EXE_EXT)
 
+cuda-smoke: $(BIN_DIR)/cuda_smoke$(EXE_EXT)
+	@echo [CUDA] Built successfully: $(BIN_DIR)/cuda_smoke$(EXE_EXT)
+	@./$(BIN_DIR)/cuda_smoke$(EXE_EXT)
+
 
 # ============================================================================
 # BUILD RULES
@@ -153,6 +199,14 @@ $(OBJ_DIR)/$(SRC_DIR)/%.o: $(SRC_DIR)/%.c
 	@echo "[CC] $< -> $@"
 	$(MKDIR_P)
 	@$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+# Compile CUDA backend sources to obj files (CUDA=1 only)
+ifeq ($(CUDA),1)
+$(OBJ_DIR)/$(SRC_DIR)/backend_cuda/%.o: $(SRC_DIR)/backend_cuda/%.cu
+	@echo "[NVCC] $< -> $@"
+	$(MKDIR_P)
+	@$(NVCC) $(NVCC_FLAGS) -c $< -o $@
+endif
 
 # Compile tool to obj files
 $(OBJ_DIR)/$(TOOLS_DIR)/%.o: $(TOOLS_DIR)/%.c
@@ -214,6 +268,12 @@ $(BIN_DIR)/train_blt_d$(EXE_EXT): $(RUN_DIR)/train_blt_d.c $(CORE_OBJS)
 	$(MKDIR_BIN)
 	@$(CC) $(CFLAGS) $(RUN_DIR)/train_blt_d.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
+# Link CUDA smoke test (CUDA=1 only)
+$(BIN_DIR)/cuda_smoke$(EXE_EXT): $(RUN_DIR)/cuda_smoke.c $(CORE_OBJS) $(CUDA_SMOKE_OBJS)
+	@echo [LD] Linking CUDA smoke executable: $@
+	$(MKDIR_BIN)
+	@$(CC) $(CFLAGS) $(RUN_DIR)/cuda_smoke.c $(CORE_OBJS) $(CUDA_SMOKE_OBJS) -o $@ $(LDLIBS)
+
 train-blt-d: $(BIN_DIR)/train_blt_d$(EXE_EXT)
 	@echo [TRAIN] Built successfully: $(BIN_DIR)/train_blt_d$(EXE_EXT)
 
@@ -222,12 +282,12 @@ train-blt-d: $(BIN_DIR)/train_blt_d$(EXE_EXT)
 # CLEAN
 # ============================================================================
 clean:
-	@echo [CLEAN] Removing object directory ...
+	@echo [CLEAN] Removing object and binary directories ...
 ifeq ($(DETECTED_OS),Windows)
 	@if exist $(OBJ_DIR) $(RM_DIR) $(OBJ_DIR)
 	@if exist $(BIN_DIR) $(RM_DIR) $(BIN_DIR)
 else
-	@$(RM_DIR) $(OBJ_DIR) $(BIN_DIR) 2>/dev/null || true
+	@$(RM_DIR) obj obj-cuda bin bin-cuda 2>/dev/null || true
 endif
 	@echo [CLEAN] Complete.
 
@@ -246,8 +306,9 @@ help:
 	@echo -  make clean      - Remove all generated files
 	@echo -  make info       - Display build config
 	@echo -  make help       - Show this message
+	@echo -  make CUDA=1 ... - Enable the CUDA backend (Linux + nvcc required)
 	@echo Platform detected: $(DETECTED_OS)
--include $(shell find $(OBJ_DIR) -name '*.d' 2>/dev/null)
+-include $(shell find obj obj-cuda -name '*.d' 2>/dev/null)
 
 
 # Link Phase E end-to-end driver

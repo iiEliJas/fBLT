@@ -1,4 +1,7 @@
 #include "blt/core/tensor.h"
+#include "blt/core/allocator.h"
+#include "blt/core/backend.h"
+#include "blt/core/cuda_shim.h"
 
 size_t blt_tensor_compute_numel(const size_t* shape, size_t ndim) {
     if (ndim == 0) {
@@ -80,5 +83,48 @@ void blt_tensor_view_3d(blt_tensor* t, void* data, size_t d0, size_t d1, size_t 
 
 
 void zero_tensor(blt_tensor* t) {
-    memset(t->data, 0, blt_tensor_bytes(t));
+    if (t->backend == BLT_BACKEND_CUDA) {
+#ifdef BLT_WITH_CUDA
+        blt_cuda_memset(t->data, 0, blt_tensor_bytes(t));
+#endif
+    } else {
+        memset(t->data, 0, blt_tensor_bytes(t));
+    }
+}
+
+blt_tensor blt_tensor_to_device(const blt_tensor* src, blt_arena* device_arena) {
+    BLT_REQUIRE(src != NULL && device_arena != NULL && src->data != NULL,
+        "blt_tensor_to_device: src and device_arena must be valid");
+    BLT_REQUIRE(device_arena->backend == BLT_BACKEND_CUDA,
+        "blt_tensor_to_device: destination arena must use the CUDA backend");
+
+    blt_tensor dst = blt_tensor_create(device_arena, src->shape, src->ndim, src->dtype);
+#ifdef BLT_WITH_CUDA
+    if (src->backend == BLT_BACKEND_CUDA) {
+        BLT_FATAL("blt_tensor_to_device: source tensor is already on the CUDA backend");
+    }
+    blt_cuda_memcpy_h2d(dst.data, src->data, blt_tensor_bytes(src));
+#else
+    BLT_FATAL("blt_tensor_to_device: built without BLT_WITH_CUDA");
+#endif
+    return dst;
+}
+
+blt_tensor blt_tensor_to_host(const blt_tensor* src, blt_arena* host_arena) {
+    BLT_REQUIRE(src != NULL && host_arena != NULL && src->data != NULL,
+        "blt_tensor_to_host: src and host_arena must be valid");
+    BLT_REQUIRE(host_arena->backend == BLT_BACKEND_CPU,
+        "blt_tensor_to_host: destination arena must use the CPU backend");
+
+    blt_tensor dst = blt_tensor_create(host_arena, src->shape, src->ndim, src->dtype);
+#ifdef BLT_WITH_CUDA
+    if (src->backend != BLT_BACKEND_CUDA) {
+        memcpy(dst.data, src->data, blt_tensor_bytes(src));
+        return dst;
+    }
+    blt_cuda_memcpy_d2h(dst.data, src->data, blt_tensor_bytes(src));
+#else
+    memcpy(dst.data, src->data, blt_tensor_bytes(src));
+#endif
+    return dst;
 }

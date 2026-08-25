@@ -23,7 +23,8 @@ static void precompute_doc_ids(const size_t* doc_boundaries, size_t num_docs,
 
 
 
-void blt_build_attention_mask(const blt_mask_config* config, blt_tensor* out_mask, blt_arena* arena) {
+void blt_build_attention_mask_cpu(const blt_mask_config* config, blt_tensor* out_mask, blt_arena* arena) {
+    BLT_REQUIRE(arena->backend == BLT_BACKEND_CPU, "blt_build_attention_mask: CPU implementation called with non-CPU arena");
     BLT_REQUIRE(config != NULL, "blt_build_attention_mask: config is NULL");
     BLT_REQUIRE(out_mask != NULL, "blt_build_attention_mask: out_mask is NULL");
     BLT_REQUIRE(arena != NULL, "blt_build_attention_mask: arena is NULL");
@@ -93,8 +94,9 @@ void blt_build_attention_mask(const blt_mask_config* config, blt_tensor* out_mas
 }
 
 
-void blt_build_block_diffusion_mask(const blt_block_diffusion_config* config,
-                                    blt_tensor* out_mask, blt_arena* arena) {
+void blt_build_block_diffusion_mask_cpu(const blt_block_diffusion_config* config,
+                                        blt_tensor* out_mask, blt_arena* arena) {
+    BLT_REQUIRE(arena->backend == BLT_BACKEND_CPU, "blt_build_block_diffusion_mask: CPU implementation called with non-CPU arena");
     BLT_REQUIRE(config != NULL && out_mask != NULL && arena != NULL,
         "blt_build_block_diffusion_mask: config, out_mask and arena cannot be NULL");
     const size_t S = config->seq_len;

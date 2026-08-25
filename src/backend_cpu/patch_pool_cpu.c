@@ -2,7 +2,7 @@
 
 
 
-void blt_patch_pool_forward(const blt_tensor* byte_hidden, const blt_patch_info* patches, size_t num_patches,
+void blt_patch_pool_forward_cpu(const blt_tensor* byte_hidden, const blt_patch_info* patches, size_t num_patches,
                             blt_patch_pool_type pool_type, blt_tensor* out){
 
     BLT_REQUIRE(byte_hidden != NULL && out != NULL, "patch_pool: NULL tensor");
@@ -51,7 +51,7 @@ void blt_patch_pool_forward(const blt_tensor* byte_hidden, const blt_patch_info*
 
 
 
-void blt_patch_pool_backward(const blt_tensor* grad_out, const blt_tensor* byte_hidden, const blt_patch_info* patches, size_t num_patches,
+void blt_patch_pool_backward_cpu(const blt_tensor* grad_out, const blt_tensor* byte_hidden, const blt_patch_info* patches, size_t num_patches,
                              blt_patch_pool_type pool_type, blt_tensor* grad_byte_hidden){
 
     BLT_REQUIRE(grad_out != NULL && byte_hidden != NULL &&

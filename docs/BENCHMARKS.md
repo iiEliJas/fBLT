@@ -153,21 +153,21 @@ quality-divergent.
 
 ### 3.3 Reading the numbers
 
-![Quality/cost frontier](nfe_quality_frontier.png)
+![Quality/cost frontier](../graphs/nfe_quality_frontier.png)
 
 Everything on the agreement = 1.0 line is exactly greedy quality.
 BLT-DV reaches ~0.66-0.81 decoder passes per byte there. Raw BLT-D
 drafts are ~10x cheaper but diverge from greedy (agreement 0.08-0.14) -
 useful for diverse/creative sampling, not for exact continuation.
 
-![Where the passes go](enc_dec_map.png)
+![Where the passes go](../graphs/enc_dec_map.png)
 
 BLT-S trades *more* decoder passes for *far fewer* encoder+global
 passes (1.0 -> 0.21 at k=16). It wins when the encoder+global stack
 dominates cost. BLT-D/DV attack the decoder side instead. The two are
 complementary axes.
 
-![Acceptance](acceptance.png)
+![Acceptance](../graphs/acceptance.png)
 
 BLT-S accepts 82% of drafted bytes on the well-trained plain model -
 self-speculation works. On the BLT-D model it drops to 61%/39%/22%: the
@@ -176,7 +176,7 @@ that tax shows up again at inference time. BLT-DV acceptance (15-43%)
 is limited by the fully-masked regime being under-trained when the mask
 loss is capped at 0.3.
 
-![Latency](latency.png)
+![Latency](../graphs/latency.png)
 
 ### 3.4 Takeaways
 

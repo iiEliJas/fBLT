@@ -87,7 +87,7 @@ static const float* build_mask(const blt_cross_attention_config* config,
 // the byte sequence (length seq_len). Head h occupies the column block
 // [h*head_dim, (h+1)*head_dim) of each [rows, embed_dim] buffer
 
-static void cross_attention_head(const float* q_data, const float* k_data, const float* v_data,
+static void cross_attention_head(blt_backend backend, const float* q_data, const float* k_data, const float* v_data,
                                  size_t head_idx, size_t num_patches, size_t seq_len,
                                  size_t embed_dim, size_t head_dim,
                                  const float* mask, float scale,
@@ -101,11 +101,11 @@ static void cross_attention_head(const float* q_data, const float* k_data, const
 
         for (size_t j = 0; j < seq_len; ++j) {
             const float* k_j = k_data + j * embed_dim + head_offset;
-            scores_i[j] = blt_vec_dot(q_i, k_j, head_dim);
+            scores_i[j] = blt_vec_dot(backend, q_i, k_j, head_dim);
         }
 
         const float* mask_row = mask + i * seq_len;
-        blt_softmax_masked_row_inplace(scores_i, seq_len, i, false, mask_row, scale);
+        blt_softmax_masked_row_inplace(backend, scores_i, seq_len, i, false, mask_row, scale);
     }
 
     for (size_t i = 0; i < num_patches; ++i) {
@@ -215,7 +215,7 @@ void blt_cross_attention_forward(
     // Writes head outputs into combined_data [num_patches, embed_dim]
     // -----------------------------------------------------------------
     for (size_t head = 0; head < num_heads; ++head) {
-        cross_attention_head(q_data, k_data, v_data, head, num_patches, seq_len,
+        cross_attention_head(query_in->backend, q_data, k_data, v_data, head, num_patches, seq_len,
                              embed_dim, head_dim, mask_data, scale,
                              scores_buf, combined_data);
     }
@@ -283,7 +283,7 @@ static void attn_bwd_recompute_forward(
     // so each heads slice of weights_all doubles as that buffer
     for (size_t head = 0; head < num_heads; head++) {
         float* W = cache->weights_all + head * num_patches * seq_len;
-        cross_attention_head(cache->q_data, cache->k_data, cache->v_data, head,
+        cross_attention_head(query_in->backend, cache->q_data, cache->k_data, cache->v_data, head,
                              num_patches, seq_len, embed_dim, head_dim,
                              mask_data, scale, W, cache->combined_data);
     }

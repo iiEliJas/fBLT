@@ -2,6 +2,10 @@
 #ifndef BLT_MODELS_BLT_MODEL_H
 #define BLT_MODELS_BLT_MODEL_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "blt/core/allocator.h"
 #include "blt/core/tensor.h"
 #include "blt/models/local_encoder.h"
@@ -95,5 +99,9 @@ void blt_model_backward(
     blt_model_grad* grad,
     blt_arena* arena
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_MODELS_BLT_MODEL_H

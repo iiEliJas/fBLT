@@ -62,7 +62,7 @@ B=16 116 ms (13x, quality-divergent); DV variants ~1030-1200 ms.
    lambda<=0.3 reweighting, L_mask is under-trained exactly where
    drafting starts (all-MASK blocks). This is the main lever for DV.
 
-## Improvement directions (paper suggestions + our own)
+## Improvement directions (paper suggestions + my own)
 
 Paper-sanctioned:
 - Reweight toward next-byte prediction (section 6): done as lambda cap;
@@ -72,7 +72,7 @@ Paper-sanctioned:
   decoder makes them worth more (paper explicitly used a small decoder).
 - One-step + verify as the default DV operating point.
 
-Our own:
+My own:
 - High-t curriculum: sample t ~ U(t_min, 1) with mass pushed toward 1
   late in training (directly targets drafting-from-scratch states).
 - Train/infer patcher consistency: we trained with fixed-stride patches
@@ -89,7 +89,6 @@ Our own:
 ## Reproduce
 
     make bench-infer
-    source .venv/bin/activate
     python3 tools/bench_plots.py
 
 ## Follow-up improvement round (post-benchmarks, pre-CUDA)

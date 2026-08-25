@@ -308,9 +308,9 @@ static void diffusion_self_attention(const diff_ctx* c,
             const float* mask_row = mask_base + i * S;
 
             for (size_t j = 0; j < S; j++) {
-                scores[j] = blt_vec_dot(q_i, qkv_data + j * stride3 + E + q_off, hd);
+                scores[j] = blt_vec_dot(normed1->backend, q_i, qkv_data + j * stride3 + E + q_off, hd);
             }
-            blt_softmax_masked_row_inplace(scores, S, i, false, mask_row, scale);
+            blt_softmax_masked_row_inplace(normed1->backend, scores, S, i, false, mask_row, scale);
         }
 
         for (size_t i = 0; i < S; i++) {

@@ -53,20 +53,3 @@ train the clean objective exactly like plain BLT.
 (runs/bltd_l03_40k.fblt): best causal BPB among diffusion arms while
 keeping saturated drafting accuracy. Plain BLT remains the reference
 for pure next-byte work.
-
-## Bugs found and fixed along the way
-
-- Checkpoint clobbering: --load-weights loaded weights, then the
-  unconditional random-init block overwrote them -> every loaded model
-  behaved like fresh random init (~8 BPB everywhere). Init is now
-  skipped when loading. This produced the earlier false "eval
-  contamination" alarm; retracted.
-- Makefile had no header dependency tracking; a struct change half-
-  rebuilt the tree and segfaulted tests. Fixed with -MMD -MP.
-- Unclamped 1/t loss weight and fp32 -log(0) underflow (see Findings 3).
-
-## Next session
-
-Next: Algorithm 1 block-diffusion inference (unmasking schedule,
-alpha / EB-gamma, top-p sampler) + draft verification reusing
-blt_verify_draft; validate against runs/bltd_l03_40k.fblt.

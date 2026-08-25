@@ -1,6 +1,10 @@
 #ifndef BLT_INFER_KV_CACHE_H
 #define BLT_INFER_KV_CACHE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 
 #include "blt/core/tensor.h"
@@ -109,5 +113,9 @@ void blt_kv_decode_step(blt_kv_cache* cache,
                         const blt_tensor* d0_rows,
                         blt_tensor* logits_out,
                         blt_arena* arena);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_INFER_KV_CACHE_H

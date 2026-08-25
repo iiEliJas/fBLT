@@ -1,6 +1,10 @@
 #ifndef BLT_OPS_ROPE_H
 #define BLT_OPS_ROPE_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "blt/core/tensor.h"
 
 // RoPE ... rotary position embedding
@@ -27,4 +31,7 @@ void blt_rope_apply(const blt_tensor* x, const blt_tensor* cos, const blt_tensor
 void blt_rope_apply_backward(const blt_tensor* grad_out, const blt_tensor* cos,
                             const blt_tensor* sin, blt_tensor* grad_in);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

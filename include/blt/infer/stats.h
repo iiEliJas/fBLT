@@ -1,6 +1,10 @@
 #ifndef BLT_INFER_STATS_H
 #define BLT_INFER_STATS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 
 
@@ -26,5 +30,9 @@ float blt_infer_stats_acceptance_rate(const blt_infer_stats* stats);
 // Prints one line "label: nfe_enc_glob=.., nfe_dec=.., drafted=.., accepted=.. (..%)"
 // to stdout.
 void blt_infer_stats_print(const blt_infer_stats* stats, const char* label);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_INFER_STATS_H

@@ -1,6 +1,10 @@
 #ifndef BLT_HASH_NGRAM_H
 #define BLT_HASH_NGRAM_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "blt/core/tensor.h"
 #include "blt/core/allocator.h"
 #include <stdint.h>
@@ -83,4 +87,7 @@ void blt_hash_ngram_backward(
     blt_tensor* grad_tables
 );
 
+#ifdef __cplusplus
+}
+#endif
 #endif

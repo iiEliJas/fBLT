@@ -1,6 +1,10 @@
 #ifndef BLT_MODELS_PATCHER_H
 #define BLT_MODELS_PATCHER_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -37,5 +41,9 @@ typedef struct {
 size_t blt_segment_patches( const blt_tensor* entropy, const uint8_t* bytes, blt_patch_info* patches_out,
                             size_t max_patches, const blt_patcher_config* config
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_MODELS_PATCHER_H

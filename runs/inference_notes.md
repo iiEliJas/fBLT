@@ -30,7 +30,7 @@ Date: 2026-08-25. Builds on the trained checkpoints (see training_notes.md).
    load-bearing regression gate.
 4. Exact output lengths, per-round progress, stats accounting.
 
-## Toy-scale findings
+## Findings
 
 - Raw drafts are code-shaped but diverge from causal argmaxes: acceptance
   ~14% on the real checkpoint (B=8, alpha=0.7). Decoder NFEs therefore do
@@ -42,15 +42,3 @@ Date: 2026-08-25. Builds on the trained checkpoints (see training_notes.md).
 - One real bug found and fixed during bring-up: blt_draft_block reset the
   scratch arena per pass, freeing the frozen encoder latents it was
   handed (uniform-logit symptom). Arena contract documented in the header.
-
-## Try it
-
-    make e2e-dv                       # default prompt/checkpoint
-    ./bin/e2e_blt_dv --block-size 4 --new-bytes 64 \
-        --prompt "int main(void) {"
-
-## Next
-
-Benchmark harness comparing BLT / BLT-S / BLT-D / BLT-DV NFEs and
-acceptance across k and B sweeps on held-out text; optional longer BLT-D
-runs with higher lambda cap late in training to lift t~1 quality.

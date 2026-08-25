@@ -1,6 +1,10 @@
 #ifndef BLT_MODELS_ATTENTION_H
 #define BLT_MODELS_ATTENTION_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include "blt/core/tensor.h"
 #include "blt/ops/mask_builder.h"
 #include "blt/core/allocator.h"
@@ -38,5 +42,9 @@ void blt_multihead_attention_backward(const blt_tensor* input, const blt_tensor*
     blt_tensor* grad_weight_proj,
     const blt_attention_config* config, blt_arena* arena);
 
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_MODELS_ATTENTION_H

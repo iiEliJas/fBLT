@@ -1,6 +1,10 @@
 #ifndef BLT_MODELS_LOCAL_COMMON_H
 #define BLT_MODELS_LOCAL_COMMON_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -96,5 +100,9 @@ blt_transformer_config blt_local_byte_layer_config(
     size_t embed_dim, size_t num_heads, float rope_theta, size_t hidden_dim,
     const blt_mask_config* local_mask,
     const blt_tensor* rope_cos_view, const blt_tensor* rope_sin_view);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_MODELS_LOCAL_COMMON_H

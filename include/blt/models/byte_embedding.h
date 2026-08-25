@@ -1,6 +1,10 @@
 #ifndef BLT_MODEL_BYTE_EMBEDDING_H
 #define BLT_MODEL_BYTE_EMBEDDING_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "blt/core/tensor.h"
 #include "blt/core/allocator.h"
 
@@ -25,4 +29,7 @@ void blt_byte_embedding_forward(const blt_byte_embedding* emb, const blt_tensor*
 void blt_byte_embedding_backward(const blt_byte_embedding* emb, const blt_tensor* bytes_in,
                                   const blt_tensor* grad_out, blt_tensor* grad_weight);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

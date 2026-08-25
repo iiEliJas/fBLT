@@ -1,5 +1,9 @@
 #ifndef BLT_OPS_RMSNORM_H
 #define BLT_OPS_RMSNORM_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "blt/core/tensor.h"
 
 // Row-wise RMSNorm over the last dimension of a 2D [seq_len, embed_dim]
@@ -10,4 +14,7 @@
 void blt_rmsnorm_forward(const blt_tensor* x, const blt_tensor* weight, blt_tensor* out);
 void blt_rmsnorm_backward(const blt_tensor* grad_out, const blt_tensor* x,
                            const blt_tensor* weight, blt_tensor* grad_x, blt_tensor* grad_weight);
+#ifdef __cplusplus
+}
+#endif
 #endif

@@ -1,5 +1,6 @@
 #include "blt/core/allocator.h"
 #include "blt/core/backend.h"
+#include "blt/core/cuda_shim.h"
 
 #include <errno.h>
 #include <stdlib.h>
@@ -41,7 +42,16 @@ blt_arena* blt_arena_create(size_t capacity_bytes, blt_backend backend) {
     arena->backend = backend;
 
     if (backend == BLT_BACKEND_CUDA) {
-        BLT_FATAL("CUDA backend is not supported yet");
+#ifndef BLT_WITH_CUDA
+        BLT_FATAL("CUDA backend requested but BLT_WITH_CUDA is not enabled");
+#else
+        arena->buffer = blt_cuda_malloc(capacity_bytes);
+        if (!arena->buffer) {
+            free(arena);
+            BLT_FATAL("failed to allocate CUDA arena buffer");
+        }
+        return arena;
+#endif
     }
 
     arena->buffer = aligned_malloc(capacity_bytes, 64);
@@ -57,7 +67,13 @@ void blt_arena_destroy(blt_arena* arena) {
     if (!arena) {
         return;
     }
-    aligned_free(arena->buffer);
+    if (arena->backend == BLT_BACKEND_CUDA) {
+#ifdef BLT_WITH_CUDA
+        blt_cuda_free(arena->buffer);
+#endif
+    } else {
+        aligned_free(arena->buffer);
+    }
     free(arena);
 }
 
@@ -107,7 +123,13 @@ blt_tensor blt_tensor_create(blt_arena* arena, const size_t* shape, size_t ndim,
     size_t bytes = blt_tensor_bytes(&tensor);
     tensor.data = blt_arena_alloc(arena, bytes, 64);
     if (tensor.data) {
-        memset(tensor.data, 0, bytes);
+        if (tensor.backend == BLT_BACKEND_CUDA) {
+#ifdef BLT_WITH_CUDA
+            blt_cuda_memset(tensor.data, 0, bytes);
+#endif
+        } else {
+            memset(tensor.data, 0, bytes);
+        }
     }
 
     return tensor;

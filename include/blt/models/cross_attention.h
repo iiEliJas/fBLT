@@ -1,6 +1,10 @@
 #ifndef BLT_CROSS_ATTENTION_H
 #define BLT_CROSS_ATTENTION_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include <math.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -82,4 +86,7 @@ void blt_cross_attention_backward(const blt_tensor* query_in,
                                  blt_arena* arena);
 
 
+#ifdef __cplusplus
+}
+#endif
 #endif //BLT_CROSS_ATTENTION_H

@@ -1,6 +1,10 @@
 #ifndef BLT_LOCAL_DECODER_H
 #define BLT_LOCAL_DECODER_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <stdbool.h>
 
@@ -154,4 +158,8 @@ void blt_local_decoder_backward(
     blt_local_decoder_grad* grad,
     blt_arena* arena
 );
+#ifdef __cplusplus
+}
+#endif
+
 #endif // BLT_LOCAL_DECODER_H

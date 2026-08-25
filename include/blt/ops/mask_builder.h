@@ -1,6 +1,10 @@
 #ifndef BLT_MASK_BUILDER_H
 #define BLT_MASK_BUILDER_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "blt/core/tensor.h"
 #include "blt/core/allocator.h"
 
@@ -60,4 +64,7 @@ typedef struct {
 void blt_build_block_diffusion_mask(const blt_block_diffusion_config* config,
                                     blt_tensor* out_mask, blt_arena* arena);
 
+#ifdef __cplusplus
+}
+#endif
 #endif

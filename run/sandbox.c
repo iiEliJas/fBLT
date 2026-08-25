@@ -121,7 +121,7 @@ int main(void) {
             float max_val = -INFINITY;
             for (size_t j = 0; j < seq_len; ++j) {
                 const float* k_j = k_data + j * embed_dim + head_offset;
-                float score = blt_vec_dot(q_i, k_j, head_dim) * scale + mask_row[j];
+                float score = blt_vec_dot(BLT_BACKEND_CPU, q_i, k_j, head_dim) * scale + mask_row[j];
                 w_i[j] = score;
                 if (isfinite(score) && score > max_val) {
                     max_val = score;

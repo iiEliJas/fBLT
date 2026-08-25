@@ -1,6 +1,10 @@
 #ifndef BLT_INFER_BLOCK_GENERATION_H
 #define BLT_INFER_BLOCK_GENERATION_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -110,5 +114,9 @@ void blt_generate_greedy_blockdiff_verify(
     blt_infer_stats* stats,              // nullable
     blt_arena* scratch
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_INFER_BLOCK_GENERATION_H

@@ -1,6 +1,10 @@
 #ifndef BLT_MODELS_BLOCK_DIFFUSION_H
 #define BLT_MODELS_BLOCK_DIFFUSION_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -137,5 +141,9 @@ void blt_local_decoder_forward_diffusion_infer(
     blt_tensor* logits_out,
     blt_arena* arena
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_MODELS_BLOCK_DIFFUSION_H

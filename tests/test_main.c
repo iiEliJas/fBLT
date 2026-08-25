@@ -24,6 +24,7 @@ int main(void) {
         {"json parser", run_json_parser_tests},
         {"allocator core helpers", run_allocator_core_tests},
         {"backend dispatch", run_backend_core_tests},
+        {"cuda arena and transfers", run_cuda_arena_transfer_tests},
 
         {"elementwise backend", run_elementwise_backend_tests},
         {"gelu backend", run_gelu_backend_tests},
@@ -77,6 +78,10 @@ int main(void) {
     const test_case parity_tests[] = {
         {"matmul parity", run_matmul_parity_test},
         {"softmax parity", run_softmax_parity_test},
+        {"cuda elementwise parity", run_cuda_parity_elementwise},
+        {"cuda reductions parity", run_cuda_parity_reductions},
+        {"cuda matmul parity", run_cuda_parity_matmul},
+        {"cuda composites parity", run_cuda_parity_composites},
         {"patcher parity", run_patcher_parity_tests},
         {"transformer parity", run_transformer_parity_tests},
         {"entropy LM overfit", run_elm_overfit_tests},

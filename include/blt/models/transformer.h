@@ -1,6 +1,10 @@
 #ifndef BLT_MODELS_TRANSFORMER_H
 #define BLT_MODELS_TRANSFORMER_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
  
 #include "blt/core/tensor.h"
 #include "blt/core/allocator.h"
@@ -90,5 +94,9 @@ void blt_transformer_forward(
     const blt_transformer_config* config,
     blt_arena* arena
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_MODELS_TRANSFORMER_H

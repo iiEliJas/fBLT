@@ -1,7 +1,9 @@
 build/
 bin/
+bin-cuda/
 data/dummy_entropy.bin
 obj/
+obj-cuda/
 *.exe
 *.o
 *.obj
@@ -12,7 +14,6 @@ __pycache__/
 .cache/
 
 docs/Plan.md
-docs/Phase_6.md
 docs/bltransformerPAPER.md
 docs/fast_bltPAPER.md
 graphify-out/

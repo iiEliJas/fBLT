@@ -1,6 +1,10 @@
 #ifndef BLT_MODELS_ENTROPY_H
 #define BLT_MODELS_ENTROPY_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "blt/core/tensor.h"
 #include "blt/models/patcher.h"
 
@@ -16,4 +20,7 @@ typedef struct {
 void blt_compute_entropy(const blt_tensor* probs, blt_tensor* entropy_out, const blt_entropy_config* config);
 
 
+#ifdef __cplusplus
+}
+#endif
 #endif //BLT_MODELS_ENTROPY_H

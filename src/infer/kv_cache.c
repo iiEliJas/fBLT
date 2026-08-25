@@ -5,8 +5,8 @@
 //   - matmul/rmsnorm/swiglu are row-wise, so batch size never changes
 //     per-row numerics;
 //   - attention uses blt_vec_dot + blt_softmax_masked_row_inplace (the same
-//     inline the dense paths use) with additive 0/-inf mask rows built from
-//     absolute positions / group ids.
+//     dispatched helpers the dense paths use) with additive 0/-inf mask rows
+//     built from absolute positions / group ids.
 #include "blt/infer/kv_cache.h"
 
 #include "blt/core/backend.h"
@@ -171,9 +171,9 @@ void blt_kv_cache_refresh_cross(blt_kv_cache* cache,
 // Per-head attention kernels (used by the decode step)
 //
 // Both render their mask as additive 0/-inf rows and stabilize through
-// blt_softmax_masked_row_inplace -- the identical inline the dense paths
-// use -- so masked-out entries become exactly 0.0f weights and are skipped
-// in the V accumulation exactly like attention.c does.
+// blt_softmax_masked_row_inplace -- the identical dispatched helper the dense
+// paths use -- so masked-out entries become exactly 0.0f weights and are
+// skipped in the V accumulation exactly like attention.c does.
 
 typedef struct {
     float* scores;     // scratch [kv_len]
@@ -195,6 +195,7 @@ static void self_attention_head(blt_kv_cache* cache, size_t layer,
     const size_t hd = E / H;
     const size_t offset = head * hd;
     const size_t window = cache->decoder->config.local_window;
+    const blt_backend backend = cache->self_k[layer].backend;
 
     const float* kc = (const float*)cache->self_k[layer].data;
     const float* vc = (const float*)cache->self_v[layer].data;
@@ -211,7 +212,7 @@ static void self_attention_head(blt_kv_cache* cache, size_t layer,
                 allowed = false;
             }
             if (allowed) {
-                scores[j] = blt_vec_dot(q, kc + j * E + offset, hd);
+                scores[j] = blt_vec_dot(backend, q, kc + j * E + offset, hd);
                 mask_row[j] = 0.0f;
             } else {
                 scores[j] = 0.0f;
@@ -219,7 +220,7 @@ static void self_attention_head(blt_kv_cache* cache, size_t layer,
             }
         }
 
-        blt_softmax_masked_row_inplace(scores, total, r, false, mask_row, scale);
+        blt_softmax_masked_row_inplace(backend, scores, total, r, false, mask_row, scale);
 
         float* out = combined + r * E + offset;
         for (size_t d = 0; d < hd; d++) {
@@ -254,6 +255,7 @@ static void cross_attention_head(blt_kv_cache* cache, size_t layer,
     const size_t XH = cache->decoder->config.cross_attn_heads;
     const size_t hd = E / XH;
     const size_t offset = head * hd;
+    const blt_backend backend = cache->cross_k[layer].backend;
 
     const float* kc = (const float*)cache->cross_k[layer].data;
     const float* vc = (const float*)cache->cross_v[layer].data;
@@ -264,7 +266,7 @@ static void cross_attention_head(blt_kv_cache* cache, size_t layer,
 
         for (size_t j = 0; j < total_sub; j++) {
             if (kv_group_ids[j] == g) {
-                scores[j] = blt_vec_dot(q, kc + j * E + offset, hd);
+                scores[j] = blt_vec_dot(backend, q, kc + j * E + offset, hd);
                 mask_row[j] = 0.0f;
             } else {
                 scores[j] = 0.0f;
@@ -272,7 +274,7 @@ static void cross_attention_head(blt_kv_cache* cache, size_t layer,
             }
         }
 
-        blt_softmax_masked_row_inplace(scores, total_sub, r, false, mask_row, scale);
+        blt_softmax_masked_row_inplace(backend, scores, total_sub, r, false, mask_row, scale);
 
         float* out = combined + r * E + offset;
         for (size_t d = 0; d < hd; d++) {

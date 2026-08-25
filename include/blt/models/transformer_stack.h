@@ -1,6 +1,10 @@
 #ifndef BLT_MODELS_TRANSFORMER_STACK_H
 #define BLT_MODELS_TRANSFORMER_STACK_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 #include "blt/core/tensor.h"
 #include "blt/core/allocator.h"
 #include "blt/models/transformer.h"
@@ -127,4 +131,7 @@ void blt_transformer_layer_backward(
     const blt_tensor* grad_out, blt_transformer_layer_grad* lg, blt_tensor* grad_x
 );
 
+#ifdef __cplusplus
+}
+#endif
 #endif  // BLT_MODELS_TRANSFORMER_STACK_H

@@ -1,6 +1,10 @@
 #ifndef BLT_CORE_TENSOR_H
 #define BLT_CORE_TENSOR_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <stdbool.h>
 #include <string.h>
@@ -35,5 +39,9 @@ void blt_tensor_view_2d(blt_tensor* t, void* data, size_t rows, size_t cols, blt
 void blt_tensor_view_3d(blt_tensor* t, void* data, size_t d0, size_t d1, size_t d2, blt_backend backend);
 
 void zero_tensor(blt_tensor* t);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_CORE_TENSOR_H

@@ -114,7 +114,7 @@ static void apply_rope_to_all_heads(
 //----------------------------------------------------------------
 // Helper: Process a single attention head
 
-static void attention_head(const float* qkv_data, size_t head_idx, size_t seq_len, size_t embed_dim,
+static void attention_head(blt_backend backend, const float* qkv_data, size_t head_idx, size_t seq_len, size_t embed_dim,
                         size_t head_dim, bool is_causal, const float* mask, float scale,
                         float* scores_buf, float* combined_out) {
     size_t qkv_stride = 3 * embed_dim;
@@ -128,11 +128,11 @@ static void attention_head(const float* qkv_data, size_t head_idx, size_t seq_le
         
         for (size_t j = 0; j < seq_len; ++j) {
             const float* k_j = qkv_data + j * qkv_stride + k_offset;
-            scores_i[j] = blt_vec_dot(q_i, k_j, head_dim);
+            scores_i[j] = blt_vec_dot(backend, q_i, k_j, head_dim);
         }
 
         const float* mask_row = mask ? (mask + i * seq_len) : NULL;
-        blt_softmax_masked_row_inplace(scores_i, seq_len, i, is_causal, mask_row, scale);
+        blt_softmax_masked_row_inplace(backend, scores_i, seq_len, i, is_causal, mask_row, scale);
     }
     
 
@@ -277,7 +277,7 @@ void blt_multihead_attention(
     // Writes head outputs into combined_data [seq_len, embed_dim]
     // -----------------------------------------------------------------
     for (size_t head = 0; head < num_heads; ++head) {
-        attention_head(qkv_data, head, seq_len, embed_dim, head_dim,
+        attention_head(input->backend, qkv_data, head, seq_len, embed_dim, head_dim,
                         config->is_causal, mask_data, scale, scores_buf, combined_data);
     }
  
@@ -378,7 +378,7 @@ static void attn_bwd_recompute_forward(
     // attention_head leaves the softmaxed weights behind for backward.
     for (size_t head = 0; head < num_heads; head++) {
         float* W = cache->weights_all + head * seq_len * seq_len;
-        attention_head(cache->qkv_data, head, seq_len, embed_dim, head_dim,
+        attention_head(input->backend, cache->qkv_data, head, seq_len, embed_dim, head_dim,
                         config->is_causal, mask_data, scale, W, cache->combined_data);
     }
 }

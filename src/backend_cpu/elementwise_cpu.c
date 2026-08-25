@@ -31,10 +31,11 @@ void blt_mul_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
 }
 
 
-void blt_scale(blt_tensor* t, float scalar) {
+void blt_scale_cpu(blt_tensor* t, float scalar) {
     BLT_REQUIRE(t != NULL, "blt_scale: tensor must not be null");
     BLT_REQUIRE(t->dtype == BLT_DTYPE_FP32, "blt_scale: only supports FP32 tensors");
- 
+    BLT_REQUIRE(t->backend == BLT_BACKEND_CPU, "blt_scale: CPU implementation called with non-CPU backend");
+
     float* data = (float*)t->data;
     for (size_t i = 0; i < t->numel; ++i) {
         data[i] *= scalar;

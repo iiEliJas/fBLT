@@ -2,6 +2,10 @@
 #ifndef BLT_INFER_ROPE_GATHER_H
 #define BLT_INFER_ROPE_GATHER_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include "blt/core/tensor.h"
 #include "blt/core/allocator.h"
@@ -27,5 +31,9 @@ void blt_rope_position_gather(
     blt_tensor* sin_out,
     blt_arena* arena
 );
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_INFER_ROPE_GATHER_H

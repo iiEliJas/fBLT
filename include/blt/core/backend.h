@@ -1,6 +1,10 @@
 #ifndef BLT_CORE_BACKEND_H
 #define BLT_CORE_BACKEND_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include "blt/core/tensor.h"
@@ -47,5 +51,9 @@ static inline void blt_check_elementwise_fp32(const blt_tensor* a, const blt_ten
     BLT_REQUIRE(a->numel == b->numel, "%s", msg);
 }
 
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_CORE_BACKEND_H
