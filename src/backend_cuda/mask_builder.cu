@@ -36,7 +36,8 @@ static void* blt_cuda_upload_temp(const void* host_data, size_t bytes) {
 }
 
 __global__ void blt_attention_mask_kernel(float* mask, size_t seq_q, size_t seq_kv,
-                                          int is_causal, size_t sliding_window,
+                                          int is_causal, size_t causal_offset,
+                                          size_t sliding_window,
                                           const size_t* doc_bounds, size_t num_docs,
                                           const size_t* q_groups, const size_t* kv_groups,
                                           int bidirectional_group) {
@@ -47,13 +48,21 @@ __global__ void blt_attention_mask_kernel(float* mask, size_t seq_q, size_t seq_
         const size_t j = idx % seq_kv;
 
         bool allowed = true;
-        if (is_causal && j > i) {
+        if (is_causal && j > i + causal_offset) {
             allowed = false;
         }
         if (allowed && sliding_window > 0) {
-            size_t diff = i > j ? i - j : j - i;
-            if (diff >= sliding_window) {
-                allowed = false;
+            if (is_causal) {
+                const size_t diag = i + causal_offset;
+                size_t back = diag >= j ? diag - j : j - diag;
+                if (back >= sliding_window) {
+                    allowed = false;
+                }
+            } else {
+                size_t diff = i > j ? i - j : j - i;
+                if (diff >= sliding_window) {
+                    allowed = false;
+                }
             }
         }
         if (allowed && doc_bounds != NULL) {
@@ -137,7 +146,7 @@ extern "C" void blt_build_attention_mask_cuda(const blt_mask_config* config, blt
     // First pass fills the matrix; second pass flags fully-masked rows.
     blt_attention_mask_kernel<<<(unsigned)blocks, block>>>(
         (float*)out_mask->data, seq_q, seq_kv,
-        config->is_causal ? 1 : 0, config->sliding_window,
+        config->is_causal ? 1 : 0, config->causal_offset, config->sliding_window,
         d_docs, has_docs ? config->num_docs : 0,
         d_qg, d_kvg,
         config->bidirectional_within_group ? 1 : 0);

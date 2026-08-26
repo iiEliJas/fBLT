@@ -1,6 +1,7 @@
 #include "blt/models/local_encoder.h"
 
 #include "blt/core/backend.h"
+#include "blt/ops/vecmath.h"
 #include "blt/core/tensor.h"
 #include "blt/core/allocator.h"
 #include "blt/models/attention.h"
@@ -71,8 +72,11 @@ static le_context make_context(const blt_local_encoder* model, size_t seq_len,
                                const blt_patch_info* patches, size_t num_patches,
                                const size_t* doc_boundaries, size_t num_docs,
                                blt_arena* arena) {
-    size_t* query_group_ids = (size_t*)blt_arena_alloc(arena, num_patches * sizeof(size_t), 64);
-    size_t* kv_group_ids    = (size_t*)blt_arena_alloc(arena, seq_len * sizeof(size_t), 64);
+    // Group-id arrays are host metadata: the patcher-side builder writes
+    // them and the mask builder uploads them from host pointers, so they
+    // must not land in device memory when arena is a device arena.
+    size_t* query_group_ids = (size_t*)blt_container_alloc(arena, num_patches * sizeof(size_t));
+    size_t* kv_group_ids    = (size_t*)blt_container_alloc(arena, seq_len * sizeof(size_t));
     blt_patch_build_group_ids(patches, num_patches, seq_len, query_group_ids, kv_group_ids);
 
     le_context ctx = {0};
@@ -159,7 +163,7 @@ blt_local_encoder* blt_local_encoder_create(blt_arena* arena, const blt_local_en
     BLT_REQUIRE(config->patch_dim % config->embed_dim == 0, "blt_local_encoder_create: patch_dim must be divisible by embed_dim");
 
 
-    blt_local_encoder* m = (blt_local_encoder*)blt_arena_alloc(arena, sizeof(blt_local_encoder), sizeof(void*));
+    blt_local_encoder* m = (blt_local_encoder*)blt_container_alloc(arena, sizeof(blt_local_encoder));
     m->config = *config;
 
     // Byte embedding table [256, embed_dim]
@@ -178,8 +182,7 @@ blt_local_encoder* blt_local_encoder_create(blt_arena* arena, const blt_local_en
     blt_rope_precompute(config->max_seq_len, &rope_cfg, &m->rope_cos_cache, &m->rope_sin_cache);
 
     // Per-layer weights
-    m->layers = (blt_local_encoder_layer_storage*)blt_arena_alloc(
-        arena, config->num_layers * sizeof(blt_local_encoder_layer_storage), sizeof(void*));
+    m->layers = (blt_local_encoder_layer_storage*)blt_container_alloc(arena, config->num_layers * sizeof(blt_local_encoder_layer_storage));
 
     for (size_t l = 0; l < config->num_layers; ++l) {
         blt_local_layer_storage_alloc(arena, &m->layers[l], E, hidden);
@@ -197,7 +200,7 @@ blt_local_encoder_grad* blt_local_encoder_grad_create(blt_arena* arena, const bl
     size_t hidden = model->config.hidden_dim;
     size_t num_layers = model->config.num_layers;
 
-    blt_local_encoder_grad* g = (blt_local_encoder_grad*)blt_arena_alloc(arena, sizeof(blt_local_encoder_grad), sizeof(void*));
+    blt_local_encoder_grad* g = (blt_local_encoder_grad*)blt_container_alloc(arena, sizeof(blt_local_encoder_grad));
 
     size_t emb_shape[2] = { 256, E };
     g->embedding_grad = blt_tensor_create(arena, emb_shape, 2, BLT_DTYPE_FP32);
@@ -209,8 +212,7 @@ blt_local_encoder_grad* blt_local_encoder_grad_create(blt_arena* arena, const bl
         g->ngram_grads.tables[t] = blt_tensor_create(arena, table_shape, 2, BLT_DTYPE_FP32);
     }
 
-    g->layer_grads = (blt_local_encoder_layer_grad*)blt_arena_alloc(
-        arena, num_layers * sizeof(blt_local_encoder_layer_grad), sizeof(void*));
+    g->layer_grads = (blt_local_encoder_layer_grad*)blt_container_alloc(arena, num_layers * sizeof(blt_local_encoder_layer_grad));
 
     for (size_t l = 0; l < num_layers; ++l) {
         blt_local_layer_grad_alloc(arena, &g->layer_grads[l], E, hidden);
@@ -295,14 +297,14 @@ void blt_local_encoder_forward(const blt_local_encoder* model,
     blt_patch_pool_forward(&h, patches, num_patches, config->pool_type, &pooled);
 
     blt_tensor p = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
+    for (size_t sj = 0; sj < k; sj++) {
+        // pooled row j lands at column block sj of output row j
+        blt_strided_copy(pooled.backend,
+            (float*)p.data + sj * E, patch_dim,
+            (const float*)pooled.data, E, num_patches, E);
+    }
     if (k == 1) {
-        memcpy(p.data, pooled.data, num_patches * E * sizeof(float));
-    } else {
-        float* dst = (float*)p.data;
-        const float* src = (const float*)pooled.data;
-        for (size_t j = 0; j < num_patches; j++)
-            for (size_t s = 0; s < k; s++)
-                memcpy(dst + (j * patch_dim) + (s * E), src + j * E, E * sizeof(float));
+        // single strided_copy above already performed the full copy
     }
 
     // -----------------------------------------------------------------
@@ -341,8 +343,10 @@ void blt_local_encoder_forward(const blt_local_encoder* model,
     // -----------------------------------------------------------------
     // STEP 4: results into output
     //
-    memcpy(patch_out->data, p.data, num_patches * patch_dim * sizeof(float));
-    memcpy(byte_hidden_out->data, h.data, seq_len * E * sizeof(float));
+    blt_strided_copy(p.backend, (float*)patch_out->data, num_patches * patch_dim,
+                     (const float*)p.data, num_patches * patch_dim, 1, num_patches * patch_dim);
+    blt_strided_copy(h.backend, (float*)byte_hidden_out->data, seq_len * E,
+                     (const float*)h.data, seq_len * E, 1, seq_len * E);
 
     // Arena cleanup is callers responsibility
 }
@@ -421,8 +425,8 @@ void blt_local_encoder_backward(const blt_local_encoder* model,
     blt_tensor byte_emb = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
     blt_byte_embedding_forward(&emb, bytes_in, &byte_emb);
 
-    blt_tensor* h = (blt_tensor*)blt_arena_alloc(arena, (L + 1) * sizeof(blt_tensor), sizeof(void*));
-    layer_cache* caches = (layer_cache*)blt_arena_alloc(arena, L * sizeof(layer_cache), sizeof(void*));
+    blt_tensor* h = (blt_tensor*)blt_container_alloc(arena, (L + 1) * sizeof(blt_tensor));
+    layer_cache* caches = (layer_cache*)blt_container_alloc(arena, L * sizeof(layer_cache));
     memset(caches, 0, L * sizeof(layer_cache));
 
     h[0] = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
@@ -432,15 +436,10 @@ void blt_local_encoder_backward(const blt_local_encoder* model,
     blt_patch_pool_forward(&h[0], patches, num_patches, config->pool_type, &pooled);
 
     blt_tensor p = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
-    if (k == 1) {
-        memcpy(p.data, pooled.data, num_patches * E * sizeof(float));
-    } else {
-        float* dst = (float*)p.data;
-        const float* src = (const float*)pooled.data;
-        for (size_t j = 0; j < num_patches; j++){
-            for (size_t s = 0; s < k; s++)
-                memcpy(dst + (j * patch_dim) + (s * E), src + j * E, E * sizeof(float));
-        }
+    for (size_t sj = 0; sj < k; sj++) {
+        blt_strided_copy(pooled.backend,
+            (float*)p.data + sj * E, patch_dim,
+            (const float*)pooled.data, E, num_patches, E);
     }
 
     for (size_t l = 0; l < L; ++l) {
@@ -482,11 +481,13 @@ void blt_local_encoder_backward(const blt_local_encoder* model,
     //
     blt_tensor dh = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
     if (grad_byte_hidden_out != NULL) {
-        memcpy(dh.data, grad_byte_hidden_out->data, seq_len * E * sizeof(float));
+        blt_tensor_upload(&dh, grad_byte_hidden_out->data,
+                          seq_len * E * sizeof(float));
     } // else stays zero
 
     blt_tensor dP = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
-    memcpy(dP.data, grad_patch_out->data, num_patches * patch_dim * sizeof(float));
+    blt_tensor_upload(&dP, grad_patch_out->data,
+                      num_patches * patch_dim * sizeof(float));
 
     // -----------------------------------------------------------------
     // STEP 3: reverse layer loop
@@ -547,16 +548,21 @@ void blt_local_encoder_backward(const blt_local_encoder* model,
     // STEP 4: P_0 = pool(h_0) scatter pool gradient into h_0 grad
     //
     blt_tensor dP_pooled = blt_tensor_create(arena, (size_t[]){num_patches, E}, 2, BLT_DTYPE_FP32);
-    if (k == 1) {
-        memcpy(dP_pooled.data, dP.data, num_patches * E * sizeof(float));
-    } else {
-        float* dst = (float*)dP_pooled.data;
-        const float* src = (const float*)dP.data;
-        memset(dst, 0, num_patches * E * sizeof(float));
-        for (size_t j = 0; j < num_patches; j++)
-            for (size_t s = 0; s < k; s++)
-                for (size_t d = 0; d < E; d++)
-                    dst[j * E + d] += src[j * patch_dim + s * E + d];
+    // Sum the k column blocks of each grad row into the pooled gradient.
+    for (size_t sj = 0; sj < k; sj++) {
+        // io-style accumulate: dP_pooled += column block sj of dP
+        blt_tensor block_view, acc_view;
+        blt_tensor_view_2d(&block_view, (float*)dP.data + sj * E, num_patches, E, dP.backend);
+        if (sj == 0) {
+            blt_strided_copy(dP.backend, (float*)dP_pooled.data, E,
+                             (const float*)block_view.data, patch_dim, num_patches, E);
+        } else {
+            acc_view = dP_pooled;
+            blt_tensor tmp = blt_tensor_create(arena, (size_t[]){num_patches, E}, 2, BLT_DTYPE_FP32);
+            blt_strided_copy(dP.backend, (float*)tmp.data, E,
+                             (const float*)block_view.data, patch_dim, num_patches, E);
+            blt_add(&acc_view, &tmp, &dP_pooled);
+        }
     }
 
     blt_tensor grad_h0_pool = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);

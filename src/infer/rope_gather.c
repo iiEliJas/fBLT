@@ -1,8 +1,6 @@
 #include "blt/infer/rope_gather.h"
 #include "blt/core/backend.h"
-
-#include <string.h>
-
+#include "blt/ops/gather_scatter.h"
 
 void blt_rope_position_gather(
     const blt_tensor* cos_cache,
@@ -33,17 +31,12 @@ void blt_rope_position_gather(
             i, positions[i], max_seq_len);
     }
 
+    // `positions` is a host array; the gather op handles either memory space
+    // for the caches and stages the indices internally when needed.
     size_t out_shape[2] = { n, half };
     *cos_out = blt_tensor_create(arena, out_shape, 2, BLT_DTYPE_FP32);
     *sin_out = blt_tensor_create(arena, out_shape, 2, BLT_DTYPE_FP32);
 
-    const float* cos_src = (const float*)cos_cache->data;
-    const float* sin_src = (const float*)sin_cache->data;
-    float* cos_dst = (float*)cos_out->data;
-    float* sin_dst = (float*)sin_out->data;
-
-    for (size_t i = 0; i < n; i++) {
-        memcpy(cos_dst + i * half, cos_src + positions[i] * half, half * sizeof(float));
-        memcpy(sin_dst + i * half, sin_src + positions[i] * half, half * sizeof(float));
-    }
+    blt_rows_gather(cos_cache, positions, cos_out);
+    blt_rows_gather(sin_cache, positions, sin_out);
 }

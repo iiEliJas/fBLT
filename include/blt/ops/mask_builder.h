@@ -13,18 +13,22 @@ extern "C" {
 typedef struct {
     size_t seq_len_q;   // Query sequence length
     size_t seq_len_kv;  // Key/Value sequence length
-    
+
     // For Sliding Window + Document Boundaries (Self-Attention)
     size_t sliding_window;  // 0 for full causal attention
     const size_t* doc_boundaries;   // Array of index where new docs start
     size_t num_docs;
-    
+
     // For block-diagonal / grouped attention (Cross-Attention & Fast-BLT blocks)
     const size_t* query_group_ids;  // group ID for each query position
     const size_t* kv_group_ids;     // group ID for each kv position
     bool bidirectional_within_group;    // if true, attend to all positions in group; if false, causal within group
-    
+
     bool is_causal; // apply causal mask
+    size_t causal_offset;   // is_causal only: query row i may attend keys
+                            // j <= i + causal_offset (chunked/incremental
+                            // decode over a cached prefix sets this to the
+                            // prefix length; 0 == plain causal)
 } blt_mask_config;
 
 // Creates a 2D FP32 mask tensor of shape [seq_len_q, seq_len_kv]

@@ -4,6 +4,7 @@
 #include "blt/core/allocator.h"
 #include "blt/ops/matmul.h"
 #include "blt/ops/vecmath.h"
+#include "blt/ops/attn_core.h"
 #include "blt/ops/elementwise.h"
 #include "blt/ops/rope.h"
 
@@ -83,29 +84,31 @@ static void apply_rope_to_all_heads(
     float* q_head_buf, float* q_rot_buf, float* k_head_buf, float* k_rot_buf,
     blt_backend backend) {
     size_t qkv_stride = 3 * embed_dim;
- 
+
     for (size_t head = 0; head < num_heads; ++head) {
         size_t q_offset = head * head_dim;
         size_t k_offset = embed_dim + head * head_dim;
- 
-        for (size_t i = 0; i < seq_len; ++i) {
-            memcpy(q_head_buf + i * head_dim, qkv_data + i * qkv_stride + q_offset, head_dim * sizeof(float));
-            memcpy(k_head_buf + i * head_dim, qkv_data + i * qkv_stride + k_offset, head_dim * sizeof(float));
-        }
- 
+
+        // Gather this head's Q and K slices out of the packed layout.
+        blt_strided_copy(backend, q_head_buf, head_dim,
+                         qkv_data + q_offset, qkv_stride, seq_len, head_dim);
+        blt_strided_copy(backend, k_head_buf, head_dim,
+                         qkv_data + k_offset, qkv_stride, seq_len, head_dim);
+
         blt_tensor q_head_t, q_rot_t, k_head_t, k_rot_t;
         blt_tensor_view_3d(&q_head_t, q_head_buf, seq_len, 1, head_dim, backend);
         blt_tensor_view_3d(&q_rot_t, q_rot_buf, seq_len, 1, head_dim, backend);
         blt_tensor_view_3d(&k_head_t, k_head_buf, seq_len, 1, head_dim, backend);
         blt_tensor_view_3d(&k_rot_t, k_rot_buf, seq_len, 1, head_dim, backend);
- 
+
         blt_rope_apply(&q_head_t, rope_cos, rope_sin, &q_rot_t);
         blt_rope_apply(&k_head_t, rope_cos, rope_sin, &k_rot_t);
- 
-        for (size_t i = 0; i < seq_len; ++i) {
-            memcpy(qkv_data + i * qkv_stride + q_offset, q_rot_buf + i * head_dim, head_dim * sizeof(float));
-            memcpy(qkv_data + i * qkv_stride + k_offset, k_rot_buf + i * head_dim, head_dim * sizeof(float));
-        }
+
+        // Scatter rotated values back into the packed layout.
+        blt_strided_copy(backend, qkv_data + q_offset, qkv_stride,
+                         q_rot_buf, head_dim, seq_len, head_dim);
+        blt_strided_copy(backend, qkv_data + k_offset, qkv_stride,
+                         k_rot_buf, head_dim, seq_len, head_dim);
     }
 }
 
@@ -121,40 +124,27 @@ static void attention_head(blt_backend backend, const float* qkv_data, size_t he
     size_t q_offset = head_idx * head_dim;
     size_t k_offset = embed_dim + head_idx * head_dim;
     size_t v_offset = 2 * embed_dim + head_idx * head_dim;
-    
-    for (size_t i = 0; i < seq_len; ++i) {
-        const float* q_i = qkv_data + i * qkv_stride + q_offset;
-        float* scores_i = scores_buf + i * seq_len;
-        
-        for (size_t j = 0; j < seq_len; ++j) {
-            const float* k_j = qkv_data + j * qkv_stride + k_offset;
-            scores_i[j] = blt_vec_dot(backend, q_i, k_j, head_dim);
-        }
 
-        const float* mask_row = mask ? (mask + i * seq_len) : NULL;
-        blt_softmax_masked_row_inplace(backend, scores_i, seq_len, i, is_causal, mask_row, scale);
-    }
-    
+    blt_attention_head_args a;
+    memset(&a, 0, sizeof(a));
+    a.q = qkv_data + q_offset;
+    a.q_stride = qkv_stride;
+    a.k = qkv_data + k_offset;
+    a.k_stride = qkv_stride;
+    a.v = qkv_data + v_offset;
+    a.v_stride = qkv_stride;
+    a.combined = combined_out;
+    a.combined_stride = embed_dim;
+    a.combined_col_offset = q_offset;
+    a.weights_out = scores_buf;   // doubles as the backward cache when requested
+    a.mask = mask;
+    a.nq = seq_len;
+    a.nk = seq_len;
+    a.head_dim = head_dim;
+    a.is_causal = is_causal;
+    a.scale = scale;
 
-    for (size_t i = 0; i < seq_len; ++i) {
-        float* out_i = combined_out + i * embed_dim + q_offset;
-        const float* scores_i = scores_buf + i * seq_len;
-
-        for (size_t d = 0; d < head_dim; ++d) {
-            out_i[d] = 0.0f;
-        }
-
-        for (size_t j = 0; j < seq_len; ++j) {
-            float weight = scores_i[j];
-            if (weight == 0.0f) {
-                continue;
-            }
-            const float* v_j = qkv_data + j * qkv_stride + v_offset;
-            for (size_t d = 0; d < head_dim; ++d) {
-                out_i[d] += weight * v_j[d];
-            }
-        }
-    }
+    blt_attention_head_core(backend, &a);
 }
 
 
@@ -201,7 +191,7 @@ void blt_multihead_attention(
     float* combined_data = (float*)blt_arena_alloc(arena, combined_numel * sizeof(float), sizeof(float));
     float* scores_buf = (float*)blt_arena_alloc(arena, scores_numel * sizeof(float), sizeof(float));
  
-    memset(combined_data, 0, combined_numel * sizeof(float));
+    { blt_tensor zt; blt_tensor_view_2d(&zt, combined_data, combined_numel, 1, input->backend); zero_tensor(&zt); }
  
 
     // -----------------------------------------------------------------
@@ -322,7 +312,7 @@ static void attn_bwd_recompute_forward(
     cache->qkv_data = (float*)blt_arena_alloc(arena, qkv_numel * sizeof(float), sizeof(float));
     cache->combined_data = (float*)blt_arena_alloc(arena, combined_numel * sizeof(float), sizeof(float));
     cache->weights_all = (float*)blt_arena_alloc(arena, weights_numel * sizeof(float), sizeof(float));
-    memset(cache->combined_data, 0, combined_numel * sizeof(float));
+    { blt_tensor zt; blt_tensor_view_2d(&zt, cache->combined_data, combined_numel, 1, input->backend); zero_tensor(&zt); }
 
     blt_tensor qkv_tensor;
     blt_tensor_view_2d(&qkv_tensor, cache->qkv_data, seq_len, 3 * embed_dim, input->backend);
@@ -435,76 +425,40 @@ void blt_multihead_attention_backward(const blt_tensor* input, const blt_tensor*
     // ---- Step 2-4: per head, backward through weighted-V sum, softmax, and QK^T ----
     size_t qkv_stride = 3 * embed_dim;
     float* grad_qkv_data = (float*)blt_arena_alloc(arena, seq_len * qkv_stride * sizeof(float), sizeof(float));
-    memset(grad_qkv_data, 0, seq_len * qkv_stride * sizeof(float));
- 
-    float* grad_w_buf = (float*)blt_arena_alloc(arena, seq_len * seq_len * sizeof(float), sizeof(float));
+    { blt_tensor zt; blt_tensor_view_2d(&zt, grad_qkv_data, seq_len * qkv_stride, 1, input->backend); zero_tensor(&zt); }
+
     float* grad_scores_buf = (float*)blt_arena_alloc(arena, seq_len * seq_len * sizeof(float), sizeof(float));
- 
+
     for (size_t head = 0; head < num_heads; head++) {
         size_t q_offset = head * head_dim;
         size_t k_offset = embed_dim + head * head_dim;
         size_t v_offset = 2 * embed_dim + head * head_dim;
-        const float* W = cache.weights_all + head * seq_len * seq_len;
- 
-        // grad_v_j[d] = sum_i W[i][j] * grad_out_head[i][d]
-        // grad_W[i][j] = sum_d grad_out_head[i][d] * v_j[d]
-        memset(grad_w_buf, 0, seq_len * seq_len * sizeof(float));
-        for (size_t i = 0; i < seq_len; i++) {
-            const float* go_i = grad_combined_data + i * embed_dim + q_offset;
-            const float* w_i = W + i * seq_len;
-            float* gw_i = grad_w_buf + i * seq_len;
-            for (size_t j = 0; j < seq_len; j++) {
-                float wgt = w_i[j];
-                const float* v_j = cache.qkv_data + j * qkv_stride + v_offset;
-                float dot = 0.0f;
-                for (size_t d = 0; d < head_dim; d++) {
-                    dot += go_i[d] * v_j[d];
-                }
-                gw_i[j] = dot;
- 
-                if (wgt != 0.0f) {
-                    float* gv_j = grad_qkv_data + j * qkv_stride + v_offset;
-                    for (size_t d = 0; d < head_dim; d++) {
-                        gv_j[d] += wgt * go_i[d];
-                    }
-                }
-            }
-        }
- 
-        // Softmax backward, per row.
-        for (size_t i = 0; i < seq_len; i++) {
-            const float* w_i = W + i * seq_len;
-            const float* gw_i = grad_w_buf + i * seq_len;
-            float* gs_i = grad_scores_buf + i * seq_len;
-            float dot = 0.0f;
-            for (size_t j = 0; j < seq_len; j++) {
-                dot += gw_i[j] * w_i[j];
-            }
-            for (size_t j = 0; j < seq_len; j++) {
-                gs_i[j] = w_i[j] * (gw_i[j] - dot);
-            }
-        }
- 
-        // Backward through scores = scale * Q @ K^T.
-        // grad_q_i[d] += scale * sum_j grad_scores[i][j] * k_j[d]
-        // grad_k_j[d] += scale * sum_i grad_scores[i][j] * q_i[d]
-        for (size_t i = 0; i < seq_len; i++) {
-            const float* gs_i = grad_scores_buf + i * seq_len;
-            float* gq_i = grad_qkv_data + i * qkv_stride + q_offset;
-            const float* q_i = cache.qkv_data + i * qkv_stride + q_offset;
-            for (size_t j = 0; j < seq_len; j++) {
-                float gscore = gs_i[j];
-                if (gscore == 0.0f) {
-                    continue;
-                }
-                const float* k_j = cache.qkv_data + j * qkv_stride + k_offset;
-                float* gk_j = grad_qkv_data + j * qkv_stride + k_offset;
-                for (size_t d = 0; d < head_dim; d++) {
-                    gq_i[d] += scale * gscore * k_j[d];
-                    gk_j[d] += scale * gscore * q_i[d];
-                }
-            }
-        }
+
+        blt_attention_head_bwd_args a;
+        memset(&a, 0, sizeof(a));
+        a.q = cache.qkv_data + q_offset;
+        a.q_stride = qkv_stride;
+        a.k = cache.qkv_data + k_offset;
+        a.k_stride = qkv_stride;
+        a.v = cache.qkv_data + v_offset;
+        a.v_stride = qkv_stride;
+        a.weights = cache.weights_all + head * seq_len * seq_len;
+        a.grad_combined = grad_combined_data;
+        a.gc_stride = embed_dim;
+        a.gc_col_offset = q_offset;
+        a.scores_scratch = grad_scores_buf;
+        a.grad_q = grad_qkv_data + q_offset;
+        a.gq_stride = qkv_stride;
+        a.grad_k = grad_qkv_data + k_offset;
+        a.gk_stride = qkv_stride;
+        a.grad_v = grad_qkv_data + v_offset;
+        a.gv_stride = qkv_stride;
+        a.nq = seq_len;
+        a.nk = seq_len;
+        a.head_dim = head_dim;
+        a.scale = scale;
+
+        blt_attention_head_core_backward(input->backend, &a);
     }
  
     // ---- Step 5: backward through RoPE (rotate Q/K gradients back) ----
@@ -518,25 +472,25 @@ void blt_multihead_attention_backward(const blt_tensor* input, const blt_tensor*
         for (size_t head = 0; head < num_heads; head++) {
             size_t q_offset = head * head_dim;
             size_t k_offset = embed_dim + head * head_dim;
- 
-            for (size_t i = 0; i < seq_len; i++) {
-                memcpy(gq_head_buf + i * head_dim, grad_qkv_data + i * qkv_stride + q_offset, head_dim * sizeof(float));
-                memcpy(gk_head_buf + i * head_dim, grad_qkv_data + i * qkv_stride + k_offset, head_dim * sizeof(float));
-            }
- 
+
+            blt_strided_copy(input->backend, gq_head_buf, head_dim,
+                             grad_qkv_data + q_offset, qkv_stride, seq_len, head_dim);
+            blt_strided_copy(input->backend, gk_head_buf, head_dim,
+                             grad_qkv_data + k_offset, qkv_stride, seq_len, head_dim);
+
             blt_tensor gq_head_t, gq_unrot_t, gk_head_t, gk_unrot_t;
             blt_tensor_view_3d(&gq_head_t, gq_head_buf, seq_len, 1, head_dim, input->backend);
             blt_tensor_view_3d(&gq_unrot_t, gq_unrot_buf, seq_len, 1, head_dim, input->backend);
             blt_tensor_view_3d(&gk_head_t, gk_head_buf, seq_len, 1, head_dim, input->backend);
             blt_tensor_view_3d(&gk_unrot_t, gk_unrot_buf, seq_len, 1, head_dim, input->backend);
- 
+
             blt_rope_apply_backward(&gq_head_t, rope_cos_t, rope_sin_t, &gq_unrot_t);
             blt_rope_apply_backward(&gk_head_t, rope_cos_t, rope_sin_t, &gk_unrot_t);
- 
-            for (size_t i = 0; i < seq_len; i++) {
-                memcpy(grad_qkv_data + i * qkv_stride + q_offset, gq_unrot_buf + i * head_dim, head_dim * sizeof(float));
-                memcpy(grad_qkv_data + i * qkv_stride + k_offset, gk_unrot_buf + i * head_dim, head_dim * sizeof(float));
-            }
+
+            blt_strided_copy(input->backend, grad_qkv_data + q_offset, qkv_stride,
+                             gq_unrot_buf, head_dim, seq_len, head_dim);
+            blt_strided_copy(input->backend, grad_qkv_data + k_offset, qkv_stride,
+                             gk_unrot_buf, head_dim, seq_len, head_dim);
         }
     }
  

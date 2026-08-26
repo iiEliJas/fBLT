@@ -47,6 +47,7 @@ typedef struct {
     const char* entropy_lm; // optional trained entropy-LM weights
     int fixed_patches;      // 1 = fixed-stride-4 segmentation everywhere
                             // (matches how the checkpoints were trained)
+    int use_cuda;           // 1 = run every model pass on the CUDA backend
 } bench_args;
 
 static const bench_args DEFAULTS = {
@@ -60,6 +61,7 @@ static const bench_args DEFAULTS = {
     .offset_stride = 100000,
     .entropy_lm = NULL,
     .fixed_patches = 0,
+    .use_cuda = 0,
 };
 
 //----------------------------------------------------------------------
@@ -142,6 +144,64 @@ static void make_patcher_cfg(blt_patcher_config* pcfg, int fixed) {
     }
     pcfg->rule = BLT_PATCH_RULE_GLOBAL;
     pcfg->reset_on_newline = false;
+}
+
+//----------------------------------------------------------------------
+// Backend placement
+//
+// Checkpoints load through fread into host memory, so each model is built
+// twice: a host twin that receives the file, then every tensor is copied
+// into the device-side twin by stable enumeration.
+//----------------------------------------------------------------------
+
+static void upload_model_weights(blt_model* dst, const blt_model* src) {
+    const size_t n = blt_model_num_tensors(src);
+    BLT_REQUIRE(n == blt_model_num_tensors(dst),
+                "upload_model_weights: twin models disagree on tensor count");
+    float* stage = NULL;
+    size_t cap = 0;
+    for (size_t i = 0; i < n; i++) {
+        const char* name_src; blt_tensor* t_src;
+        const char* name_dst; blt_tensor* t_dst;
+        blt_model_tensor_at(src, i, &name_src, &t_src);
+        blt_model_tensor_at(dst, i, &name_dst, &t_dst);
+        BLT_REQUIRE(strcmp(name_src, name_dst) == 0,
+                    "upload_model_weights: tensor order mismatch at %zu", i);
+        if (cap < t_src->numel) {
+            free(stage);
+            cap = t_src->numel;
+            stage = (float*)malloc(cap * sizeof(float));
+            BLT_REQUIRE(stage != NULL, "upload_model_weights: staging alloc failed");
+        }
+        blt_tensor_download(t_src, stage, blt_tensor_bytes(t_src));
+        blt_tensor_upload(t_dst, stage, blt_tensor_bytes(t_dst));
+    }
+    free(stage);
+}
+
+static void upload_entropy_lm_weights(blt_entropy_lm* dst, const blt_entropy_lm* src) {
+    blt_tensor_upload(&dst->embedding_weight, src->embedding_weight.data,
+                      blt_tensor_bytes(&src->embedding_weight));
+    blt_tensor_upload(&dst->lm_head_weight, src->lm_head_weight.data,
+                      blt_tensor_bytes(&src->lm_head_weight));
+    for (size_t i = 0; i < src->stack.num_layers; i++) {
+        const blt_transformer_layer_storage* s = &src->stack.layer_storage[i];
+        blt_transformer_layer_storage* d = &dst->stack.layer_storage[i];
+        blt_tensor_upload(&d->norm1_weight, s->norm1_weight.data,
+                          blt_tensor_bytes(&s->norm1_weight));
+        blt_tensor_upload(&d->attn_qkv_w, s->attn_qkv_w.data,
+                          blt_tensor_bytes(&s->attn_qkv_w));
+        blt_tensor_upload(&d->attn_proj_w, s->attn_proj_w.data,
+                          blt_tensor_bytes(&s->attn_proj_w));
+        blt_tensor_upload(&d->norm2_weight, s->norm2_weight.data,
+                          blt_tensor_bytes(&s->norm2_weight));
+        blt_tensor_upload(&d->ffn_up_w, s->ffn_up_w.data,
+                          blt_tensor_bytes(&s->ffn_up_w));
+        blt_tensor_upload(&d->ffn_gate_w, s->ffn_gate_w.data,
+                          blt_tensor_bytes(&s->ffn_gate_w));
+        blt_tensor_upload(&d->ffn_down_w, s->ffn_down_w.data,
+                          blt_tensor_bytes(&s->ffn_down_w));
+    }
 }
 
 //----------------------------------------------------------------------
@@ -337,23 +397,63 @@ int main(int argc, char** argv) {
             a.fixed_patches = 1;
         else if (!strcmp(argv[i], "--entropy-lm") && i + 1 < argc)
             a.entropy_lm = argv[++i];
+        else if (!strcmp(argv[i], "--backend") && i + 1 < argc) {
+            ++i;
+            if (!strcmp(argv[i], "cuda")) a.use_cuda = 1;
+            else if (!strcmp(argv[i], "cpu")) a.use_cuda = 0;
+            else BLT_FATAL("infer_bench: unknown --backend '%s' (cpu|cuda)", argv[i]);
+        }
     }
+
+#ifndef BLT_WITH_CUDA
+    if (a.use_cuda) {
+        BLT_FATAL("infer_bench: --backend cuda requires a CUDA=1 build");
+    }
+#endif
 
     const size_t MS = 512, E = 64, HID = 128, L = 2;
 
-    blt_arena* arena = blt_arena_create(160 * 1024 * 1024, BLT_BACKEND_CPU);
-    blt_arena* scratch = blt_arena_create(256 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena* arena = blt_arena_create(160 * 1024 * 1024,
+                                        a.use_cuda ? BLT_BACKEND_CUDA : BLT_BACKEND_CPU);
+    blt_arena* scratch = blt_arena_create(256 * 1024 * 1024,
+                                          a.use_cuda ? BLT_BACKEND_CUDA : BLT_BACKEND_CPU);
 
     blt_model_config cfg;
     build_model_config(&cfg, E, HID, L, MS);
 
-    blt_model* plain = blt_model_create(arena, &cfg);
-    blt_model* bltd = blt_model_create(arena, &cfg);
-    blt_model_load(plain, a.ckpt_plain);
-    blt_model_load(bltd, a.ckpt_bltd);
-    printf("[INFER-BENCH] loaded %s + %s\n", a.ckpt_plain, a.ckpt_bltd);
+    blt_model* plain;
+    blt_model* bltd;
+    blt_entropy_lm* lm;
+    if (a.use_cuda) {
+        // Host twins receive the checkpoint files; weights are then copied
+        // into device-side models so every pass below runs on the GPU.
+        blt_arena* host_arena = blt_arena_create(160 * 1024 * 1024, BLT_BACKEND_CPU);
+        blt_model* plain_h = blt_model_create(host_arena, &cfg);
+        blt_model* bltd_h = blt_model_create(host_arena, &cfg);
+        blt_model_load(plain_h, a.ckpt_plain);
+        blt_model_load(bltd_h, a.ckpt_bltd);
 
-    blt_entropy_lm* lm = make_entropy_lm(arena, MS, a.entropy_lm);
+        plain = blt_model_create(arena, &cfg);
+        bltd = blt_model_create(arena, &cfg);
+        upload_model_weights(plain, plain_h);
+        upload_model_weights(bltd, bltd_h);
+
+        lm = make_entropy_lm(host_arena, MS, a.entropy_lm);
+        blt_entropy_lm* lm_d = blt_entropy_lm_create(arena, &lm->config);
+        upload_entropy_lm_weights(lm_d, lm);
+        lm = lm_d;
+
+        blt_arena_destroy(host_arena);
+        printf("[INFER-BENCH] backend cuda: models uploaded\n");
+    } else {
+        plain = blt_model_create(arena, &cfg);
+        bltd = blt_model_create(arena, &cfg);
+        blt_model_load(plain, a.ckpt_plain);
+        blt_model_load(bltd, a.ckpt_bltd);
+        lm = make_entropy_lm(arena, MS, a.entropy_lm);
+    }
+    printf("[INFER-BENCH] loaded %s + %s [%s]\n", a.ckpt_plain, a.ckpt_bltd,
+           a.use_cuda ? "cuda" : "cpu");
     blt_patcher_config pcfg;
     make_patcher_cfg(&pcfg, a.fixed_patches);
     printf("[INFER-BENCH] patcher: %s\n",
@@ -421,6 +521,8 @@ int main(int argc, char** argv) {
 
     double* lat = malloc(a.num_prompts * sizeof(double));
     agg_metrics agg;
+    const char* plain_tag = a.use_cuda ? "plain_cuda" : "plain";
+    const char* bltd_tag = a.use_cuda ? "bltd_cuda" : "bltd";
 
     printf("%-28s %10s %10s %10s %10s %12s\n", "tag", "dec/byte",
            "enc/byte", "accept", "agree", "lat_ms_mean");
@@ -429,7 +531,7 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < sizeof(PLAIN_CFGS) / sizeof(PLAIN_CFGS[0]); i++) {
         run_method(&PLAIN_CFGS[i], plain, lm, &pcfg,
                    prompts, refs_p, outs, &a, scratch, lat, &agg);
-        write_result("plain", &PLAIN_CFGS[i], &a, lat, &agg, a.results_path);
+        write_result(plain_tag, &PLAIN_CFGS[i], &a, lat, &agg, a.results_path);
         printf("%-28s %10.3f %10.3f %10.3f %10.3f %12.2f\n", "plain_...",
                agg.dec_per_byte, agg.enc_per_byte,
                agg.total_drafted > 0 ? agg.acceptance : -1.0, agg.agreement,
@@ -438,7 +540,7 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < sizeof(BLTD_CFGS) / sizeof(BLTD_CFGS[0]); i++) {
         run_method(&BLTD_CFGS[i], bltd, lm, &pcfg,
                    prompts, refs_b, outs, &a, scratch, lat, &agg);
-        write_result("bltd", &BLTD_CFGS[i], &a, lat, &agg, a.results_path);
+        write_result(bltd_tag, &BLTD_CFGS[i], &a, lat, &agg, a.results_path);
         printf("%-28s %10.3f %10.3f %10.3f %10.3f %12.2f\n", "bltd_...",
                agg.dec_per_byte, agg.enc_per_byte,
                agg.total_drafted > 0 ? agg.acceptance : -1.0, agg.agreement,

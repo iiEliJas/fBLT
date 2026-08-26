@@ -12,6 +12,9 @@
 #include "blt/ops/optim.h"
 #include "blt/ops/mask_builder.h"
 #include "blt/ops/patch_pool.h"
+#include "blt/ops/attn_core.h"
+#include "blt/ops/gather_scatter.h"
+#include "blt/ops/row_stats.h"
 #include "blt/core/tensor.h"
 // ------------------------------------------------------------
 // CPU Implementation Declarations
@@ -35,9 +38,16 @@ float blt_vec_dot_cpu(blt_backend backend, const float* a, const float* b, size_
 void blt_softmax_masked_row_inplace_cpu(blt_backend backend, float* row, size_t row_len,
                                         size_t row_idx, bool is_causal,
                                         const float* mask_row, float scale);
+void blt_strided_copy_cpu(blt_backend backend, float* dst, size_t dst_stride,
+                          const float* src, size_t src_stride, size_t rows, size_t cols);
+
+// container allocation helper
+void* blt_container_alloc_cpu(blt_arena* arena, size_t bytes);
+void* blt_container_alloc_cuda(blt_arena* arena, size_t bytes);
 
 // in-place scalar scale (elementwise)
 void blt_scale_cpu(blt_tensor* t, float scalar);
+void blt_scaled_copy_cpu(blt_tensor* dst, const blt_tensor* src, float scalar);
 
 // optimizers
 void blt_sgd_step_cpu(blt_tensor* param, const blt_tensor* grad, float lr);
@@ -56,6 +66,23 @@ void blt_patch_pool_forward_cpu(const blt_tensor* byte_hidden, const blt_patch_i
 void blt_patch_pool_backward_cpu(const blt_tensor* grad_out, const blt_tensor* byte_hidden,
                                  const blt_patch_info* patches, size_t num_patches,
                                  blt_patch_pool_type pool_type, blt_tensor* grad_byte_hidden);
+
+// attention core
+void blt_attention_head_core_cpu(blt_backend backend, const blt_attention_head_args* args);
+void blt_attention_head_core_backward_cpu(blt_backend backend, const blt_attention_head_bwd_args* args);
+
+// gather/scatter
+void blt_embedding_lookup_cpu(const blt_tensor* table, const uint8_t* ids_host, blt_tensor* out);
+void blt_embedding_scatter_add_cpu(const blt_tensor* grad_table, const uint8_t* ids_host,
+                                   const blt_tensor* grad_out);
+void blt_indexed_row_accumulate_cpu(const blt_tensor* table, const uint32_t* idx_host, blt_tensor* io);
+void blt_indexed_row_scatter_add_cpu(const blt_tensor* grad_table, const uint32_t* idx_host,
+                                     const blt_tensor* grad_out, float scale);
+void blt_rows_gather_cpu(const blt_tensor* src, const size_t* pos_host, blt_tensor* dst);
+
+// row statistics
+void blt_entropy_rows_cpu(const blt_tensor* probs, blt_tensor* entropy_out, int use_log2);
+void blt_argmax_rows_cpu(const blt_tensor* logits, uint32_t* out_ids_host);
 
 // reduction ops
 void blt_softmax_cpu(const blt_tensor* in, blt_tensor* out);
@@ -120,11 +147,14 @@ float blt_vec_dot_cuda(blt_backend backend, const float* a, const float* b, size
 void blt_softmax_masked_row_inplace_cuda(blt_backend backend, float* row, size_t row_len,
                                          size_t row_idx, int is_causal,
                                          const float* mask_row, float scale);
+void blt_strided_copy_cuda(blt_backend backend, float* dst, size_t dst_stride,
+                           const float* src, size_t src_stride, size_t rows, size_t cols);
 
 // elementwise ops
 void blt_add_cuda(const blt_tensor* a, const blt_tensor* b, blt_tensor* out);
 void blt_mul_cuda(const blt_tensor* a, const blt_tensor* b, blt_tensor* out);
 void blt_scale_cuda(blt_tensor* t, float scalar);
+void blt_scaled_copy_cuda(blt_tensor* dst, const blt_tensor* src, float scalar);
 void blt_gelu_forward_cuda(const blt_tensor* x, blt_tensor* out);
 void blt_gelu_backward_cuda(const blt_tensor* grad_out, const blt_tensor* x, blt_tensor* grad_x);
 void blt_swiglu_forward_cuda(const blt_tensor* gate, const blt_tensor* up, blt_tensor* out);
@@ -166,6 +196,23 @@ void blt_patch_pool_forward_cuda(const blt_tensor* byte_hidden, const blt_patch_
 void blt_patch_pool_backward_cuda(const blt_tensor* grad_out, const blt_tensor* byte_hidden,
                                   const blt_patch_info* patches, size_t num_patches,
                                   blt_patch_pool_type pool_type, blt_tensor* grad_byte_hidden);
+
+// attention core
+void blt_attention_head_core_cuda(blt_backend backend, const blt_attention_head_args* args);
+void blt_attention_head_core_backward_cuda(blt_backend backend, const blt_attention_head_bwd_args* args);
+
+// gather/scatter
+void blt_embedding_lookup_cuda(const blt_tensor* table, const uint8_t* ids_host, blt_tensor* out);
+void blt_embedding_scatter_add_cuda(const blt_tensor* grad_table, const uint8_t* ids_host,
+                                    const blt_tensor* grad_out);
+void blt_indexed_row_accumulate_cuda(const blt_tensor* table, const uint32_t* idx_host, blt_tensor* io);
+void blt_indexed_row_scatter_add_cuda(const blt_tensor* grad_table, const uint32_t* idx_host,
+                                      const blt_tensor* grad_out, float scale);
+void blt_rows_gather_cuda(const blt_tensor* src, const size_t* pos_host, blt_tensor* dst);
+
+// row statistics
+void blt_entropy_rows_cuda(const blt_tensor* probs, blt_tensor* entropy_out, int use_log2);
+void blt_argmax_rows_cuda(const blt_tensor* logits, uint32_t* out_ids_host);
 #else
 #define BLT_DISPATCH(tensor, cpu_call, cuda_call)               \
     do {                                                         \
@@ -218,6 +265,10 @@ void blt_mul(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
 
 void blt_scale(blt_tensor* t, float scalar) {
     BLT_DISPATCH(t, blt_scale_cpu(t, scalar), blt_scale_cuda(t, scalar));
+}
+
+void blt_scaled_copy(blt_tensor* dst, const blt_tensor* src, float scalar) {
+    BLT_DISPATCH(src, blt_scaled_copy_cpu(dst, src, scalar), blt_scaled_copy_cuda(dst, src, scalar));
 }
 
 void blt_gelu_forward(const blt_tensor* x, blt_tensor* out) {
@@ -324,6 +375,14 @@ void blt_softmax_masked_row_inplace(blt_backend backend, float* row, size_t row_
         blt_softmax_masked_row_inplace_cuda(backend, row, row_len, row_idx, is_causal ? 1 : 0, mask_row, scale));
 }
 
+void blt_strided_copy(blt_backend backend, float* dst, size_t dst_stride,
+                      const float* src, size_t src_stride,
+                      size_t rows, size_t cols) {
+    BLT_DISPATCH_BACKEND(backend,
+        blt_strided_copy_cpu(backend, dst, dst_stride, src, src_stride, rows, cols),
+        blt_strided_copy_cuda(backend, dst, dst_stride, src, src_stride, rows, cols));
+}
+
 // ------------------
 // OPTIMIZERS
 
@@ -371,4 +430,78 @@ void blt_patch_pool_backward(const blt_tensor* grad_out, const blt_tensor* byte_
     BLT_DISPATCH(grad_out,
         blt_patch_pool_backward_cpu(grad_out, byte_hidden, patches, num_patches, pool_type, grad_byte_hidden),
         blt_patch_pool_backward_cuda(grad_out, byte_hidden, patches, num_patches, pool_type, grad_byte_hidden));
+}
+
+// ------------------
+// ATTENTION CORE
+
+void blt_attention_head_core(blt_backend backend, const blt_attention_head_args* args) {
+    BLT_DISPATCH_BACKEND(backend,
+        blt_attention_head_core_cpu(backend, args),
+        blt_attention_head_core_cuda(backend, args));
+}
+
+void blt_attention_head_core_backward(blt_backend backend, const blt_attention_head_bwd_args* args) {
+    BLT_DISPATCH_BACKEND(backend,
+        blt_attention_head_core_backward_cpu(backend, args),
+        blt_attention_head_core_backward_cuda(backend, args));
+}
+
+void* blt_container_alloc(blt_arena* arena, size_t bytes) {
+#ifdef BLT_WITH_CUDA
+    if (arena->backend == BLT_BACKEND_CUDA) {
+        return blt_container_alloc_cuda(arena, bytes);
+    }
+#endif
+    return blt_container_alloc_cpu(arena, bytes);
+}
+
+// ------------------
+// GATHER / SCATTER
+
+void blt_embedding_lookup(const blt_tensor* table, const uint8_t* ids_host, blt_tensor* out) {
+    BLT_DISPATCH(table,
+        blt_embedding_lookup_cpu(table, ids_host, out),
+        blt_embedding_lookup_cuda(table, ids_host, out));
+}
+
+void blt_embedding_scatter_add(const blt_tensor* grad_table, const uint8_t* ids_host,
+                               const blt_tensor* grad_out) {
+    BLT_DISPATCH(grad_table,
+        blt_embedding_scatter_add_cpu(grad_table, ids_host, grad_out),
+        blt_embedding_scatter_add_cuda(grad_table, ids_host, grad_out));
+}
+
+void blt_indexed_row_accumulate(const blt_tensor* table, const uint32_t* idx_host, blt_tensor* io) {
+    BLT_DISPATCH(table,
+        blt_indexed_row_accumulate_cpu(table, idx_host, io),
+        blt_indexed_row_accumulate_cuda(table, idx_host, io));
+}
+
+void blt_indexed_row_scatter_add(const blt_tensor* grad_table, const uint32_t* idx_host,
+                                 const blt_tensor* grad_out, float scale) {
+    BLT_DISPATCH(grad_table,
+        blt_indexed_row_scatter_add_cpu(grad_table, idx_host, grad_out, scale),
+        blt_indexed_row_scatter_add_cuda(grad_table, idx_host, grad_out, scale));
+}
+
+void blt_rows_gather(const blt_tensor* src, const size_t* pos_host, blt_tensor* dst) {
+    BLT_DISPATCH(src,
+        blt_rows_gather_cpu(src, pos_host, dst),
+        blt_rows_gather_cuda(src, pos_host, dst));
+}
+
+// ------------------
+// ROW STATISTICS
+
+void blt_entropy_rows(const blt_tensor* probs, blt_tensor* entropy_out, int use_log2) {
+    BLT_DISPATCH(probs,
+        blt_entropy_rows_cpu(probs, entropy_out, use_log2),
+        blt_entropy_rows_cuda(probs, entropy_out, use_log2));
+}
+
+void blt_argmax_rows(const blt_tensor* logits, uint32_t* out_ids_host) {
+    BLT_DISPATCH(logits,
+        blt_argmax_rows_cpu(logits, out_ids_host),
+        blt_argmax_rows_cuda(logits, out_ids_host));
 }

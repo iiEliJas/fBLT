@@ -1,4 +1,6 @@
 #include "blt/core/backend.h"
+#include "blt/core/allocator.h"
+#include "blt/ops/vecmath.h"
 #include "blt/models/entropy_lm.h"
 #include "blt/models/transformer_stack.h"
 #include "blt/models/byte_embedding.h"
@@ -14,7 +16,7 @@ blt_entropy_lm* blt_entropy_lm_create(blt_arena* arena, const blt_entropy_lm_con
     BLT_REQUIRE(arena != NULL && config != NULL,
         "blt_entropy_lm_create: arena and config cannot be NULL");
 
-    blt_entropy_lm* model = (blt_entropy_lm*)blt_arena_alloc(arena, sizeof(blt_entropy_lm), sizeof(void*));
+    blt_entropy_lm* model = (blt_entropy_lm*)blt_container_alloc(arena, sizeof(blt_entropy_lm));
     model->config = *config;
 
     size_t embed_dim = config->embed_dim;
@@ -46,7 +48,7 @@ blt_entropy_lm_grad* blt_entropy_lm_grad_create(blt_arena* arena, const blt_entr
     BLT_REQUIRE(arena != NULL && model != NULL,
         "blt_entropy_lm_grad_create: arena and model cannot be NULL");
 
-    blt_entropy_lm_grad* grad = (blt_entropy_lm_grad*)blt_arena_alloc(arena, sizeof(blt_entropy_lm_grad), sizeof(void*));
+    blt_entropy_lm_grad* grad = (blt_entropy_lm_grad*)blt_container_alloc(arena, sizeof(blt_entropy_lm_grad));
 
     size_t embed_dim = model->config.embed_dim;
 
@@ -139,7 +141,8 @@ void blt_entropy_lm_forward(
     BLT_REQUIRE(logits_out->ndim == 2 && logits_out->dtype == BLT_DTYPE_FP32 &&
                 logits_out->shape[0] == seq_len && logits_out->shape[1] == 256,
         "blt_entropy_lm_forward: logits_out must be [seq_len, 256] FP32");
-    memcpy(logits_out->data, logits_full.data, blt_tensor_bytes(&logits_full));
+    blt_strided_copy(logits_full.backend, (float*)logits_out->data, logits_full.numel,
+                    (const float*)logits_full.data, logits_full.numel, 1, logits_full.numel);
 
 
     // -----------------------------------------------------------------
@@ -231,7 +234,8 @@ void blt_entropy_lm_backward(
     // [0, seq_len-1) receive gradient below -- the final row stays zero
     // (it predicts one byte past the sequence and never contributed to the loss).
     blt_tensor grad_logits_full = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
-    memcpy(grad_logits_full.data, grad_shifted_logits.data, blt_tensor_bytes(&grad_shifted_logits));
+    blt_strided_copy(grad_shifted_logits.backend, (float*)grad_logits_full.data, grad_shifted_logits.numel,
+                    (const float*)grad_shifted_logits.data, grad_shifted_logits.numel, 1, grad_shifted_logits.numel);
 
     blt_tensor grad_final_x = blt_tensor_create(arena, x_shape, 2, BLT_DTYPE_FP32);
     blt_matmul_backward(&final_x, &model->lm_head_weight, &grad_logits_full,

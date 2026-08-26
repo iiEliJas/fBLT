@@ -1,5 +1,10 @@
 #include "blt/models/hash_ngram.h"
 #include "blt/core/backend.h"
+#include "blt/ops/gather_scatter.h"
+#include "blt/ops/vecmath.h"
+#include "blt/ops/elementwise.h"
+
+#include <stdint.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -89,6 +94,20 @@ uint64_t blt_rolling_hash_update(blt_rolling_hash_state* state, uint8_t new_byte
 
 
 
+// Byte-id tensors may live on either backend; hashing consumes the ids on
+// the host, so device-resident inputs are staged through a host copy.
+static const uint8_t* bytes_host(const blt_tensor* bytes_in, uint8_t** staging) {
+    if (bytes_in->backend == BLT_BACKEND_CPU) {
+        *staging = NULL;
+        return (const uint8_t*)bytes_in->data;
+    }
+    *staging = (uint8_t*)malloc(bytes_in->numel);
+    BLT_REQUIRE(*staging != NULL, "bytes_host: staging alloc failed");
+    blt_tensor_download(bytes_in, *staging, bytes_in->numel);
+    return *staging;
+}
+
+
 // -------------------------------------------------------------------
 // Weight creation
 //
@@ -123,12 +142,17 @@ blt_hash_ngram_weights blt_hash_ngram_create(blt_arena* arena, const blt_hash_ng
     for (size_t t = 0; t < config->num_ngram_sizes; t++) {
         weights.tables[t] = blt_tensor_create(arena, shape, 2, BLT_DTYPE_FP32);
 
-        float* data = (float*)weights.tables[t].data;
-        size_t numel = weights.tables[t].numel;
-        for (size_t i = 0; i < numel; i++) {
+        // Init runs on a host staging buffer: the arena may be device
+        // memory, which cannot be written through its host pointer.
+        float* stage = (float*)malloc(weights.tables[t].numel * sizeof(float));
+        BLT_REQUIRE(stage != NULL, "blt_hash_ngram_create: staging alloc failed");
+        for (size_t i = 0; i < weights.tables[t].numel; i++) {
             float rand_float = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
-            data[i] = rand_float * bound;
+            stage[i] = rand_float * bound;
         }
+        blt_tensor_upload(&weights.tables[t], stage,
+                          weights.tables[t].numel * sizeof(float));
+        free(stage);
     }
 
     return weights;
@@ -172,16 +196,23 @@ void blt_hash_ngram_forward(
         blt_check_nd_fp32(out, 2, dims, "blt_hash_ngram_forward: out");
     }
 
-    const uint8_t* bytes = (const uint8_t*)bytes_in->data;
-    const float* emb_in = (const float*)byte_emb->data;
-    float* out_data = (float*)out->data;
+    uint8_t* bytes_stage = NULL;
+    const uint8_t* bytes = bytes_host(bytes_in, &bytes_stage);
 
-    // Step 1: Copy base byte embeddings into out
-    if (out_data != emb_in) {
-        memcpy(out_data, emb_in, seq_len * embed_dim * sizeof(float));
+    // Step 1: Copy base byte embeddings into out.
+    const size_t total = seq_len * embed_dim;
+    blt_strided_copy(byte_emb->backend,
+                     (float*)out->data, total,
+                     (const float*)byte_emb->data, total, 1, total);
+
+    // Step 2: Add n-gram contributions. Hashing is integer-only host work;
+    // bucket indices feed a dispatched accumulate op so tables may live on
+    // either backend.
+    uint32_t* idx = NULL;
+    if (config->num_ngram_sizes > 0) {
+        idx = (uint32_t*)malloc(seq_len * sizeof(uint32_t));
+        BLT_REQUIRE(idx != NULL, "blt_hash_ngram_forward: failed to allocate index buffer");
     }
-
-    // Step 2: Add n-gram contributions
     for (size_t n_idx = 0; n_idx < config->num_ngram_sizes; n_idx++) {
         size_t n = config->ngram_sizes[n_idx];
         if (n == 0 || n > seq_len) {
@@ -194,28 +225,20 @@ void blt_hash_ngram_forward(
         blt_rolling_hash_state state;
         blt_rolling_hash_init(&state, n, config->hash_prime, config->per_ngram_vocab);
 
-        const float* table = (const float*)weights->tables[n_idx].data;
-
         for (size_t i = 0; i < seq_len; i++) {
             uint64_t hash = blt_rolling_hash_update(&state, bytes[i]);
-            if (hash == UINT64_MAX) {
-                continue;
-            }
-            const float* emb_ptr = table + (size_t)hash * embed_dim;
-            float* out_row = out_data + i * embed_dim;
-            for (size_t e = 0; e < embed_dim; e++) {
-                out_row[e] += emb_ptr[e];
-            }
+            idx[i] = (hash == UINT64_MAX) ? BLT_IDX_SENTINEL : (uint32_t)hash;
         }
+        blt_indexed_row_accumulate(&weights->tables[n_idx], idx, out);
     }
+    free(idx);
+    free(bytes_stage);
+    idx = NULL;
 
-    // Step 3: Apply normalization scale
+    // Step 3: Apply normalization scale.
     if (config->normalize) {
         float scale = 1.0f / (float)(config->num_ngram_sizes + 1);
-        size_t total = seq_len * embed_dim;
-        for (size_t i = 0; i < total; i++) {
-            out_data[i] *= scale;
-        }
+        blt_scale(out, scale);
     }
 }
 
@@ -256,13 +279,18 @@ void blt_hash_ngram_backward(
         blt_check_nd_fp32(grad_byte_emb, 2, dims, "blt_hash_ngram_backward: grad_byte_emb");
     }
 
-    const uint8_t* bytes = (const uint8_t*)bytes_in->data;
-    const float* grad_out_data = (const float*)grad_out->data;
-    float* grad_byte_emb_data = (float*)grad_byte_emb->data;
+    uint8_t* bytes_stage = NULL;
+    const uint8_t* bytes = bytes_host(bytes_in, &bytes_stage);
 
     float scale = config->normalize ? 1.0f / (float)(config->num_ngram_sizes + 1) : 1.0f;
 
-    // Scatter add scaled grad_out into grad_tables
+    // Scatter-add scaled grad_out into grad_tables via dispatched ops;
+    // hashing stays on the host (integer-only).
+    uint32_t* idx = NULL;
+    if (config->num_ngram_sizes > 0) {
+        idx = (uint32_t*)malloc(seq_len * sizeof(uint32_t));
+        BLT_REQUIRE(idx != NULL, "blt_hash_ngram_backward: failed to allocate index buffer");
+    }
     for (size_t n_idx = 0; n_idx < config->num_ngram_sizes; n_idx++) {
         size_t n = config->ngram_sizes[n_idx];
         if (n == 0 || n > seq_len) {
@@ -275,24 +303,16 @@ void blt_hash_ngram_backward(
         blt_rolling_hash_state state;
         blt_rolling_hash_init(&state, n, config->hash_prime, config->per_ngram_vocab);
 
-        float* grad_table = (float*)grad_tables[n_idx].data;
-
         for (size_t i = 0; i < seq_len; i++) {
             uint64_t hash = blt_rolling_hash_update(&state, bytes[i]);
-            if (hash == UINT64_MAX) {
-                continue;
-            }
-            const float* grad_row = grad_out_data + i * embed_dim;
-            float* grad_table_row = grad_table + (size_t)hash * embed_dim;
-            for (size_t e = 0; e < embed_dim; e++) {
-                grad_table_row[e] += scale * grad_row[e];
-            }
+            idx[i] = (hash == UINT64_MAX) ? BLT_IDX_SENTINEL : (uint32_t)hash;
         }
+        blt_indexed_row_scatter_add(&grad_tables[n_idx], idx, grad_out, scale);
     }
+    free(idx);
+    free(bytes_stage);
+    idx = NULL;
 
     // grad_byte_emb = scale * grad_out
-    size_t total = seq_len * embed_dim;
-    for (size_t i = 0; i < total; i++) {
-        grad_byte_emb_data[i] = scale * grad_out_data[i];
-    }
+    blt_scaled_copy(grad_byte_emb, grad_out, scale);
 }

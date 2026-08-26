@@ -51,3 +51,13 @@ void blt_softmax_masked_row_inplace_cpu(
         }
     }
 }
+
+void blt_strided_copy_cpu(blt_backend backend, float* dst, size_t dst_stride,
+                          const float* src, size_t src_stride,
+                          size_t rows, size_t cols) {
+    (void)backend;
+    BLT_REQUIRE(backend == BLT_BACKEND_CPU, "blt_strided_copy: CPU implementation called with non-CPU backend");
+    for (size_t r = 0; r < rows; r++) {
+        memcpy(dst + r * dst_stride, src + r * src_stride, cols * sizeof(float));
+    }
+}

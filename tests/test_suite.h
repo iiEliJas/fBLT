@@ -59,6 +59,7 @@ int run_cuda_parity_elementwise(void);
 int run_cuda_parity_reductions(void);
 int run_cuda_parity_matmul(void);
 int run_cuda_parity_composites(void);
+int run_cuda_parity_training_step(void);
 int run_transformer_parity_tests(void);
 int run_patcher_parity_tests(void);
 int run_elm_overfit_tests(void);

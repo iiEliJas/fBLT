@@ -60,6 +60,9 @@ CORE_SRCS := \
  	$(SRC_DIR)/backend_cpu/mask_builder_cpu.c \
  	$(SRC_DIR)/backend_cpu/patch_pool_cpu.c \
 	$(SRC_DIR)/backend_cpu/vecmath_cpu.c \
+	$(SRC_DIR)/backend_cpu/attn_core_cpu.c \
+	$(SRC_DIR)/backend_cpu/gather_scatter_cpu.c \
+	$(SRC_DIR)/backend_cpu/row_stats_cpu.c \
     $(SRC_DIR)/models/entropy.c \
     $(SRC_DIR)/models/byte_embedding.c \
     $(SRC_DIR)/models/patcher.c \
@@ -95,7 +98,10 @@ CUDA_SRCS := \
 	$(SRC_DIR)/backend_cuda/linalg.cu \
 	$(SRC_DIR)/backend_cuda/mask_builder.cu \
 	$(SRC_DIR)/backend_cuda/patch_pool.cu \
-	$(SRC_DIR)/backend_cuda/optim.cu
+	$(SRC_DIR)/backend_cuda/optim.cu \
+	$(SRC_DIR)/backend_cuda/attn_core.cu \
+	$(SRC_DIR)/backend_cuda/gather_scatter.cu \
+	$(SRC_DIR)/backend_cuda/row_stats.cu
 CUDA_SMOKE_SRCS := \
 	$(SRC_DIR)/backend_cuda/smoke.cu
 
@@ -141,7 +147,7 @@ TEST_OBJS := $(addprefix $(OBJ_DIR)/,$(TEST_SRCS:.c=.o)) $(CORE_OBJS) $(TOOLS_OB
 # ============================================================================
 # TARGETS
 # ============================================================================
-.PHONY: all test main bench bench-harness sandbox e2e-dv bench-infer sweep cuda-smoke clean info help
+.PHONY: all test main bench bench-harness bench-cuda sandbox e2e-dv bench-infer sweep cuda-smoke cuda-sanitize clean info help
 
 all: test
 
@@ -170,6 +176,10 @@ bench-infer: $(BIN_DIR)/infer_bench$(EXE_EXT)
 	@echo [BENCH] Built successfully: $(BIN_DIR)/infer_bench$(EXE_EXT)
 	@./$(BIN_DIR)/infer_bench$(EXE_EXT)
 
+bench-cuda: $(BIN_DIR)/cuda_bench$(EXE_EXT)
+	@echo [BENCH] Running CUDA/CPU perf benchmark...
+	@./$(BIN_DIR)/cuda_bench$(EXE_EXT)
+
 bench-harness: $(BIN_DIR)/bench_harness_selftest$(EXE_EXT)
 	@echo [BENCH] Running harness self-test...
 	@./$(BIN_DIR)/bench_harness_selftest$(EXE_EXT) bench/dummy_results.jsonl
@@ -188,6 +198,18 @@ sweep: $(BIN_DIR)/train_sweep$(EXE_EXT)
 cuda-smoke: $(BIN_DIR)/cuda_smoke$(EXE_EXT)
 	@echo [CUDA] Built successfully: $(BIN_DIR)/cuda_smoke$(EXE_EXT)
 	@./$(BIN_DIR)/cuda_smoke$(EXE_EXT)
+
+# Stage-4 sanitizer gate: run the full CUDA test suite (includes the
+# training-step parity) under compute-sanitizer. Requires a native Linux
+# box: WSL2/dxg devices are rejected by the sanitizer ("Device not
+# supported"). TOOL selects memcheck (default), racecheck, initcheck, or
+# synccheck.
+CUDA_SANITIZER ?= /usr/local/cuda/bin/compute-sanitizer
+SANITIZE_TOOL  ?= memcheck
+.PHONY: cuda-sanitize
+cuda-sanitize: $(BIN_DIR)/test_main$(EXE_EXT)
+	@echo [SANITIZE] $(SANITIZE_TOOL) over the full CUDA suite...
+	@$(CUDA_SANITIZER) --target-processes all --tool $(SANITIZE_TOOL) ./$(BIN_DIR)/test_main$(EXE_EXT)
 
 
 # ============================================================================
@@ -307,6 +329,9 @@ help:
 	@echo -  make info       - Display build config
 	@echo -  make help       - Show this message
 	@echo -  make CUDA=1 ... - Enable the CUDA backend (Linux + nvcc required)
+	@echo -  make CUDA=1 cuda-smoke - Device sanity check
+	@echo -  make CUDA=1 cuda-sanitize [SANITIZE_TOOL=memcheck|racecheck|initcheck|synccheck]
+	@echo -       - Full CUDA test suite under compute-sanitizer (native box only)
 	@echo Platform detected: $(DETECTED_OS)
 -include $(shell find obj obj-cuda -name '*.d' 2>/dev/null)
 
@@ -321,3 +346,8 @@ $(BIN_DIR)/infer_bench$(EXE_EXT): bench/infer_bench.c $(CORE_OBJS) $(TOOLS_OBJS)
 	@mkdir -p $(BIN_DIR)
 	@echo "[CC] $< -> $@"
 	@$(CC) $(CFLAGS) -I$(BENCH_DIR) bench/infer_bench.c $(CORE_OBJS) $(TOOLS_OBJS) $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)
+
+$(BIN_DIR)/cuda_bench$(EXE_EXT): bench/cuda_bench.c $(CORE_OBJS) $(TOOLS_OBJS) $(BENCH_LIB_OBJS)
+	@mkdir -p $(BIN_DIR)
+	@echo "[CC] $< -> $@"
+	@$(CC) $(CFLAGS) -I$(BENCH_DIR) bench/cuda_bench.c $(CORE_OBJS) $(TOOLS_OBJS) $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)

@@ -318,3 +318,67 @@ make e2e-dv
 
 Raw result history lives in `bench/results.jsonl` (experiment group `6_infer`);
 per-experiment notes in `runs/`.
+
+---
+
+## 8. CUDA backend performance (Stage 5)
+
+First CUDA-port benchmark pass (`make CUDA=1 bench-cuda`, RTX 4060 8 GB,
+WSL2, fp32 throughout). Raw rows live in `bench/results.jsonl` under phase
+`7_cuda_bench` (tags carry the backend suffix); run the CPU baseline with
+`./bin/cuda_bench --backend cpu`.
+
+### 8.1 Micro (raw kernel rates)
+
+| cell | CPU | CUDA | note |
+|---|---|---|---|
+| matmul 1024^3 fp32 | ~1.8 GFLOP/s | **6.0 TFLOP/s** (~54% of 11.2 ref) | cuBLAS; 512/2048 within noise of this |
+| elementwise add, 64M floats | 0.9 GB/s | **~210 GB/s** | 3 arrays moved |
+| gelu forward, 64M floats | 0.7 GB/s | **~215 GB/s** | 2 arrays moved |
+
+The 11.2 TFLOP/s reference is AD107's nominal non-tensor fp32 peak;
+sustained laptop clocks land near 50-55% of it in practice.
+
+### 8.2 Meso (full pipeline fwd/bwd, E=256 L=2, fixed-stride-4 patches)
+
+| seq | fwd ms (CPU / CUDA) | bwd ms (CPU / CUDA) |
+|---|---|---|
+| 256 | 1657 / 19 | 5889 / 81 |
+| 1024 | 7186 / 56 | 27965 / 277 |
+
+### 8.3 Macro
+
+- Training-step core (fwd+bwd): **40 tokens/s CPU vs ~3700 tokens/s CUDA**
+  at seq 1024 — roughly **90x**.
+- Naive greedy generation on `runs/plain_40k.fblt`: see the `macro_gen`
+  rows in `bench/results.jsonl`; per-method generation comparisons
+  (selfspec/blockdiff/DV) remain in section 3 and the `6_infer` phase.
+
+### 8.4 Findings
+
+1. **Serialized attention-backward kernel found and fixed.** The first
+   profile put 87% of GPU time in `blt_attn_core_bwd_kv_kernel`: it ran
+   the entire O(nq*nk*hd) grad_k/grad_v accumulation on a *single thread
+   block*. Rewritten as one block per kv row with head-dim-lane threads
+   (register accumulators, query rows walked in ascending order so
+   per-cell accumulation still matches the CPU term-for-term), backward
+   dropped 1980 ms -> 277 ms at seq 1024 and training throughput rose
+   633 -> ~3700 tokens/s. The generic fallback (head_dim > block) keeps
+   the old one-thread-per-cell structure.
+2. **MFU is honest but low (~2% end-to-end)** because every dispatched op
+   synchronizes internally: hundreds of tiny kernels per pass each pay a
+   launch+sync round trip that dwarfs their runtime at these model sizes.
+   The fix direction is stream pipelining / kernel fusion or removing
+   per-op syncs behind a graph-capture mode — deferred until a workload
+   actually needs it (the parity suite depends on synchronous ops).
+3. Elementwise bandwidth ~210 GB/s vs ~272 GB/s theoretical DDR6 on this
+   part is expected for simple streaming kernels without vectorized
+   wide loads.
+
+### 8.5 Reproducing
+
+```bash
+make CUDA=1 bench-cuda                 # device numbers
+./bin-cuda/cuda_bench --backend cpu    # CPU baseline
+python3 tools/bench_report.py --phase 7_cuda_bench --sort latency_mean
+```

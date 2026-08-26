@@ -100,6 +100,16 @@
 - `blt_tensor_to_host(const blt_tensor* src, blt_arena* host_arena)`
   - Input: any tensor and a CPU-backend arena.
   - Output: blt_tensor - fresh tensor in `host_arena` holding a copy of `src`'s contents; device sources are copied D2H, host sources memcpy.
+- `blt_tensor_upload(blt_tensor* dst, const void* host_src, size_t bytes)`
+  - Input: destination tensor, host source pointer, byte count (`<= blt_tensor_bytes(dst)`).
+  - Output: none; copies host bytes into `dst`'s storage (H2D when `dst` is device-resident, memcpy otherwise).
+- `blt_tensor_download(const blt_tensor* src, void* host_dst, size_t bytes)`
+  - Input: source tensor, host destination pointer, byte count (`<= blt_tensor_bytes(src)`).
+  - Output: none; copies `src`'s storage into host memory (D2H when `src` is device-resident, memcpy otherwise).
+- `blt_container_alloc(blt_arena* arena, size_t bytes)`
+  - Input: arena and byte count.
+  - Output: pointer to zero-initialized memory for descriptor/host-metadata structs.
+  - Behavior: backend-aware placement — plain malloc under CUDA (so descriptor structs and host-consumed id tables never land in device memory), arena allocation on CPU. Use for struct containers and small host-side tables; use `blt_arena_alloc` for tensor payloads.
 
 Build modes: the default `make <target>` builds CPU-only. `make CUDA=1 <target>` additionally compiles the CUDA backend (`src/backend_cuda/*.cu`) and enables device arenas / transfers; CUDA binaries live in `bin-cuda/`.
 
@@ -148,6 +158,9 @@ Minimal JSON parser for config files (objects, arrays of scalars, string/int/flo
 - `blt_scale(t, scalar)`
   - Input: one tensor to modify and a scalar float.
   - Output: multiplies each element of t with the scalar.
+- `blt_scaled_copy(dst, src, scalar)`
+  - Input: destination tensor, source tensor (same shape/dtype), and a scalar float.
+  - Output: writes `scalar * src` elementwise into `dst`.
 
 ### blt/ops/matmul.h
 - `blt_matmul(const blt_tensor* a, const blt_tensor* b, blt_tensor* out)`
@@ -224,6 +237,10 @@ Backend-keyed raw-pointer utilities: the first argument selects which memory spa
   - Input: backend enum, contiguous FP32 row of length `row_len`, the row's index (for causal masking), `is_causal` flag, optional additive `mask_row` (same length; e.g. 0 or `-INFINITY` entries), and score `scale`.
   - Output: softmaxed row in place.
   - Behavior: numerically stable masked/causal row-softmax shared by self-attention and cross-attention. Masking takes precedence over causal masking when `mask_row != NULL`. Non-finite entries after masking contribute zero; a fully masked row yields all zeros. Raw-pointer utility, not a `blt_tensor` op.
+- `blt_strided_copy(backend, dst, dst_stride, src, src_stride, rows, cols)`
+  - Input: backend enum, strided FP32 buffers, and the tile shape (`rows x cols`).
+  - Output: copies the tile elementwise (row-major inner stride 1) between layouts of different row strides.
+  - Behavior: raw-pointer utility for packing/unpacking slices of larger tensors (QKV heads, cache rows); both pointers live in `backend` space.
 
 ### blt/ops/gelu.h
 - `blt_gelu_forward(x, out)`
@@ -300,6 +317,47 @@ Backend-keyed raw-pointer utilities: the first argument selects which memory spa
     - Behavior: Expands each input group ID into `k` consecutive output group IDs.
 
 ------------------------------------------------------------------------------------------------------------
+### blt/ops/attn_core.h
+Single-head scaled dot-product attention over raw buffers, so packed QKV layouts and cache slices fit without copies. All pointers live in `backend` space; every buffer access stays inside the backend implementation. This is the dispatched core shared by attention, cross-attention, block diffusion, and the KV-cache decode step.
+- `blt_attention_head_args` struct
+  - Fields: strided `q/k/v` row pointers (`[nq, q_stride]` / `[nk, k_stride]` / `[nk, v_stride]`), strided `combined` output slice (`combined_col_offset .. +head_dim` columns written per row), optional `weights_out` ([nq*nk] post-softmax weights saved for backward) or required `scores_scratch` workspace, optional additive `mask` ([nq*nk], 0 / -INFINITY, wins over causality), sizes `nq/nk/head_dim`, `is_causal` flag, score `scale`.
+- `blt_attention_head_core(backend, args)`
+  - Input: backend enum and populated forward args.
+  - Output: softmax-weighted V sums written into the `combined` slices (and `weights_out` when requested).
+  - Behavior: per-row masked stable softmax of `scale * q_i . k_j`, then weighted V accumulation. Fully-masked rows yield zeros.
+- `blt_attention_head_bwd_args` struct
+  - Fields: same strided `q/k/v` views, saved post-softmax `weights`, strided `grad_combined` slice, `scores_scratch` workspace, optional `grad_q/grad_k/grad_v` strided outputs (NULL skips that output), `scale`.
+- `blt_attention_head_core_backward(backend, args)`
+  - Input: backend enum and populated backward args.
+  - Output: ACCUMULATES grad_q (`scale * sum_j gs_ij * k_j`), grad_k (`scale * sum_i gs_ij * q_i`), grad_v (`sum_i w_ij * go_i`) into the provided buffers; callers zero them once per layer to absorb multi-head fan-in.
+
+### blt/ops/gather_scatter.h
+Indexed table ops for embedding lookups and gradient scatter. Id/index arrays are host pointers (integer work stays on host); tables and data tensors may live on either backend.
+- `blt_embedding_lookup(table, ids_host, out)`
+  - Input: FP32 table `[vocab, embed_dim]`, host UINT8 id array `[seq_len]`, output tensor `[seq_len, embed_dim]`.
+  - Output: writes `out[i] = table[ids[i]]`.
+- `blt_embedding_scatter_add(grad_table, ids_host, grad_out)`
+  - Input: FP32 gradient table, host UINT8 ids, gradient rows `[seq_len, embed_dim]`.
+  - Output: accumulates `grad_table[ids[i]] += grad_out[i]` (atomic on CUDA; duplicate ids accumulate in nondeterministic order within fp32 tolerance).
+- `blt_indexed_row_accumulate(table, idx_host, io)`
+  - Input: FP32 table `[rows, embed_dim]`, host uint32 index array, in/out tensor `[rows, embed_dim]`.
+  - Output: `io[i] += table[idx[i]]`; index value `BLT_IDX_SENTINEL` skips the row.
+- `blt_indexed_row_scatter_add(grad_table, idx_host, grad_out, scale)`
+  - Input: FP32 gradient table, host uint32 indices (sentinel-skipped), gradient rows `[rows, embed_dim]`, scalar `scale`.
+  - Output: accumulates `grad_table[idx[i]] += scale * grad_out[i]` (hash-ngram table gradients).
+- `blt_rows_gather(src, pos_host, dst)`
+  - Input: source tensor viewed as `[src_rows, row_len]`, host position array `[dst_rows]`.
+  - Output: writes `dst[i] = src[pos[i]]` (row-length copies; RoPE table gathers).
+
+### blt/ops/row_stats.h
+Row-wise statistics over 2D probability/logit tensors.
+- `blt_entropy_rows(probs, entropy_out, use_log2)`
+  - Input: FP32 probabilities `[rows, vocab]` (rows need not sum exactly to 1; treated as weights), flag for log2 vs ln.
+  - Output: writes per-row Shannon entropy `-sum p*log(p)` into `entropy_out [rows]`.
+- `blt_argmax_rows(logits, out_ids_host)`
+  - Input: FP32 logits `[rows, vocab]`.
+  - Output: writes each row's argmax id into the host uint32 array.
+
 ## Model APIs
 
 ### blt/models/entropy.h
@@ -950,6 +1008,16 @@ Shared, backend-agnostic benchmark infrastructure used by the ablation and infer
   - Runs one cold-cache pass (measured but discarded), then `warmup` unmeasured runs, then times `iterations` runs into `samples` (seconds; array must hold at least `iterations`). Plan rule of thumb: `iterations >= 20`.
 - `int bench_write_json(const char* path, const bench_result* r)`
   - Appends exactly one JSON line to `path` (typically `bench/results.jsonl`): `{"timestamp":<unix_s>,"phase":...,"name":...,"tag":...,"latency":{...},"metrics":{...}}` with latency in seconds. Line-delimited so killed/partial runs never corrupt history. Returns 0 on success, -1 on I/O failure.
+
+### bench/infer_bench.c (bin via `make bench-infer`)
+Generation-strategy benchmark over fixed trained checkpoints: greedy baseline, BLT-S self-speculation (k in {4,8,16}), BLT-D drafting, and BLT-DV draft+verify with confidence/EB unmasking strategies. Reports decoder/encoder NFE per byte, acceptance, agreement vs greedy, and latency; appends to the `6_infer` phase of `bench/results.jsonl` (tags prefixed `plain_` / `bltd_`, suffixed `_cuda` when running on the device).
+
+- `--backend cpu|cuda` — run every model pass on the chosen backend (default `cpu`; `cuda` requires a `make CUDA=1` build). Checkpoints load into host twins and are uploaded tensor-by-tensor before benchmarking.
+- `--plain PATH` / `--bltd PATH` — checkpoint files (default `runs/plain_40k.fblt`, `runs/bltd_l03_40k.fblt`)
+- `--heldout PATH`, `--prompts N`, `--new-bytes N`, `--offset-stride N` — prompt source and shape
+- `--results PATH` — output JSONL
+- `--fixed-patches` — fixed-stride-4 segmentation everywhere (matches checkpoint training)
+- `--entropy-lm PATH` — optional trained entropy-LM weights for the patcher
 
 ### tools/bench_report.py
 Python reporting tool for `bench/results.jsonl` (last record per `(name, tag)` wins).

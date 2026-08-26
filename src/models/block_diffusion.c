@@ -17,10 +17,13 @@
 #include "blt/ops/swiglu.h"
 #include "blt/ops/rope.h"
 #include "blt/ops/vecmath.h"
+#include "blt/ops/attn_core.h"
 #include "blt/ops/elementwise.h"
 #include "blt/ops/mask_builder.h"
 #include "blt/ops/cross_entropy.h"
 #include "blt/infer/rope_gather.h"
+#include "blt/ops/gather_scatter.h"
+#include <stdlib.h>
 
 #include <math.h>
 #include <string.h>
@@ -64,12 +67,12 @@ void blt_block_batch_build(blt_block_batch* out, blt_arena* arena,
     out->n_block_rows = R;
     out->loss_scale = 1.0f;   // paper objective by default
 
-    out->tokens = (uint32_t*)blt_arena_alloc(arena, R * sizeof(uint32_t), sizeof(uint32_t));
-    out->positions = (size_t*)blt_arena_alloc(arena, R * sizeof(size_t), sizeof(size_t));
-    out->targets = (uint8_t*)blt_arena_alloc(arena, R * sizeof(uint8_t), sizeof(uint8_t));
-    out->cell_valid = (uint8_t*)blt_arena_alloc(arena, R * sizeof(uint8_t), sizeof(uint8_t));
-    out->cell_masked = (uint8_t*)blt_arena_alloc(arena, R * sizeof(uint8_t), sizeof(uint8_t));
-    out->groups = (size_t*)blt_arena_alloc(arena, R * sizeof(size_t), sizeof(size_t));
+    out->tokens = (uint32_t*)blt_container_alloc(arena, R * sizeof(uint32_t));
+    out->positions = (size_t*)blt_container_alloc(arena, R * sizeof(size_t));
+    out->targets = (uint8_t*)blt_container_alloc(arena, R);
+    out->cell_valid = (uint8_t*)blt_container_alloc(arena, R);
+    out->cell_masked = (uint8_t*)blt_container_alloc(arena, R);
+    out->groups = (size_t*)blt_container_alloc(arena, R * sizeof(size_t));
 
     uint64_t rng = rng_seed;
     out->t = rng_uniform01(&rng);
@@ -146,18 +149,20 @@ static void diff_ctx_build(diff_ctx* c, const blt_local_decoder* model,
     // D_0: clean rows carry h_final content; block rows follow the policy.
     size_t d0_shape[2] = {c->S, c->E};
     c->d0 = blt_tensor_create(arena, d0_shape, 2, BLT_DTYPE_FP32);   // zero-filled
-    memcpy(c->d0.data, byte_hidden_in->data, c->N * c->E * sizeof(float));
+    blt_strided_copy(byte_hidden_in->backend, (float*)c->d0.data, c->E,
+                     (const float*)byte_hidden_in->data, c->E, c->N, c->E);
     if (d0_mode == BLT_D0_LEARNED) {
-        const float* table = (const float*)model->d0_embed_weight.data;
-        float* dst = (float*)c->d0.data + c->N * c->E;
-        for (size_t r = 0; r < c->R; r++) {
-            memcpy(dst + r * c->E, table + batch->tokens[r] * c->E, c->E * sizeof(float));
-        }
+        size_t tail_shape[2] = {c->R, c->E};
+        blt_tensor tail = blt_tensor_create(arena, tail_shape, 2, BLT_DTYPE_FP32);
+        blt_embedding_lookup(&model->d0_embed_weight, batch->tokens, &tail);
+        blt_strided_copy(tail.backend,
+                         (float*)c->d0.data + c->N * c->E, c->E,
+                         (const float*)tail.data, c->E, c->R, c->E);
     }
     // ZEROS (default): keep the zero-fill.
 
     // Positions: identity for clean rows, recorded originals for block rows.
-    size_t* positions = (size_t*)blt_arena_alloc(arena, c->S * sizeof(size_t), 64);
+    size_t* positions = (size_t*)blt_container_alloc(arena, c->S * sizeof(size_t));
     for (size_t i = 0; i < c->N; i++) {
         positions[i] = i;
     }
@@ -169,7 +174,7 @@ static void diff_ctx_build(diff_ctx* c, const blt_local_decoder* model,
 
     // Query group ids: clean rows take their own patch id (repo BLT rule);
     // block rows take their assigned latent group (paper o_{i-1} rule).
-    c->q_group_ids = (size_t*)blt_arena_alloc(arena, c->S * sizeof(size_t), 64);
+    c->q_group_ids = (size_t*)blt_container_alloc(arena, c->S * sizeof(size_t));
     for (size_t i = 0; i < c->N; i++) {
         size_t g = num_patches - 1;
         for (size_t pi = 0; pi < num_patches; pi++) {
@@ -185,8 +190,7 @@ static void diff_ctx_build(diff_ctx* c, const blt_local_decoder* model,
         c->q_group_ids[c->N + r] = batch->groups[r];
     }
 
-    c->kv_group_ids = (size_t*)blt_arena_alloc(
-        arena, num_patches * c->k * sizeof(size_t), 64);
+    c->kv_group_ids = (size_t*)blt_container_alloc(arena, num_patches * c->k * sizeof(size_t));
     for (size_t pi = 0; pi < num_patches; pi++) {
         for (size_t s2 = 0; s2 < c->k; s2++) {
             c->kv_group_ids[pi * c->k + s2] = pi;
@@ -272,20 +276,20 @@ static void diffusion_self_attention(const diff_ctx* c,
     for (size_t h = 0; h < H; h++) {
         const size_t q_off = h * hd;
         const size_t k_off = E + h * hd;
-        for (size_t i = 0; i < S; i++) {
-            memcpy(q_head + i * hd, qkv_data + i * stride3 + q_off, hd * sizeof(float));
-            memcpy(k_head + i * hd, qkv_data + i * stride3 + k_off, hd * sizeof(float));
-        }
+        blt_strided_copy(normed1->backend, q_head, hd,
+                         qkv_data + q_off, stride3, S, hd);
+        blt_strided_copy(normed1->backend, k_head, hd,
+                         qkv_data + k_off, stride3, S, hd);
         blt_tensor_view_3d(&q_head_t, q_head, S, 1, hd, normed1->backend);
         blt_tensor_view_3d(&q_rot_t, q_rot, S, 1, hd, normed1->backend);
         blt_tensor_view_3d(&k_head_t, k_head, S, 1, hd, normed1->backend);
         blt_tensor_view_3d(&k_rot_t, k_rot, S, 1, hd, normed1->backend);
         blt_rope_apply(&q_head_t, &c->rope_cos, &c->rope_sin, &q_rot_t);
         blt_rope_apply(&k_head_t, &c->rope_cos, &c->rope_sin, &k_rot_t);
-        for (size_t i = 0; i < S; i++) {
-            memcpy(qkv_data + i * stride3 + q_off, q_rot + i * hd, hd * sizeof(float));
-            memcpy(qkv_data + i * stride3 + k_off, k_rot + i * hd, hd * sizeof(float));
-        }
+        blt_strided_copy(normed1->backend, qkv_data + q_off, stride3,
+                         q_rot, hd, S, hd);
+        blt_strided_copy(normed1->backend, qkv_data + k_off, stride3,
+                         k_rot, hd, S, hd);
     }
 
     // Per-head masked attention against the Figure 5 mask; save post-softmax
@@ -293,43 +297,36 @@ static void diffusion_self_attention(const diff_ctx* c,
     size_t wa_shape[3] = {H, S, S};
     *weights_all = blt_tensor_create(arena, wa_shape, 3, BLT_DTYPE_FP32);
     float* combined = (float*)blt_arena_alloc(arena, S * E * sizeof(float), sizeof(float));
-    memset(combined, 0, S * E * sizeof(float));
+    { blt_tensor zt; blt_tensor_view_2d(&zt, combined, S, E, normed1->backend); zero_tensor(&zt); }
 
     const float* mask_base = (const float*)c->self_mask.data;
 
     for (size_t h = 0; h < H; h++) {
         const size_t q_off = h * hd;
+        const size_t k_off = E + h * hd;
         const size_t v_off = 2 * E + h * hd;
         float* W = (float*)weights_all->data + h * S * S;
 
-        for (size_t i = 0; i < S; i++) {
-            const float* q_i = qkv_data + i * stride3 + q_off;
-            float* scores = W + i * S;
-            const float* mask_row = mask_base + i * S;
+        blt_attention_head_args a;
+        memset(&a, 0, sizeof(a));
+        a.q = qkv_data + q_off;
+        a.q_stride = stride3;
+        a.k = qkv_data + k_off;
+        a.k_stride = stride3;
+        a.v = qkv_data + v_off;
+        a.v_stride = stride3;
+        a.combined = combined;
+        a.combined_stride = E;
+        a.combined_col_offset = q_off;
+        a.weights_out = W;            // saved post-softmax weights for backward
+        a.mask = mask_base;           // [S * S] Figure-5 additive mask
+        a.nq = S;
+        a.nk = S;
+        a.head_dim = hd;
+        a.is_causal = false;          // dense mask defines visibility
+        a.scale = scale;
 
-            for (size_t j = 0; j < S; j++) {
-                scores[j] = blt_vec_dot(normed1->backend, q_i, qkv_data + j * stride3 + E + q_off, hd);
-            }
-            blt_softmax_masked_row_inplace(normed1->backend, scores, S, i, false, mask_row, scale);
-        }
-
-        for (size_t i = 0; i < S; i++) {
-            float* out_i = combined + i * E + q_off;
-            for (size_t d = 0; d < hd; d++) {
-                out_i[d] = 0.0f;
-            }
-            const float* scores = W + i * S;
-            for (size_t j = 0; j < S; j++) {
-                const float weight = scores[j];
-                if (weight == 0.0f) {
-                    continue;
-                }
-                const float* v_j = qkv_data + j * stride3 + v_off;
-                for (size_t d = 0; d < hd; d++) {
-                    out_i[d] += weight * v_j[d];
-                }
-            }
-        }
+        blt_attention_head_core(normed1->backend, &a);
     }
 
     blt_tensor_view_2d(combined_out, combined, S, E, normed1->backend);
@@ -345,8 +342,7 @@ static void forward_with_caches(const blt_local_decoder* model,
                                 blt_tensor* final_states,
                                 diff_layer_cache** caches_out,
                                 blt_arena* arena) {
-    *caches_out = (diff_layer_cache*)blt_arena_alloc(
-        arena, c->L * sizeof(diff_layer_cache), sizeof(void*));
+    *caches_out = (diff_layer_cache*)blt_container_alloc(arena, c->L * sizeof(diff_layer_cache));
     memset(*caches_out, 0, c->L * sizeof(diff_layer_cache));
     diff_layer_cache* caches = *caches_out;
 
@@ -423,7 +419,7 @@ static void make_bytes_tensor(blt_arena* arena, const uint8_t* bytes, size_t len
                               blt_tensor* out) {
     size_t shape[1] = {len};
     *out = blt_tensor_create(arena, shape, 1, BLT_DTYPE_UINT8);
-    memcpy(out->data, bytes, len);
+    blt_tensor_upload(out, bytes, len * sizeof(uint8_t));
 }
 
 
@@ -458,7 +454,8 @@ void blt_local_decoder_forward_diffusion(
     blt_tensor logits, final_states;
     forward_with_caches(model, &c, num_patches, &logits, &final_states,
         &caches, arena);
-    memcpy(logits_out->data, logits.data, c.S * c.V * sizeof(float));
+    blt_strided_copy(logits.backend, (float*)logits_out->data, c.S * c.V,
+                     (const float*)logits.data, c.S * c.V, 1, c.S * c.V);
 
     // Losses (Eq. 7): L_clean via the legacy CE path over clean rows +
     // L_mask/t accumulated over masked block cells.
@@ -474,14 +471,18 @@ void blt_local_decoder_forward_diffusion(
         view_1d_offset(&targets_view, &bytes_t, 1, c.N - 1);
 
         blt_cross_entropy_forward(&logits_view, &targets_view, loss_out);
-        loss = ((const float*)loss_out->data)[0];
+        blt_tensor_download(loss_out, &loss, sizeof(float));
     }
 
     if (batch->t > 0.0f) {
+        // Masked-cell loss math runs on a host copy of the logits.
+        float* logits_host = (float*)malloc(logits.numel * sizeof(float));
+        BLT_REQUIRE(logits_host != NULL, "forward_diffusion: staging alloc failed");
+        blt_tensor_download(&logits, logits_host, logits.numel * sizeof(float));
         float l_mask = 0.0f;
         for (size_t r = 0; r < c.R; r++) {
             if (!batch->cell_masked[r]) continue;
-            const float* row = (const float*)logits.data + (c.N + r) * c.V;
+            const float* row = logits_host + (c.N + r) * c.V;
             // -log p[target], stable
             float max_val = row[0];
             for (size_t v = 1; v < c.V; v++) {
@@ -496,10 +497,11 @@ void blt_local_decoder_forward_diffusion(
             // floor guards -log(0) when the target probability underflows
             l_mask += -logf(fmaxf(pt / sum, 1e-9f));
         }
+        free(logits_host);
         loss += batch->loss_scale * l_mask / batch->t;
     }
 
-    ((float*)loss_out->data)[0] = loss;
+    blt_tensor_upload(loss_out, &loss, sizeof(float));
 }
 
 
@@ -556,16 +558,24 @@ void blt_local_decoder_backward_diffusion(
         size_t gv_shape[2] = {c.N - 1, c.V};
         blt_tensor grad_view = blt_tensor_create(arena, gv_shape, 2, BLT_DTYPE_FP32);
         blt_cross_entropy_backward(&logits_view, &targets_view, &grad_view);
-        memcpy(grad_logits.data, grad_view.data, (c.N - 1) * c.V * sizeof(float));
+        blt_strided_copy(grad_view.backend, (float*)grad_logits.data, c.V,
+                         (const float*)grad_view.data, c.V, c.N - 1, c.V);
     }
 
     if (batch->t > 0.0f && batch->loss_scale != 0.0f) {
         const float inv_t = batch->loss_scale / batch->t;
         float* gl = (float*)grad_logits.data;
+        // Masked-cell gradient math runs on a host copy of the logits; the
+        // finished rows are written back one at a time.
+        float* logits_host = (float*)malloc(logits.numel * sizeof(float));
+        BLT_REQUIRE(logits_host != NULL, "backward_diffusion: staging alloc failed");
+        blt_tensor_download(&logits, logits_host, logits.numel * sizeof(float));
+        float* grow_host = (float*)malloc(c.V * sizeof(float));
+        BLT_REQUIRE(grow_host != NULL, "backward_diffusion: staging alloc failed");
         for (size_t r = 0; r < c.R; r++) {
             if (!batch->cell_masked[r]) continue;
             const size_t row = c.N + r;
-            const float* lr = (const float*)logits.data + row * c.V;
+            const float* lr = logits_host + row * c.V;
             const uint8_t tgt = batch->targets[r];
 
             float max_val = lr[0];
@@ -576,12 +586,16 @@ void blt_local_decoder_backward_diffusion(
             for (size_t v = 0; v < c.V; v++) {
                 sum += expf(lr[v] - max_val);
             }
-            float* g = gl + row * c.V;
             for (size_t v = 0; v < c.V; v++) {
                 const float p = expf(lr[v] - max_val) / sum;
-                g[v] += inv_t * (p - (v == (size_t)tgt ? 1.0f : 0.0f));
+                grow_host[v] = inv_t * (p - (v == (size_t)tgt ? 1.0f : 0.0f));
             }
+            blt_tensor row_view;
+            blt_tensor_view_2d(&row_view, gl + row * c.V, 1, c.V, logits.backend);
+            blt_tensor_upload(&row_view, grow_host, c.V * sizeof(float));
         }
+        free(logits_host);
+        free(grow_host);
     }
 
     // STEP 3: LM head backward -> dL/d(final states).
@@ -645,64 +659,38 @@ void blt_local_decoder_backward_diffusion(
         const float* qkv = (const float*)ca->qkv.data;
         const float* gcomb = (const float*)g_combined.data;
 
-        float* gW_buf = (float*)blt_arena_alloc(arena, c.S * c.S * sizeof(float), sizeof(float));
         float* gs_buf = (float*)blt_arena_alloc(arena, c.S * c.S * sizeof(float), sizeof(float));
 
         for (size_t h = 0; h < c.H; h++) {
             const size_t q_off = h * c.hd;
             const size_t k_off = c.E + h * c.hd;
             const size_t v_off = 2 * c.E + h * c.hd;
-            const float* W = (const float*)ca->weights_all.data + h * c.S * c.S;
 
-            // grad wrt V accumulation + grad wrt softmax weights
-            memset(gW_buf, 0, c.S * c.S * sizeof(float));
-            for (size_t i = 0; i < c.S; i++) {
-                for (size_t j = 0; j < c.S; j++) {
-                    float dot = 0.0f;
-                    for (size_t d = 0; d < c.hd; d++) {
-                        dot += gcomb[i * c.E + q_off + d] * qkv[j * stride3 + v_off + d];
-                    }
-                    gW_buf[i * c.S + j] = dot;
+            blt_attention_head_bwd_args a;
+            memset(&a, 0, sizeof(a));
+            a.q = qkv + q_off;
+            a.q_stride = stride3;
+            a.k = qkv + k_off;
+            a.k_stride = stride3;
+            a.v = qkv + v_off;
+            a.v_stride = stride3;
+            a.weights = (const float*)ca->weights_all.data + h * c.S * c.S;
+            a.grad_combined = gcomb;
+            a.gc_stride = c.E;
+            a.gc_col_offset = q_off;
+            a.scores_scratch = gs_buf;
+            a.grad_q = gqkv + q_off;
+            a.gq_stride = stride3;
+            a.grad_k = gqkv + k_off;
+            a.gk_stride = stride3;
+            a.grad_v = gqkv + v_off;
+            a.gv_stride = stride3;
+            a.nq = c.S;
+            a.nk = c.S;
+            a.head_dim = c.hd;
+            a.scale = self_scale;
 
-                    const float wgt = W[i * c.S + j];
-                    if (wgt != 0.0f) {
-                        float* gv = gqkv + j * stride3 + v_off;
-                        for (size_t d = 0; d < c.hd; d++) {
-                            gv[d] += wgt * gcomb[i * c.E + q_off + d];
-                        }
-                    }
-                }
-            }
-
-            // softmax backward per row
-            for (size_t i = 0; i < c.S; i++) {
-                float dotGW = 0.0f;
-                for (size_t j = 0; j < c.S; j++) {
-                    dotGW += gW_buf[i * c.S + j] * W[i * c.S + j];
-                }
-                for (size_t j = 0; j < c.S; j++) {
-                    gs_buf[i * c.S + j] =
-                        W[i * c.S + j] * (gW_buf[i * c.S + j] - dotGW);
-                }
-            }
-
-            // scores backward
-            for (size_t i = 0; i < c.S; i++) {
-                for (size_t j = 0; j < c.S; j++) {
-                    const float gs = gs_buf[i * c.S + j];
-                    if (gs == 0.0f) continue;
-                    float* gq = gqkv + i * stride3 + q_off;
-                    const float* k_j = qkv + j * stride3 + k_off;
-                    for (size_t d = 0; d < c.hd; d++) {
-                        gq[d] += self_scale * gs * k_j[d];
-                    }
-                    float* gk = gqkv + j * stride3 + k_off;
-                    const float* q_i = qkv + i * stride3 + q_off;
-                    for (size_t d = 0; d < c.hd; d++) {
-                        gk[d] += self_scale * gs * q_i[d];
-                    }
-                }
-            }
+            blt_attention_head_core_backward(ca->qkv.backend, &a);
         }
 
         // RoPE backward on the Q/K gradients (same gathered tables)
@@ -715,20 +703,20 @@ void blt_local_decoder_backward_diffusion(
             for (size_t h = 0; h < c.H; h++) {
                 const size_t q_off = h * c.hd;
                 const size_t k_off = c.E + h * c.hd;
-                for (size_t i = 0; i < c.S; i++) {
-                    memcpy(gq_head + i * c.hd, gqkv + i * stride3 + q_off, c.hd * sizeof(float));
-                    memcpy(gk_head + i * c.hd, gqkv + i * stride3 + k_off, c.hd * sizeof(float));
-                }
+                blt_strided_copy(dh.backend, gq_head, c.hd,
+                                 gqkv + q_off, stride3, c.S, c.hd);
+                blt_strided_copy(dh.backend, gk_head, c.hd,
+                                 gqkv + k_off, stride3, c.S, c.hd);
                 blt_tensor_view_3d(&gqh_t, gq_head, c.S, 1, c.hd, dh.backend);
                 blt_tensor_view_3d(&gqu_t, gq_unrot, c.S, 1, c.hd, dh.backend);
                 blt_tensor_view_3d(&gkh_t, gk_head, c.S, 1, c.hd, dh.backend);
                 blt_tensor_view_3d(&gku_t, gk_unrot, c.S, 1, c.hd, dh.backend);
                 blt_rope_apply_backward(&gqh_t, &c.rope_cos, &c.rope_sin, &gqu_t);
                 blt_rope_apply_backward(&gkh_t, &c.rope_cos, &c.rope_sin, &gku_t);
-                for (size_t i = 0; i < c.S; i++) {
-                    memcpy(gqkv + i * stride3 + q_off, gq_unrot + i * c.hd, c.hd * sizeof(float));
-                    memcpy(gqkv + i * stride3 + k_off, gk_unrot + i * c.hd, c.hd * sizeof(float));
-                }
+                blt_strided_copy(dh.backend, gqkv + q_off, stride3,
+                                 gq_unrot, c.hd, c.S, c.hd);
+                blt_strided_copy(dh.backend, gqkv + k_off, stride3,
+                                 gk_unrot, c.hd, c.S, c.hd);
             }
         }
 
@@ -780,25 +768,21 @@ void blt_local_decoder_backward_diffusion(
     }
 
     // STEP 5: terminal gradients.
-    memcpy(grad_byte_hidden_in->data, dh.data, c.N * c.E * sizeof(float));
+    blt_strided_copy(dh.backend, (float*)grad_byte_hidden_in->data, c.N * c.E,
+                     (const float*)dh.data, c.N * c.E, 1, c.N * c.E);
 
     if (d0_mode == BLT_D0_LEARNED) {
-        float* tbl_grad = (float*)grad->d0_embed_grad.data;
-        const float* dh_data = (const float*)dh.data;
-        for (size_t r = 0; r < c.R; r++) {
-            const size_t tok = batch->tokens[r];
-            float* dst = tbl_grad + tok * c.E;
-            const float* src = dh_data + (c.N + r) * c.E;
-            for (size_t e = 0; e < c.E; e++) {
-                dst[e] += src[e];
-            }
-        }
+        // Scatter block-row D0 gradients into the token table (dispatched).
+        blt_tensor tailg;
+        blt_tensor_view_2d(&tailg, (float*)dh.data + c.N * c.E, c.R, c.E, dh.backend);
+        blt_indexed_row_scatter_add(&grad->d0_embed_grad, batch->tokens, &tailg, 1.0f);
     }
 
     // Reinterpret dP_split back as [num_patches, patch_dim]
     blt_tensor dP;
     blt_tensor_view_2d(&dP, dP_split.data, num_patches, c.pdim, dP_split.backend);
-    memcpy(grad_patch_in->data, dP.data, num_patches * c.pdim * sizeof(float));
+    blt_strided_copy(dP.backend, (float*)grad_patch_in->data, num_patches * c.pdim,
+                     (const float*)dP.data, num_patches * c.pdim, 1, num_patches * c.pdim);
 }
 
 //----------------------------------------------------------------------
@@ -840,5 +824,6 @@ void blt_local_decoder_forward_diffusion_infer(
     blt_tensor logits, final_states;
     forward_with_caches(model, &c, num_patches, &logits, &final_states,
         &caches, arena);
-    memcpy(logits_out->data, logits.data, c.S * c.V * sizeof(float));
+    blt_strided_copy(logits.backend, (float*)logits_out->data, c.S * c.V,
+                     (const float*)logits.data, c.S * c.V, 1, c.S * c.V);
 }

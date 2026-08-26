@@ -82,6 +82,7 @@ int main(void) {
         {"cuda reductions parity", run_cuda_parity_reductions},
         {"cuda matmul parity", run_cuda_parity_matmul},
         {"cuda composites parity", run_cuda_parity_composites},
+        {"cuda training-step parity", run_cuda_parity_training_step},
         {"patcher parity", run_patcher_parity_tests},
         {"transformer parity", run_transformer_parity_tests},
         {"entropy LM overfit", run_elm_overfit_tests},

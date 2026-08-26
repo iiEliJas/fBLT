@@ -1,5 +1,7 @@
 #include "blt/models/local_decoder.h"
 #include "blt/core/backend.h"
+#include "blt/ops/vecmath.h"
+#include "blt/ops/gather_scatter.h"
 #include "blt/core/tensor.h"
 #include "blt/core/allocator.h"
 #include "blt/models/attention.h"
@@ -16,6 +18,8 @@
 #include "blt/ops/cross_entropy.h"
 
 #include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
 #include <stdint.h>
 
 
@@ -91,15 +95,18 @@ static ld_context make_context(const blt_local_decoder* model, size_t seq_len, s
     // block rows) have no patch of their own and condition on the LAST patch's
     // latent sub-tokens -- the Fast-BLT "condition on last available latent
     // token" rule.
-    size_t* patch_identity_ids = (size_t*)blt_arena_alloc(arena, num_patches * sizeof(size_t), 64);
-    size_t* byte_patch_ids = (size_t*)blt_arena_alloc(arena, seq_len * sizeof(size_t), 64);
+    // Group-id arrays are host metadata (built on host, uploaded to the
+    // mask builder from host pointers); never allocate them into device
+    // memory.
+    size_t* patch_identity_ids = (size_t*)blt_container_alloc(arena, num_patches * sizeof(size_t));
+    size_t* byte_patch_ids = (size_t*)blt_container_alloc(arena, seq_len * sizeof(size_t));
     blt_patch_build_group_ids(patches, num_patches, num_hfinal_rows, patch_identity_ids, byte_patch_ids);
     for (size_t i = num_hfinal_rows; i < seq_len; i++) {
         byte_patch_ids[i] = num_patches - 1;
     }
-    
+
     // expand the kv (patch) side group ids by k -- each patch's k sub-tokens share its group id
-    size_t* expanded_kv_group_ids = (size_t*)blt_arena_alloc(arena, num_patches * k * sizeof(size_t), 64);
+    size_t* expanded_kv_group_ids = (size_t*)blt_container_alloc(arena, num_patches * k * sizeof(size_t));
     blt_patch_expand_group_ids(patch_identity_ids, num_patches, k, expanded_kv_group_ids);
 
     ld_context ctx = {0};
@@ -184,7 +191,7 @@ blt_local_decoder* blt_local_decoder_create(blt_arena* arena, const blt_local_de
 
     BLT_REQUIRE(config->patch_dim % config->embed_dim == 0, "blt_local_decoder_create: patch_dim must be divisible by embed_dim");
 
-    blt_local_decoder* m = (blt_local_decoder*)blt_arena_alloc(arena, sizeof(blt_local_decoder), sizeof(void*));
+    blt_local_decoder* m = (blt_local_decoder*)blt_container_alloc(arena, sizeof(blt_local_decoder));
     m->config = *config;
 
     // RoPE cache - precomputed once
@@ -196,8 +203,8 @@ blt_local_decoder* blt_local_decoder_create(blt_arena* arena, const blt_local_de
     blt_rope_precompute(config->max_seq_len, &rope_cfg, &m->rope_cos_cache, &m->rope_sin_cache);
 
     // Per-layer weights
-    m->layers = (blt_local_decoder_layer_storage*)blt_arena_alloc(
-        arena, config->num_layers * sizeof(blt_local_decoder_layer_storage), sizeof(void*));
+    m->layers = (blt_local_decoder_layer_storage*)blt_container_alloc(
+        arena, config->num_layers * sizeof(blt_local_decoder_layer_storage));
 
     for (size_t l = 0; l < config->num_layers; ++l) {
         blt_local_layer_storage_alloc(arena, &m->layers[l], E, hidden);
@@ -227,10 +234,9 @@ blt_local_decoder_grad* blt_local_decoder_grad_create(blt_arena* arena, const bl
     size_t V = model->config.vocab_size;
     size_t num_layers = model->config.num_layers;
 
-    blt_local_decoder_grad* g = (blt_local_decoder_grad*)blt_arena_alloc(arena, sizeof(blt_local_decoder_grad), sizeof(void*));
+    blt_local_decoder_grad* g = (blt_local_decoder_grad*)blt_container_alloc(arena, sizeof(blt_local_decoder_grad));
 
-    g->layer_grads = (blt_local_decoder_layer_grad*)blt_arena_alloc(
-        arena, num_layers * sizeof(blt_local_decoder_layer_grad), sizeof(void*));
+    g->layer_grads = (blt_local_decoder_layer_grad*)blt_container_alloc(arena, num_layers * sizeof(blt_local_decoder_layer_grad));
 
     for (size_t l = 0; l < num_layers; ++l) {
         blt_local_layer_grad_alloc(arena, &g->layer_grads[l], E, hidden);
@@ -346,14 +352,21 @@ void blt_local_decoder_forward_ext(const blt_local_decoder* model,
         d = *byte_hidden_in;
     } else {
         d = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);   // zero-init
-        memcpy(d.data, byte_hidden_in->data, num_hfinal_rows * E * sizeof(float));
+        blt_strided_copy(byte_hidden_in->backend, (float*)d.data, E,
+                         (const float*)byte_hidden_in->data, E, num_hfinal_rows, E);
 
         if (d0_opts->d0_mode == BLT_D0_LEARNED) {
-            float* dst = (float*)d.data + num_hfinal_rows * E;
-            const float* table = (const float*)model->d0_embed_weight.data;
-            for (size_t i = 0; i < seq_len - num_hfinal_rows; i++) {
-                memcpy(dst + i * E, table + (size_t)d0_opts->d0_extra_tokens[i] * E, E * sizeof(float));
-            }
+            const size_t n_extra = seq_len - num_hfinal_rows;
+            size_t extra_shape[2] = {n_extra, E};
+            blt_tensor extra = blt_tensor_create(arena, extra_shape, 2, BLT_DTYPE_FP32);
+            // d0_extra_tokens is a host id array; the lookup handles either
+            // memory space for the table.
+            blt_tensor table_view;
+            blt_tensor_view_2d(&table_view, model->d0_embed_weight.data,
+                               model->d0_embed_weight.numel / E, E, model->d0_embed_weight.backend);
+            blt_embedding_lookup(&table_view, d0_opts->d0_extra_tokens, &extra);
+            blt_strided_copy(extra.backend, (float*)d.data + num_hfinal_rows * E, E,
+                             (const float*)extra.data, E, n_extra, E);
         }
     }
 
@@ -499,8 +512,8 @@ void blt_local_decoder_backward(const blt_local_decoder* model,
     //   d[0..L] - byte states entering each layer (d[0] = byte_hidden_in)
     //   caches[] - per-layer cross-attn + byte-transformer-block intermediates
     //
-    blt_tensor* d = (blt_tensor*)blt_arena_alloc(arena, (L + 1) * sizeof(blt_tensor), sizeof(void*));
-    dec_layer_cache* caches = (dec_layer_cache*)blt_arena_alloc(arena, L * sizeof(dec_layer_cache), sizeof(void*));
+    blt_tensor* d = (blt_tensor*)blt_container_alloc(arena, (L + 1) * sizeof(blt_tensor));
+    dec_layer_cache* caches = (dec_layer_cache*)blt_container_alloc(arena, L * sizeof(dec_layer_cache));
     memset(caches, 0, L * sizeof(dec_layer_cache));
 
     d[0] = *byte_hidden_in;
@@ -552,7 +565,8 @@ void blt_local_decoder_backward(const blt_local_decoder* model,
     blt_cross_entropy_backward(&logits_view, &targets_view, &grad_logits_view);
 
     blt_tensor grad_logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);   // zero-init
-    memcpy(grad_logits.data, grad_logits_view.data, (seq_len - 1) * V * sizeof(float));
+    blt_strided_copy(grad_logits_view.backend, (float*)grad_logits.data, V,
+                     (const float*)grad_logits_view.data, V, seq_len - 1, V);
 
     // logits = d[L] @ lm_head_weight
     blt_tensor dh = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
@@ -612,12 +626,14 @@ void blt_local_decoder_backward(const blt_local_decoder* model,
     // -----------------------------------------------------------------
     // STEP 4: write terminal gradients
     //
-    memcpy(grad_byte_hidden_in->data, dh.data, seq_len * E * sizeof(float));
+    blt_strided_copy(dh.backend, (float*)grad_byte_hidden_in->data, seq_len * E,
+                     (const float*)dh.data, seq_len * E, 1, seq_len * E);
 
     // Reinterpret dP_split [num_patches*k, E] back as [num_patches, patch_dim]
     blt_tensor dP;
     blt_tensor_view_2d(&dP, dP_split.data, num_patches, patch_dim, dP_split.backend);
-    memcpy(grad_patch_in->data, dP.data, num_patches * patch_dim * sizeof(float));
+    blt_strided_copy(dP.backend, (float*)grad_patch_in->data, num_patches * patch_dim,
+                     (const float*)dP.data, num_patches * patch_dim, 1, num_patches * patch_dim);
 
     // Arena cleanup is callers responsibility
 }

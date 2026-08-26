@@ -1,4 +1,5 @@
 #include "blt/core/backend.h"
+#include "blt/core/allocator.h"
 #include "blt/models/model.h"
 
 
@@ -37,7 +38,7 @@ blt_model* blt_model_create(blt_arena* arena, const blt_model_config* config) {
         config->global_config.embed_dim == config->decoder_config.embed_dim,
         "blt_model_create: encoder/global/decoder embed_dim must match (shared hidden width)");
 
-    blt_model* model = (blt_model*)blt_arena_alloc(arena, sizeof(blt_model), sizeof(void*));
+    blt_model* model = (blt_model*)blt_container_alloc(arena, sizeof(blt_model));
     model->config = *config;
 
     model->encoder = blt_local_encoder_create(arena, &config->encoder_config);
@@ -53,7 +54,7 @@ blt_model_grad* blt_model_grad_create(blt_arena* arena, const blt_model* model) 
     BLT_REQUIRE(arena != NULL && model != NULL,
         "blt_model_grad_create: arena and model cannot be NULL");
 
-    blt_model_grad* grad = (blt_model_grad*)blt_arena_alloc(arena, sizeof(blt_model_grad), sizeof(void*));
+    blt_model_grad* grad = (blt_model_grad*)blt_container_alloc(arena, sizeof(blt_model_grad));
 
     grad->encoder_grad = blt_local_encoder_grad_create(arena, model->encoder);
     grad->global_grad  = blt_global_transformer_grad_create(arena, model->global);

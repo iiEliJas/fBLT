@@ -1,4 +1,5 @@
 #include "blt/core/backend.h"
+#include "blt/core/allocator.h"
 #include "blt/models/transformer_stack.h"
 #include "blt/models/attention.h"
 #include "blt/ops/matmul.h"
@@ -63,10 +64,8 @@ void blt_transformer_stack_init(
     stack->layer_config.activation_type = BLT_ACTIVATION_SWIGLU;
 
     // Per-layer weights.
-    stack->layer_storage = (blt_transformer_layer_storage*)blt_arena_alloc(
-        arena, config->num_layers * sizeof(blt_transformer_layer_storage), sizeof(void*));
-    stack->layer_weights = (blt_transformer_weights*)blt_arena_alloc(
-        arena, config->num_layers * sizeof(blt_transformer_weights), sizeof(void*));
+    stack->layer_storage = (blt_transformer_layer_storage*)blt_container_alloc(arena, config->num_layers * sizeof(blt_transformer_layer_storage));
+    stack->layer_weights = (blt_transformer_weights*)blt_container_alloc(arena, config->num_layers * sizeof(blt_transformer_weights));
 
     for (size_t l = 0; l < config->num_layers; ++l) {
         blt_transformer_layer_storage* s = &stack->layer_storage[l];
@@ -109,15 +108,13 @@ blt_transformer_stack_grad* blt_transformer_stack_grad_create(
     BLT_REQUIRE(arena != NULL && stack != NULL,
         "blt_transformer_stack_grad_create: arena and stack cannot be NULL");
 
-    blt_transformer_stack_grad* grad = (blt_transformer_stack_grad*)blt_arena_alloc(
-        arena, sizeof(blt_transformer_stack_grad), sizeof(void*));
+    blt_transformer_stack_grad* grad = (blt_transformer_stack_grad*)blt_container_alloc(arena, sizeof(blt_transformer_stack_grad));
 
     size_t embed_dim  = stack->embed_dim;
     size_t hidden_dim = stack->hidden_dim;
     size_t num_layers = stack->num_layers;
 
-    grad->layer_grads = (blt_transformer_layer_grad*)blt_arena_alloc(
-        arena, num_layers * sizeof(blt_transformer_layer_grad), sizeof(void*));
+    grad->layer_grads = (blt_transformer_layer_grad*)blt_container_alloc(arena, num_layers * sizeof(blt_transformer_layer_grad));
 
     for (size_t l = 0; l < num_layers; ++l) {
         blt_transformer_layer_grad* lg = &grad->layer_grads[l];
@@ -225,8 +222,7 @@ blt_transformer_layer_cache* blt_transformer_layer_forward_cached(
     BLT_REQUIRE(x != NULL && w != NULL && cfg != NULL && arena != NULL && out != NULL,
         "blt_transformer_layer_forward_cached: arguments cannot be NULL");
 
-    blt_transformer_layer_cache* cache = (blt_transformer_layer_cache*)blt_arena_alloc(
-        arena, sizeof(blt_transformer_layer_cache), sizeof(void*));
+    blt_transformer_layer_cache* cache = (blt_transformer_layer_cache*)blt_container_alloc(arena, sizeof(blt_transformer_layer_cache));
 
     size_t embed_shape[2] = { seq_len, embed_dim };
     size_t hidden_shape[2] = { seq_len, hidden_dim };
@@ -341,12 +337,10 @@ blt_transformer_stack_cache* blt_transformer_stack_forward_cached(
     BLT_REQUIRE(stack != NULL && x != NULL && call_cfg != NULL && out != NULL && arena != NULL,
         "blt_transformer_stack_forward_cached: arguments cannot be NULL");
 
-    blt_transformer_stack_cache* cache = (blt_transformer_stack_cache*)blt_arena_alloc(
-        arena, sizeof(blt_transformer_stack_cache), sizeof(void*));
+    blt_transformer_stack_cache* cache = (blt_transformer_stack_cache*)blt_container_alloc(arena, sizeof(blt_transformer_stack_cache));
 
     cache->num_layers = stack->num_layers;
-    cache->layers = (blt_transformer_layer_cache**)blt_arena_alloc(
-        arena, stack->num_layers * sizeof(blt_transformer_layer_cache*), sizeof(void*));
+    cache->layers = (blt_transformer_layer_cache**)blt_container_alloc(arena, stack->num_layers * sizeof(blt_transformer_layer_cache*));
 
     blt_tensor cur = *x;
     for (size_t l = 0; l < stack->num_layers; ++l) {

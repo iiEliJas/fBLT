@@ -1,5 +1,6 @@
 #include "blt/models/byte_embedding.h"
 #include "blt/core/backend.h"
+#include "blt/ops/gather_scatter.h"
 
 
 //--------------------------------------------------------------
@@ -41,27 +42,21 @@ void blt_byte_embedding_forward(const blt_byte_embedding* emb, const blt_tensor*
 
     const size_t seq_len = bytes_in->shape[0];
     const size_t embed_dim = emb->embed_dim;
+    (void)seq_len;
+    (void)embed_dim;
 
-    const uint8_t* bytes_data = (const uint8_t*)bytes_in->data;
-    const float* weight_data = (const float*)emb->weight.data;
-    float* out_data = (float*)out->data;
-
-    // ----------------
-    // Gather
-    // Direct lookup: copy embedding row directly to output row i
-    for (size_t i = 0; i < seq_len; ++i) {
-        uint8_t byte_val = bytes_data[i];
-        BLT_REQUIRE(byte_val < emb->vocab_size,
-            "Byte value %u out of bounds for vocab size %zu",
-            byte_val, emb->vocab_size);
-                
-        const float* row_in = weight_data + (size_t)byte_val * embed_dim;
-        float* row_out = out_data + i * embed_dim;
-        
-        for (size_t d = 0; d < embed_dim; ++d) {
-            row_out[d] = row_in[d];
-        }
+    // Ids may live on either backend; the lookup consumes them on the
+    // host side of the dispatched op, so device inputs are staged first.
+    uint8_t* stage = NULL;
+    const uint8_t* ids = bytes_in->data;
+    if (bytes_in->backend != BLT_BACKEND_CPU) {
+        stage = (uint8_t*)malloc(bytes_in->numel);
+        BLT_REQUIRE(stage != NULL, "blt_byte_embedding_forward: staging alloc failed");
+        blt_tensor_download(bytes_in, stage, bytes_in->numel);
+        ids = stage;
     }
+    blt_embedding_lookup(&emb->weight, ids, out);
+    free(stage);
 }
 
 
@@ -97,22 +92,16 @@ void blt_byte_embedding_backward(const blt_byte_embedding* emb, const blt_tensor
 
     const size_t seq_len = bytes_in->shape[0];
 
-    const uint8_t* bytes_data = (const uint8_t*)bytes_in->data;
-    const float* grad_out_data = (const float*)grad_out->data;
-    float* grad_weight_data = (float*)grad_weight->data;
+    (void)seq_len;
 
-    // ----------------
-    // Scatter-Add
-    // For each token accumulate grad_out[i, :] into grad_weight[byte_val, :]
-    for (size_t i = 0; i < seq_len; ++i) {
-        uint8_t byte_val = bytes_data[i];
-        BLT_REQUIRE(byte_val < emb->vocab_size, "Byte value out of bounds for vocab size");
-        
-        const float* row_grad = grad_out_data + i * emb->embed_dim;
-        float* row_target = grad_weight_data + (size_t)byte_val * emb->embed_dim;
-        
-        for (size_t d = 0; d < emb->embed_dim; ++d) {
-            row_target[d] += row_grad[d];
-        }
+    uint8_t* stage = NULL;
+    const uint8_t* ids = bytes_in->data;
+    if (bytes_in->backend != BLT_BACKEND_CPU) {
+        stage = (uint8_t*)malloc(bytes_in->numel);
+        BLT_REQUIRE(stage != NULL, "blt_byte_embedding_backward: staging alloc failed");
+        blt_tensor_download(bytes_in, stage, bytes_in->numel);
+        ids = stage;
     }
+    blt_embedding_scatter_add(grad_weight, ids, grad_out);
+    free(stage);
 }

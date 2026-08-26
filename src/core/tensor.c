@@ -128,3 +128,45 @@ blt_tensor blt_tensor_to_host(const blt_tensor* src, blt_arena* host_arena) {
 #endif
     return dst;
 }
+
+void blt_tensor_upload(blt_tensor* dst, const void* host_src, size_t bytes) {
+    BLT_REQUIRE(dst != NULL && host_src != NULL && dst->data != NULL,
+        "blt_tensor_upload: dst and host_src must be valid");
+    BLT_REQUIRE(bytes <= blt_tensor_bytes(dst),
+        "blt_tensor_upload: byte count exceeds tensor storage");
+
+#ifdef BLT_WITH_CUDA
+    if (dst->backend == BLT_BACKEND_CUDA) {
+        blt_cuda_memcpy_h2d(dst->data, host_src, bytes);
+        return;
+    }
+#endif
+    memcpy(dst->data, host_src, bytes);
+}
+
+void blt_tensor_download(const blt_tensor* src, void* host_dst, size_t bytes) {
+    BLT_REQUIRE(src != NULL && host_dst != NULL && src->data != NULL,
+        "blt_tensor_download: src and host_dst must be valid");
+    BLT_REQUIRE(bytes <= blt_tensor_bytes(src),
+        "blt_tensor_download: byte count exceeds tensor storage");
+
+#ifdef BLT_WITH_CUDA
+    if (src->backend == BLT_BACKEND_CUDA) {
+        blt_cuda_memcpy_d2h(host_dst, src->data, bytes);
+        return;
+    }
+#endif
+    memcpy(host_dst, src->data, bytes);
+}
+
+void* blt_container_alloc_cpu(blt_arena* arena, size_t bytes) {
+    return blt_arena_alloc(arena, bytes, 64);
+}
+
+void* blt_container_alloc_cuda(blt_arena* arena, size_t bytes) {
+    (void)arena;
+    void* p = malloc(bytes);
+    BLT_REQUIRE(p != NULL, "blt_container_alloc: host allocation failed");
+    memset(p, 0, bytes);
+    return p;
+}

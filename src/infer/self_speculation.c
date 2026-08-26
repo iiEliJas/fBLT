@@ -24,15 +24,18 @@
 #include "blt/models/entropy.h"
 #include "blt/models/local_common.h"
 #include "blt/ops/softmax.h"
+#include "blt/ops/vecmath.h"
+#include "blt/ops/row_stats.h"
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 
 #define BLT_SELFSPEC_MAX_PATCHES 4096
 
 
-static uint8_t argmax_byte(const float* row, size_t vocab_size) {
+static uint8_t argmax_byte_host_row(const float* row, size_t vocab_size) {
     size_t best = 0;
     float best_val = row[0];
     for (size_t v = 1; v < vocab_size; v++) {
@@ -42,6 +45,27 @@ static uint8_t argmax_byte(const float* row, size_t vocab_size) {
         }
     }
     return (uint8_t)best;
+}
+#define argmax_byte_host_check(row, vocab) argmax_byte_host_row((row), (vocab))
+static uint8_t argmax_byte_host(const uint32_t ids[1]) {
+    return (uint8_t)ids[0];
+}
+
+// The patcher runs on the host by design (it consumes raw byte/entropy
+// arrays), so a device-resident entropy tensor is staged through host
+// memory here. Returns a malloc'd buffer the caller must free.
+static const blt_tensor* stage_entropy_host(const blt_tensor* vals, blt_tensor* host_view_out,
+                                            float** buf_out) {
+    if (vals->backend == BLT_BACKEND_CPU) {
+        *buf_out = NULL;
+        return vals;
+    }
+    float* buf = (float*)malloc(vals->numel * sizeof(float));
+    BLT_REQUIRE(buf != NULL, "stage_entropy_host: allocation failed");
+    blt_tensor_download(vals, buf, vals->numel * sizeof(float));
+    view_1d(host_view_out, buf, vals->numel, vals->dtype, BLT_BACKEND_CPU);
+    *buf_out = buf;
+    return host_view_out;
 }
 
 
@@ -53,7 +77,7 @@ static void compute_entropy_vals(blt_arena* arena, const blt_entropy_lm* entropy
                                  blt_tensor* entropy_vals_out) {
     size_t bytes_shape[1] = {len};
     blt_tensor bytes_in = blt_tensor_create(arena, bytes_shape, 1, BLT_DTYPE_UINT8);
-    memcpy(bytes_in.data, bytes, len);
+    blt_tensor_upload(&bytes_in, bytes, len);
 
     size_t logits_shape[2] = {len, 256};
     blt_tensor logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
@@ -99,9 +123,16 @@ size_t blt_verify_draft(
     blt_tensor entropy_vals;
     compute_entropy_vals(arena, entropy_model, x, cand_len, &entropy_vals);
 
+    blt_tensor entropy_host_view;
+    float* entropy_host_buf = NULL;
+    const blt_tensor* entropy_for_patcher = stage_entropy_host(&entropy_vals,
+        &entropy_host_view, &entropy_host_buf);
+
     blt_patch_info patches[BLT_SELFSPEC_MAX_PATCHES];
     size_t num_patches = blt_segment_patches(
-        &entropy_vals, x, patches, BLT_SELFSPEC_MAX_PATCHES, patcher_config);
+        entropy_for_patcher, x, patches, BLT_SELFSPEC_MAX_PATCHES, patcher_config);
+    free(entropy_host_buf);
+    entropy_host_buf = NULL;
 
     // Force a patch boundary at the commit point l. Without this, the
     // final prefix patch can absorb draft bytes; its latent o then changes
@@ -140,7 +171,7 @@ size_t blt_verify_draft(
     // -------------------------------------------------------------
     size_t bytes_shape[1] = {cand_len};
     blt_tensor cand_bytes = blt_tensor_create(arena, bytes_shape, 1, BLT_DTYPE_UINT8);
-    memcpy(cand_bytes.data, x, cand_len);
+    blt_tensor_upload(&cand_bytes, x, cand_len);
 
     blt_model_enc_out enc;
     blt_model_encode(model, &cand_bytes, patches, num_patches, NULL, 0, &enc, arena);
@@ -157,7 +188,11 @@ size_t blt_verify_draft(
         stats->nfe_decoder++;
     }
 
-    const float* rows = (const float*)logits.data;
+    // Verification argmaxes run against a host copy of the logits.
+    float* logits_host = (float*)malloc(logits.numel * sizeof(float));
+    BLT_REQUIRE(logits_host != NULL, "blt_verify_draft: failed to stage logits");
+    blt_tensor_download(&logits, logits_host, logits.numel * sizeof(float));
+    const float* rows = logits_host;
 
     // -------------------------------------------------------------
     // Algorithm 2 lines 3-9: accept until first mismatch, else free byte.
@@ -168,12 +203,13 @@ size_t blt_verify_draft(
     // byte y_{l+r-1} extends the sequence by one more (budget permitting).
     // -------------------------------------------------------------
     for (size_t p = l; p < cand_len; p++) {
-        uint8_t pred = argmax_byte(rows + (p - 1) * vocab_size, vocab_size);
+        uint8_t pred = argmax_byte_host_check(rows + (p - 1) * vocab_size, vocab_size);
         if (x[p] != pred) {
             x[p] = pred;                     // reject drafted byte; replace first mismatch
             if (stats != NULL) {
                 stats->bytes_accepted += p - l;
             }
+            free(logits_host);
             return p + 1;
         }
     }
@@ -183,9 +219,11 @@ size_t blt_verify_draft(
         stats->bytes_accepted += r;
     }
     if (cand_len < target_len) {
-        x[cand_len] = argmax_byte(rows + (cand_len - 1) * vocab_size, vocab_size);   // free byte
+        x[cand_len] = argmax_byte_host_check(rows + (cand_len - 1) * vocab_size, vocab_size);   // free byte
+        free(logits_host);
         return cand_len + 1;
     }
+    free(logits_host);
     return cand_len;
 }
 
@@ -216,7 +254,8 @@ static uint8_t prefill_argmax(draft_ctx* d, const blt_model_enc_out* enc,
 
     size_t d0_shape[2] = {n, E};
     blt_tensor d0 = blt_tensor_create(arena, d0_shape, 2, BLT_DTYPE_FP32);
-    memcpy(d0.data, (float*)enc->byte_hidden_out.data + from_row * E, n * E * sizeof(float));
+    blt_strided_copy(enc->byte_hidden_out.backend, (float*)d0.data, E,
+                     (const float*)enc->byte_hidden_out.data + from_row * E, E, n, E);
 
     size_t logits_shape[2] = {n, V};
     blt_tensor logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
@@ -225,7 +264,11 @@ static uint8_t prefill_argmax(draft_ctx* d, const blt_model_enc_out* enc,
         stats->nfe_decoder++;
     }
 
-    return argmax_byte((const float*)logits.data + (n - 1) * V, V);
+    blt_tensor last_row;
+    blt_tensor_view_2d(&last_row, (float*)logits.data + (n - 1) * V, 1, V, logits.backend);
+    uint32_t ids[1];
+    blt_argmax_rows(&last_row, ids);
+    return argmax_byte_host(ids);
 }
 
 // One single-row drafting step: processes the row at absolute position
@@ -248,9 +291,9 @@ static uint8_t draft_step(draft_ctx* d, const blt_model_enc_out* enc,
 
     if (mode == BLT_D0_LEARNED) {
         const uint32_t token = (uint32_t)draft[m - 1];
-        memcpy(d0.data,
-            (float*)d->model->decoder->d0_embed_weight.data + token * E,
-            E * sizeof(float));
+        const blt_tensor* table = &d->model->decoder->d0_embed_weight;
+        blt_strided_copy(table->backend, (float*)d0.data, E,
+                         (const float*)table->data + token * E, E, 1, E);
     }
 
     size_t logits_shape[2] = {1, V};
@@ -260,7 +303,9 @@ static uint8_t draft_step(draft_ctx* d, const blt_model_enc_out* enc,
         stats->nfe_decoder++;
     }
 
-    return argmax_byte((const float*)logits.data, V);
+    uint32_t ids[1];
+    blt_argmax_rows(&logits, ids);
+    return argmax_byte_host(ids);
 }
 
 
@@ -311,16 +356,23 @@ void blt_generate_greedy_selfspec(
         blt_tensor entropy_vals;
         compute_entropy_vals(arena, entropy_model, output_bytes, l, &entropy_vals);
 
+        blt_tensor entropy_host_view;
+        float* entropy_host_buf = NULL;
+        const blt_tensor* entropy_for_patcher = stage_entropy_host(&entropy_vals,
+            &entropy_host_view, &entropy_host_buf);
+
         blt_patch_info patches[BLT_SELFSPEC_MAX_PATCHES];
         size_t num_patches = blt_segment_patches(
-            &entropy_vals, output_bytes, patches, BLT_SELFSPEC_MAX_PATCHES, patcher_config);
+            entropy_for_patcher, output_bytes, patches, BLT_SELFSPEC_MAX_PATCHES, patcher_config);
+        free(entropy_host_buf);
+        entropy_host_buf = NULL;
 
         // -------------------------------------------------------------
         // 2. Freeze the latents (one encoder+global pass)
         // -------------------------------------------------------------
         size_t bytes_shape[1] = {l};
         blt_tensor prefix_bytes = blt_tensor_create(arena, bytes_shape, 1, BLT_DTYPE_UINT8);
-        memcpy(prefix_bytes.data, output_bytes, l);
+        blt_tensor_upload(&prefix_bytes, output_bytes, l);
 
         blt_model_enc_out enc;
         blt_model_encode(model, &prefix_bytes, patches, num_patches, NULL, 0, &enc, arena);

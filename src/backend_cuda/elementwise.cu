@@ -144,3 +144,19 @@ extern "C" void blt_swiglu_backward_cuda(const blt_tensor* grad_out, const blt_t
         (float*)grad_gate->data, (float*)grad_up->data, gate->numel);
     blt_cuda_sync_check("blt_swiglu_backward");
 }
+
+__global__ void blt_scaled_copy_kernel(float* dst, const float* src, float scalar, size_t n) {
+    size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+    size_t stride = (size_t)gridDim.x * blockDim.x;
+    for (; i < n; i += stride) {
+        dst[i] = scalar * src[i];
+    }
+}
+
+extern "C" void blt_scaled_copy_cuda(blt_tensor* dst, const blt_tensor* src, float scalar) {
+    BLT_REQUIRE(dst->backend == BLT_BACKEND_CUDA && src->backend == BLT_BACKEND_CUDA,
+                "blt_scaled_copy: CUDA implementation called with non-CUDA tensors");
+    blt_scaled_copy_kernel<<<blt_cuda_grid(dst->numel), 256>>>(
+        (float*)dst->data, (const float*)src->data, scalar, dst->numel);
+    blt_cuda_sync_check("blt_scaled_copy");
+}

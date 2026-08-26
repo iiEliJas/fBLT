@@ -55,7 +55,7 @@ void blt_generate_greedy(
         // -------------------------------------------------------------
         size_t bytes_shape[1] = {cur_len};
         blt_tensor bytes_in = blt_tensor_create(arena, bytes_shape, 1, BLT_DTYPE_UINT8);
-        memcpy(bytes_in.data, output_bytes, cur_len);
+        blt_tensor_upload(&bytes_in, output_bytes, cur_len);
 
         size_t entropy_logits_shape[2] = {cur_len, 256};
         blt_tensor entropy_logits = blt_tensor_create(arena, entropy_logits_shape, 2, BLT_DTYPE_FP32);
@@ -74,10 +74,24 @@ void blt_generate_greedy(
 
         // -------------------------------------------------------------
         // 2. Segment the current sequence into patches
+        //
+        // The patcher is host-side control logic, so it consumes a host
+        // copy of the entropy signal regardless of the model backend.
         // -------------------------------------------------------------
+        // Host staging (plain malloc: the scratch arena may be device
+        // memory, which is not host-writable).
+        float* entropy_host = (float*)malloc(cur_len * sizeof(float));
+        BLT_REQUIRE(entropy_host != NULL,
+                    "blt_generate_greedy: staging alloc failed");
+        blt_tensor_download(&entropy_vals, entropy_host, cur_len * sizeof(float));
+        blt_tensor entropy_host_view;
+        view_1d(&entropy_host_view, entropy_host, cur_len, BLT_DTYPE_FP32,
+                BLT_BACKEND_CPU);
+
         blt_patch_info patches[BLT_GENERATE_MAX_PATCHES];
         size_t num_patches = blt_segment_patches(
-            &entropy_vals, output_bytes, patches, BLT_GENERATE_MAX_PATCHES, patcher_config);
+            &entropy_host_view, output_bytes, patches, BLT_GENERATE_MAX_PATCHES, patcher_config);
+        free(entropy_host);
 
         // -------------------------------------------------------------
         // 3. Full encoder-global-decoder forward pass (single document)
@@ -92,8 +106,15 @@ void blt_generate_greedy(
         // -------------------------------------------------------------
         // 4. Greedy argmax of the last position's logits
         // -------------------------------------------------------------
-        const float* last_row = (const float*)model_logits.data + (cur_len - 1) * vocab_size;
+        float* last_row = (float*)malloc(vocab_size * sizeof(float));
+        BLT_REQUIRE(last_row != NULL, "blt_generate_greedy: staging alloc failed");
+        blt_tensor last_row_view;
+        view_1d(&last_row_view,
+                (float*)model_logits.data + (cur_len - 1) * vocab_size,
+                vocab_size, BLT_DTYPE_FP32, model_logits.backend);
+        blt_tensor_download(&last_row_view, last_row, vocab_size * sizeof(float));
         uint8_t next_byte = argmax_byte(last_row, vocab_size);
+        free(last_row);
 
         output_bytes[cur_len] = next_byte;
         cur_len++;

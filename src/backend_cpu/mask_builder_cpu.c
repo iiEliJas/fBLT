@@ -57,17 +57,27 @@ void blt_build_attention_mask_cpu(const blt_mask_config* config, blt_tensor* out
         for (size_t j = 0; j < seq_len_kv; j++) {
             bool allowed = true;
 
-            // 1. Causal check
-            if (config->is_causal && j > i) {
+            // 1. Causal check (with optional offset for cached prefixes)
+            if (config->is_causal && j > i + config->causal_offset) {
                 allowed = false;
             }
 
-            // 2. Sliding window check
+            // 2. Sliding window check. With a causal offset (cached prefix)
+            // the distance is measured from the offset diagonal, matching
+            // absolute positions in incremental decode.
             if (config->sliding_window > 0) {
-                ptrdiff_t diff = (ptrdiff_t)i - (ptrdiff_t)j;
-                if (diff < 0) diff = -diff;
-                if ((size_t)diff >= config->sliding_window) {
-                    allowed = false;
+                if (config->is_causal) {
+                    const size_t diag = i + config->causal_offset;
+                    size_t back = diag >= j ? diag - j : j - diag;
+                    if (back >= config->sliding_window) {
+                        allowed = false;
+                    }
+                } else {
+                    ptrdiff_t diff = (ptrdiff_t)i - (ptrdiff_t)j;
+                    if (diff < 0) diff = -diff;
+                    if ((size_t)diff >= config->sliding_window) {
+                        allowed = false;
+                    }
                 }
             }
 

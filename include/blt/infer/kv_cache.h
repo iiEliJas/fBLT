@@ -66,8 +66,13 @@ typedef struct {
 
 
 // Allocates zeroed K/V buffers for every layer plus bookkeeping storage.
+// Tensor payloads come from `arena` (either backend); container metadata
+// lives on the host heap.
 blt_kv_cache* blt_kv_cache_create(blt_arena* arena, const blt_local_decoder* decoder,
                                   size_t max_seq_len);
+
+// Frees the cache's host-side container. Tensor payloads die with the arena.
+void blt_kv_cache_destroy(blt_kv_cache* cache);
 
 // Invalidates everything (lengths -> 0). Buffer contents stay as-is.
 void blt_kv_cache_reset(blt_kv_cache* cache);

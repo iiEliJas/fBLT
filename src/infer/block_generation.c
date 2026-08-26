@@ -220,10 +220,14 @@ size_t blt_draft_block(
             patches, num_patches, &batch, config->d0_mode, &logits, scratch);
         nfes++;
 
-        // Per-cell statistics and predictions from this pass.
+        // Per-cell statistics and predictions from this pass. Row analysis
+        // and sampling run on a host copy of the logits.
+        float* rows_host = (float*)malloc(logits.numel * sizeof(float));
+        BLT_REQUIRE(rows_host != NULL, "blockgen: logits staging alloc failed");
+        blt_tensor_download(&logits, rows_host, logits.numel * sizeof(float));
         float conf[BLT_BLOCKGEN_MAX_B], ent[BLT_BLOCKGEN_MAX_B];
         uint8_t pred[BLT_BLOCKGEN_MAX_B];
-        const float* rows = (const float*)logits.data;
+        const float* rows = rows_host;
         for (size_t b = 0; b < B; b++) {
             const float* row = rows + (prefix_len + b) * V;
             row_stats st;
@@ -238,6 +242,7 @@ size_t blt_draft_block(
         const uint32_t sel = (config->opts.strategy == BLT_UNMASK_CONFIDENCE)
             ? blt_unmask_select_confidence(conf, masked, B, config->opts.threshold)
             : blt_unmask_select_eb(ent, masked, B, config->opts.threshold);
+        free(rows_host);
 
         int any = 0;
         for (size_t b = 0; b < B; b++) {
@@ -274,7 +279,7 @@ static void segment_prefix(blt_arena* arena, const blt_entropy_lm* entropy_model
     // drafting and verification always agree on patch boundaries.
     size_t shape1[1] = {len};
     blt_tensor bytes_in = blt_tensor_create(arena, shape1, 1, BLT_DTYPE_UINT8);
-    memcpy(bytes_in.data, bytes, len);
+    blt_tensor_upload(&bytes_in, bytes, len);
 
     size_t logits_shape[2] = {len, 256};
     blt_tensor logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
@@ -292,8 +297,20 @@ static void segment_prefix(blt_arena* arena, const blt_entropy_lm* entropy_model
     blt_entropy_config entropy_cfg = {.vocab_size = 256, .use_log2 = false};
     blt_compute_entropy(&probs, &ent_tensor, &entropy_cfg);
 
-    *num_patches_out = blt_segment_patches(&ent_tensor, bytes, patches,
+    // The patcher is host-only: stage device entropies through host memory.
+    if (ent_tensor.backend == BLT_BACKEND_CPU) {
+        *num_patches_out = blt_segment_patches(&ent_tensor, bytes, patches,
+                                               max_patches, patcher_config);
+        return;
+    }
+    float* ent_host = (float*)malloc(len * sizeof(float));
+    BLT_REQUIRE(ent_host != NULL, "segment_for_generation: staging alloc failed");
+    blt_tensor_download(&ent_tensor, ent_host, len * sizeof(float));
+    blt_tensor ent_view;
+    view_1d(&ent_view, ent_host, len, BLT_DTYPE_FP32, BLT_BACKEND_CPU);
+    *num_patches_out = blt_segment_patches(&ent_view, bytes, patches,
                                            max_patches, patcher_config);
+    free(ent_host);
 }
 
 static void generate_common(
@@ -340,7 +357,7 @@ static void generate_common(
 
         size_t shape1[1] = {l};
         blt_tensor prefix_bytes = blt_tensor_create(scratch, shape1, 1, BLT_DTYPE_UINT8);
-        memcpy(prefix_bytes.data, output_bytes, l);
+        blt_tensor_upload(&prefix_bytes, output_bytes, l);
 
         blt_model_enc_out enc;
         blt_model_encode(model, &prefix_bytes, patches, num_patches, NULL, 0, &enc, scratch);

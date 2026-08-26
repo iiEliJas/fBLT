@@ -136,3 +136,18 @@ void blt_swiglu_backward_cpu(const blt_tensor* grad_out, const blt_tensor* gate,
         gu[i] = go[i] * silu;
     }
 }
+
+void blt_scaled_copy_cpu(blt_tensor* dst, const blt_tensor* src, float scalar) {
+    BLT_REQUIRE(dst != NULL && src != NULL, "blt_scaled_copy: tensors must not be null");
+    BLT_REQUIRE(dst->dtype == BLT_DTYPE_FP32 && src->dtype == BLT_DTYPE_FP32,
+                "blt_scaled_copy: only supports FP32 tensors");
+    BLT_REQUIRE(dst->numel == src->numel, "blt_scaled_copy: element count mismatch");
+    BLT_REQUIRE(dst->backend == BLT_BACKEND_CPU && src->backend == BLT_BACKEND_CPU,
+                "blt_scaled_copy: CPU implementation called with non-CPU tensors");
+
+    const float* s_data = (const float*)src->data;
+    float* d_data = (float*)dst->data;
+    for (size_t i = 0; i < dst->numel; ++i) {
+        d_data[i] = scalar * s_data[i];
+    }
+}

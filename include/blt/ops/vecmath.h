@@ -30,4 +30,11 @@ void blt_softmax_masked_row_inplace(
     blt_backend backend, float* row, size_t row_len, size_t row_idx,
     bool is_causal, const float* mask_row, float scale);
 
+// blt_strided_copy: copies a rows x cols element tile between strided fp32
+// buffers (row strides in elements). Handles the QKV head-slice gather and
+// cache-row scatter patterns that used to be memcpy loops in model code.
+void blt_strided_copy(blt_backend backend, float* dst, size_t dst_stride,
+                      const float* src, size_t src_stride,
+                      size_t rows, size_t cols);
+
 #endif // BLT_OPS_VECMATH_H

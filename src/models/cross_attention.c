@@ -9,6 +9,9 @@
 #include "blt/core/backend.h"
 #include "blt/core/tensor.h"
 #include "blt/core/allocator.h"
+#include "blt/ops/attn_core.h"
+#include <stdlib.h>
+#include <stdio.h>
 #include "blt/ops/matmul.h"
 #include "blt/ops/vecmath.h"
 #include "blt/ops/elementwise.h"
@@ -95,38 +98,26 @@ static void cross_attention_head(blt_backend backend, const float* q_data, const
     BLT_REQUIRE(mask != NULL, "blt_cross_attention: attention mask is required (block-diagonal patch mask)");
     size_t head_offset = head_idx * head_dim;
 
-    for (size_t i = 0; i < num_patches; ++i) {
-        const float* q_i = q_data + i * embed_dim + head_offset;
-        float* scores_i = scores_buf + i * seq_len;
+    blt_attention_head_args a;
+    memset(&a, 0, sizeof(a));
+    a.q = q_data + head_offset;
+    a.q_stride = embed_dim;
+    a.k = k_data + head_offset;
+    a.k_stride = embed_dim;
+    a.v = v_data + head_offset;
+    a.v_stride = embed_dim;
+    a.combined = combined_out;
+    a.combined_stride = embed_dim;
+    a.combined_col_offset = head_offset;
+    a.weights_out = scores_buf;   // doubles as the backward cache when requested
+    a.mask = mask;                // [num_patches * seq_len] additive
+    a.nq = num_patches;
+    a.nk = seq_len;
+    a.head_dim = head_dim;
+    a.is_causal = false;          // dense group mask fully defines visibility
+    a.scale = scale;
 
-        for (size_t j = 0; j < seq_len; ++j) {
-            const float* k_j = k_data + j * embed_dim + head_offset;
-            scores_i[j] = blt_vec_dot(backend, q_i, k_j, head_dim);
-        }
-
-        const float* mask_row = mask + i * seq_len;
-        blt_softmax_masked_row_inplace(backend, scores_i, seq_len, i, false, mask_row, scale);
-    }
-
-    for (size_t i = 0; i < num_patches; ++i) {
-        float* out_i = combined_out + i * embed_dim + head_offset;
-        const float* scores_i = scores_buf + i * seq_len;
-
-        for (size_t d = 0; d < head_dim; ++d) {
-            out_i[d] = 0.0f;
-        }
-
-        for (size_t j = 0; j < seq_len; ++j) {
-            float weight = scores_i[j];
-            if (weight == 0.0f) {
-                continue;
-            }
-            const float* v_j = v_data + j * embed_dim + head_offset;
-            for (size_t d = 0; d < head_dim; ++d) {
-                out_i[d] += weight * v_j[d];
-            }
-        }
-    }
+    blt_attention_head_core(backend, &a);
 }
 
 
@@ -182,7 +173,7 @@ void blt_cross_attention_forward(
     float* combined_data = (float*)blt_arena_alloc(arena, q_numel * sizeof(float), sizeof(float));
     float* scores_buf = (float*)blt_arena_alloc(arena, scores_numel * sizeof(float), sizeof(float));
 
-    memset(combined_data, 0, q_numel * sizeof(float));
+    { blt_tensor zt; blt_tensor_view_2d(&zt, combined_data, q_numel, 1, query_in->backend); zero_tensor(&zt); }
 
 
     // -----------------------------------------------------------------
@@ -265,7 +256,7 @@ static void attn_bwd_recompute_forward(
     cache->v_data = (float*)blt_arena_alloc(arena, kv_numel * sizeof(float), sizeof(float));
     cache->combined_data = (float*)blt_arena_alloc(arena, q_numel * sizeof(float), sizeof(float));
     cache->weights_all = (float*)blt_arena_alloc(arena, weights_numel * sizeof(float), sizeof(float));
-    memset(cache->combined_data, 0, q_numel * sizeof(float));
+    { blt_tensor zt; blt_tensor_view_2d(&zt, cache->combined_data, q_numel, 1, query_in->backend); zero_tensor(&zt); }
 
     blt_tensor q_tensor, k_tensor, v_tensor;
     blt_tensor_view_2d(&q_tensor, cache->q_data, num_patches, embed_dim, query_in->backend);
@@ -369,76 +360,40 @@ void blt_cross_attention_backward(
     float* grad_q_data = (float*)blt_arena_alloc(arena, num_patches * embed_dim * sizeof(float), sizeof(float));
     float* grad_k_data = (float*)blt_arena_alloc(arena, seq_len * embed_dim * sizeof(float), sizeof(float));
     float* grad_v_data = (float*)blt_arena_alloc(arena, seq_len * embed_dim * sizeof(float), sizeof(float));
-    memset(grad_q_data, 0, num_patches * embed_dim * sizeof(float));
-    memset(grad_k_data, 0, seq_len * embed_dim * sizeof(float));
-    memset(grad_v_data, 0, seq_len * embed_dim * sizeof(float));
+    { blt_tensor zt; blt_tensor_view_2d(&zt, grad_q_data, num_patches * embed_dim, 1, query_in->backend); zero_tensor(&zt); }
+    { blt_tensor zt; blt_tensor_view_2d(&zt, grad_k_data, seq_len * embed_dim, 1, query_in->backend); zero_tensor(&zt); }
+    { blt_tensor zt; blt_tensor_view_2d(&zt, grad_v_data, seq_len * embed_dim, 1, query_in->backend); zero_tensor(&zt); }
 
-    float* grad_w_buf = (float*)blt_arena_alloc(arena, num_patches * seq_len * sizeof(float), sizeof(float));
     float* grad_scores_buf = (float*)blt_arena_alloc(arena, num_patches * seq_len * sizeof(float), sizeof(float));
 
     for (size_t head = 0; head < num_heads; head++) {
         size_t head_offset = head * head_dim;
-        const float* W = cache.weights_all + head * num_patches * seq_len;
 
-        // grad_v_j[d] = sum_i W[i][j] * grad_out_head[i][d]
-        // grad_W[i][j] = sum_d grad_out_head[i][d] * v_j[d]
-        memset(grad_w_buf, 0, num_patches * seq_len * sizeof(float));
-        for (size_t i = 0; i < num_patches; i++) {
-            const float* go_i = grad_combined_data + i * embed_dim + head_offset;
-            const float* w_i = W + i * seq_len;
-            float* gw_i = grad_w_buf + i * seq_len;
-            for (size_t j = 0; j < seq_len; j++) {
-                float wgt = w_i[j];
-                const float* v_j = cache.v_data + j * embed_dim + head_offset;
-                float dot = 0.0f;
-                for (size_t d = 0; d < head_dim; d++) {
-                    dot += go_i[d] * v_j[d];
-                }
-                gw_i[j] = dot;
+        blt_attention_head_bwd_args a;
+        memset(&a, 0, sizeof(a));
+        a.q = cache.q_data + head_offset;
+        a.q_stride = embed_dim;
+        a.k = cache.k_data + head_offset;
+        a.k_stride = embed_dim;
+        a.v = cache.v_data + head_offset;
+        a.v_stride = embed_dim;
+        a.weights = cache.weights_all + head * num_patches * seq_len;
+        a.grad_combined = grad_combined_data;
+        a.gc_stride = embed_dim;
+        a.gc_col_offset = head_offset;
+        a.scores_scratch = grad_scores_buf;
+        a.grad_q = grad_q_data + head_offset;
+        a.gq_stride = embed_dim;
+        a.grad_k = grad_k_data + head_offset;
+        a.gk_stride = embed_dim;
+        a.grad_v = grad_v_data + head_offset;
+        a.gv_stride = embed_dim;
+        a.nq = num_patches;
+        a.nk = seq_len;
+        a.head_dim = head_dim;
+        a.scale = scale;
 
-                if (wgt != 0.0f) {
-                    float* gv_j = grad_v_data + j * embed_dim + head_offset;
-                    for (size_t d = 0; d < head_dim; d++) {
-                        gv_j[d] += wgt * go_i[d];
-                    }
-                }
-            }
-        }
-
-        // Softmax backward, per row
-        for (size_t i = 0; i < num_patches; i++) {
-            const float* w_i = W + i * seq_len;
-            const float* gw_i = grad_w_buf + i * seq_len;
-            float* gs_i = grad_scores_buf + i * seq_len;
-            float dot = 0.0f;
-            for (size_t j = 0; j < seq_len; j++) {
-                dot += gw_i[j] * w_i[j];
-            }
-            for (size_t j = 0; j < seq_len; j++) {
-                gs_i[j] = w_i[j] * (gw_i[j] - dot);
-            }
-        }
-
-        // Backward through scores = scale * Q @ K^T
-        // grad_q_i[d] += scale * sum_j grad_scores[i][j] * k_j[d]
-        // grad_k_j[d] += scale * sum_i grad_scores[i][j] * q_i[d]
-        for (size_t i = 0; i < num_patches; i++) {
-            const float* gs_i = grad_scores_buf + i * seq_len;
-            float* gq_i = grad_q_data + i * embed_dim + head_offset;
-            const float* q_i = cache.q_data + i * embed_dim + head_offset;
-            for (size_t j = 0; j < seq_len; j++) {
-                float gscore = gs_i[j];
-                if (gscore == 0.0f) {
-                    continue;
-                }
-                const float* k_j = cache.k_data + j * embed_dim + head_offset;
-                float* gk_j = grad_k_data + j * embed_dim + head_offset;
-                for (size_t d = 0; d < head_dim; d++) {
-                    gq_i[d] += scale * gscore * k_j[d];
-                    gk_j[d] += scale * gscore * q_i[d];
-                }
-            }
-        }
+        blt_attention_head_core_backward(query_in->backend, &a);
     }
 
     // ---- Step 5: backward through the input projections ----

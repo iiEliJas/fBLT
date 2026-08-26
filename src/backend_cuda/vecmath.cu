@@ -3,6 +3,8 @@
 
 #include <cuda_runtime.h>
 #include <math.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 // One block reduces one dot product: strided partial sums in shared memory,
 // then a deterministic tree reduction. Block size is fixed so the summation
@@ -110,5 +112,41 @@ extern "C" void blt_softmax_masked_row_inplace_cuda(
     }
     if (err != cudaSuccess) {
         BLT_FATAL("blt_softmax_masked_row_inplace: kernel failed: %s", cudaGetErrorString(err));
+    }
+}
+
+__global__ void blt_strided_copy_kernel(float* dst, size_t dst_stride,
+                                        const float* src, size_t src_stride,
+                                        size_t rows, size_t cols) {
+    const size_t work = rows * cols;
+    for (size_t off = (size_t)blockIdx.x * blockDim.x + threadIdx.x; off < work;
+         off += (size_t)gridDim.x * blockDim.x) {
+        const size_t r = off / cols;
+        dst[r * dst_stride + (off % cols)] = src[r * src_stride + (off % cols)];
+    }
+}
+
+extern "C" void blt_strided_copy_cuda(blt_backend backend, float* dst, size_t dst_stride,
+                                      const float* src, size_t src_stride,
+                                      size_t rows, size_t cols) {
+    (void)backend;
+    BLT_REQUIRE(backend == BLT_BACKEND_CUDA, "blt_strided_copy: CUDA implementation called with non-CUDA backend");
+    {
+        static int dump = -1;
+        if (dump < 0) { dump = getenv("BLT_KVDBG") ? 1 : 0; }
+        if (dump) fprintf(stderr, "[SC] dst=%p dstr=%zu src=%p sstr=%zu rows=%zu cols=%zu\n",
+                          (void*)dst, dst_stride, (const void*)src, src_stride, rows, cols);
+    }
+    const size_t work = rows * cols;
+    unsigned blocks = (unsigned)((work + 255) / 256);
+    if (blocks > 4096) blocks = 4096;
+    if (blocks == 0) blocks = 1;
+    blt_strided_copy_kernel<<<blocks, 256>>>(dst, dst_stride, src, src_stride, rows, cols);
+    cudaError_t err = cudaGetLastError();
+    if (err == cudaSuccess) {
+        err = cudaDeviceSynchronize();
+    }
+    if (err != cudaSuccess) {
+        BLT_FATAL("blt_strided_copy: kernel failed: %s", cudaGetErrorString(err));
     }
 }

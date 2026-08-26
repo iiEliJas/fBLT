@@ -1,4 +1,6 @@
 #include "blt/core/backend.h"
+#include "blt/core/allocator.h"
+#include "blt/ops/vecmath.h"
 #include "blt/models/global_transformer.h"
 #include "blt/models/transformer_stack.h"
 #include "blt/ops/elementwise.h"
@@ -21,8 +23,7 @@ static blt_transformer_config make_patch_layer_config(
     blt_transformer_config cfg = blt_transformer_stack_call_config(
         &model->stack, num_patches, cos_view, sin_view);
 
-    blt_mask_config* mask_cfg = (blt_mask_config*)blt_arena_alloc(
-        arena, sizeof(blt_mask_config), sizeof(void*));
+    blt_mask_config* mask_cfg = (blt_mask_config*)blt_container_alloc(arena, sizeof(blt_mask_config));
     *mask_cfg = (blt_mask_config){0};
 
     mask_cfg->seq_len_q = num_patches;
@@ -49,8 +50,7 @@ blt_global_transformer* blt_global_transformer_create(blt_arena* arena, const bl
     BLT_REQUIRE(arena != NULL && config != NULL,
         "blt_global_transformer_create: arena and config cannot be NULL");
 
-    blt_global_transformer* model = (blt_global_transformer*)blt_arena_alloc(
-        arena, sizeof(blt_global_transformer), sizeof(void*));
+    blt_global_transformer* model = (blt_global_transformer*)blt_container_alloc(arena, sizeof(blt_global_transformer));
     model->config = *config;
 
     // No embedding table and no LM head here 
@@ -74,8 +74,7 @@ blt_global_transformer_grad* blt_global_transformer_grad_create(blt_arena* arena
     BLT_REQUIRE(arena != NULL && model != NULL,
         "blt_global_transformer_grad_create: arena and model cannot be NULL");
 
-    blt_global_transformer_grad* grad = (blt_global_transformer_grad*)blt_arena_alloc(
-        arena, sizeof(blt_global_transformer_grad), sizeof(void*));
+    blt_global_transformer_grad* grad = (blt_global_transformer_grad*)blt_container_alloc(arena, sizeof(blt_global_transformer_grad));
 
     grad->stack_grad = blt_transformer_stack_grad_create(arena, &model->stack);
 
@@ -135,7 +134,8 @@ void blt_global_transformer_forward(
     blt_transformer_stack_forward(&model->stack, patch_in, &layer_cfg, num_patches, &x, arena);
 
     // Final layers output is patch_out directly — no output projection
-    memcpy(patch_out->data, x.data, blt_tensor_bytes(&x));
+    blt_strided_copy(x.backend, (float*)patch_out->data, x.numel,
+                    (const float*)x.data, x.numel, 1, x.numel);
 }
 
 
@@ -200,5 +200,6 @@ void blt_global_transformer_backward(
 
     BLT_REQUIRE(grad_x.ndim == 2 && grad_x.shape[0] == num_patches && grad_x.shape[1] == embed_dim,
         "blt_global_transformer_backward: internal shape mismatch on grad_patch_in");
-    memcpy(grad_patch_in->data, grad_x.data, blt_tensor_bytes(&grad_x));
+    blt_strided_copy(grad_x.backend, (float*)grad_patch_in->data, grad_x.numel,
+                    (const float*)grad_x.data, grad_x.numel, 1, grad_x.numel);
 }
