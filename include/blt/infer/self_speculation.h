@@ -54,6 +54,37 @@ size_t blt_verify_draft(
     blt_arena* arena
 );
 
+// Boundary-aligned variant of blt_verify_draft (Stage 6 add-on).
+//
+// Same verify pass (natural segmentation of the candidate, no forced split
+// at the commit point), but commitment is cut back to the largest natural
+// patch boundary in (l, verified_len]. Draft bytes past that boundary are
+// discarded and re-drafted next round. This mirrors the training-time block
+// construction (blocks start at patch starts) and keeps every commit point
+// on a boundary the patcher reproduces in longer contexts. When the verified
+// range contains no boundary, exactly one byte is committed from the row
+// prediction at l (progress rule).
+//
+// Returns the new committed length (in [l+1, l+r+1]).
+size_t blt_verify_draft_aligned(
+    const blt_model* model,
+    const blt_entropy_lm* entropy_model,
+    const blt_patcher_config* patcher_config,
+    uint8_t* x,
+    size_t l,
+    size_t r,
+    size_t target_len,
+    blt_infer_stats* stats,              // nullable
+    blt_arena* arena
+);
+
+// Largest natural patch end e with lo < e <= hi over the patch array;
+// returns 0 when no such boundary exists. Pure helper behind the
+// boundary-aligned commit rule (unit-testable without a model).
+size_t blt_aligned_commit_select(const blt_patch_info* patches,
+                                 size_t num_patches,
+                                 size_t lo, size_t hi);
+
 
 // Greedy generation with BLT self-speculation (Fast-BLT 5.1).
 //

@@ -70,6 +70,7 @@ int main(void) {
         {"blockgen select kernels", run_blockgen_select_kernels},
         {"blockgen draft behavior", run_blockgen_draft_behavior},
         {"blockgen generation gates", run_blockgen_generation_gates},
+        {"blockgen stage6 helpers", run_blockgen_stage6_helpers},
         {"block diffusion mask fixture", run_block_diffusion_mask_fixture},
         {"block diffusion gradcheck", run_block_diffusion_gradcheck},
         {"block diffusion overfit gate", run_block_diffusion_overfit_gate},

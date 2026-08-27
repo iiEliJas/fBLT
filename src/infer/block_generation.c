@@ -137,6 +137,26 @@ static uint8_t row_sample_top_p(const float* row, size_t V, float top_p,
 }
 
 //----------------------------------------------------------------------
+// Adaptive-B rule (rolling acceptance -> next block size)
+//----------------------------------------------------------------------
+
+size_t blt_block_adapt_b(size_t cur_b, double rolling_acceptance,
+                         size_t b_min, size_t b_max, float target) {
+    if (b_max == 0 || b_max < b_min) return cur_b;
+    size_t lo = b_min ? b_min : 1;
+    if (lo > b_max) lo = b_max;
+    size_t b = cur_b < lo ? lo : cur_b;
+    b = b > b_max ? b_max : b;
+    if (!(rolling_acceptance >= 0.0)) return b;   // NaN: no history yet
+    if (rolling_acceptance > (double)(target + BLT_ADAPT_B_MARGIN)) {
+        if (b < b_max) b++;
+    } else if (rolling_acceptance < (double)(target - BLT_ADAPT_B_MARGIN)) {
+        if (b > lo) b--;
+    }
+    return b;
+}
+
+//----------------------------------------------------------------------
 // blt_draft_block: Algorithm 1 inner loop
 //----------------------------------------------------------------------
 
@@ -333,15 +353,35 @@ static void generate_common(
     const size_t target_len = prompt_len + max_new_bytes;
     BLT_REQUIRE(target_len <= model->config.decoder_config.max_seq_len,
         "blockdiff generation: total length exceeds decoder max_seq_len");
+    // The verification model may differ from the drafting model, but both
+    // must cover the same sequence budget.
+    const blt_model* verifier = config->verifier_model ? config->verifier_model : model;
+    BLT_REQUIRE(target_len <= verifier->config.decoder_config.max_seq_len,
+        "blockdiff generation: target length exceeds verifier max_seq_len");
 
     memcpy(output_bytes, prompt_bytes, prompt_len);
     size_t l = prompt_len;
 
+    // Adaptive-B rolling state.
+    const int adaptive = (do_verify && config->B_max > 0 &&
+                          config->adapt_window > 0);
+    size_t cur_B = config->block_size;
+    double acc_hist[64];
+    size_t hist_len = 0, hist_pos = 0;
+    if (config->adapt_window > 64) {
+        BLT_FATAL("blockdiff generation: adapt_window must be <= 64");
+    }
+
+    // Per-round view of the config carrying the current block size into
+    // the Algorithm 1 inner loop.
+    blt_block_gen_config rcfg = *config;
+
     while (l < target_len) {
         const size_t round_marker = scratch->offset;
 
-        size_t B = config->block_size;
+        size_t B = cur_B;
         if (l + B > target_len) B = target_len - l;
+        rcfg.block_size = B;
 
         // Segment + encode the committed prefix once (Algorithm 1 lines 3-4).
         enum { MAX_PATCHES = 256 };
@@ -365,7 +405,7 @@ static void generate_common(
 
         uint8_t draft[BLT_BLOCKGEN_MAX_B];
         const size_t passes = blt_draft_block(model, &enc, patches, num_patches,
-                                              output_bytes, l, config, draft, scratch);
+                                              output_bytes, l, &rcfg, draft, scratch);
         if (stats) stats->nfe_decoder += passes;
         if (stats) stats->bytes_drafted += B;
 
@@ -375,10 +415,27 @@ static void generate_common(
             l += B;
         } else {
             memcpy(output_bytes + l, draft, B);
-            const size_t committed = blt_verify_draft(
-                model, entropy_model, patcher_config,
-                output_bytes, l, B, target_len, stats, scratch);
+            const size_t committed =
+                config->boundary_aligned
+                ? blt_verify_draft_aligned(verifier, entropy_model,
+                                           patcher_config, output_bytes, l, B,
+                                           target_len, stats, scratch)
+                : blt_verify_draft(verifier, entropy_model, patcher_config,
+                                   output_bytes, l, B, target_len, stats, scratch);
             BLT_REQUIRE(committed > l, "blockdiff DV: verify made no progress");
+
+            if (adaptive) {
+                // Fraction of this round's drafts that survived commitment.
+                const double acc = (double)(committed - l) / (double)B;
+                acc_hist[hist_pos] = acc > 1.0 ? 1.0 : (acc < 0.0 ? 0.0 : acc);
+                hist_pos = (hist_pos + 1) % config->adapt_window;
+                if (hist_len < config->adapt_window) hist_len++;
+                double sum = 0.0;
+                for (size_t i = 0; i < hist_len; i++) sum += acc_hist[i];
+                cur_B = blt_block_adapt_b(cur_B, sum / (double)hist_len,
+                                          config->B_min, config->B_max,
+                                          config->accept_target);
+            }
             l = committed;
         }
 

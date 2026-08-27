@@ -51,6 +51,14 @@ void blt_block_batch_build(blt_block_batch* out, blt_arena* arena,
                            const uint8_t* bytes, size_t N,
                            const blt_patch_info* patches, size_t num_patches,
                            size_t B, uint64_t rng_seed) {
+    blt_block_batch_build_t(out, arena, bytes, N, patches, num_patches,
+                            B, rng_seed, 0.0f);
+}
+
+void blt_block_batch_build_t(blt_block_batch* out, blt_arena* arena,
+                             const uint8_t* bytes, size_t N,
+                             const blt_patch_info* patches, size_t num_patches,
+                             size_t B, uint64_t rng_seed, float t_in) {
     BLT_REQUIRE(out != NULL && arena != NULL && bytes != NULL && patches != NULL,
         "blt_block_batch_build: arguments cannot be NULL");
     BLT_REQUIRE(N >= 2, "blt_block_batch_build: N must be >= 2");
@@ -75,7 +83,7 @@ void blt_block_batch_build(blt_block_batch* out, blt_arena* arena,
     out->groups = (size_t*)blt_container_alloc(arena, R * sizeof(size_t));
 
     uint64_t rng = rng_seed;
-    out->t = rng_uniform01(&rng);
+    out->t = (t_in > 0.0f) ? t_in : rng_uniform01(&rng);
     if (out->t <= 1e-6f) {
         out->t = 1e-6f;   // guard the 1/t loss scaling
     }

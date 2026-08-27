@@ -51,10 +51,35 @@ typedef struct {
 } blt_block_gen_opts;
 
 typedef struct {
-    size_t block_size;          // B
+    size_t block_size;          // B (starting block size for adaptive mode)
     blt_d0_mode d0_mode;        // D_0 policy for block rows during drafting
     blt_block_gen_opts opts;
+
+    // Stage 6 add-ons (all default-off: zero/NULL/0 fields keep the
+    // original Algorithm 1 / DV behavior).
+    const blt_model* verifier_model;    // NULL = self-verify (classic DV);
+                                        // else verification runs through
+                                        // this model (heterogeneous DV)
+    int boundary_aligned;               // 1 = commit only at candidate patch
+                                        // boundaries (see blt_verify_draft_aligned)
+    size_t B_min;                       // adaptive-B lower bound (>= 1)
+    size_t B_max;                       // adaptive-B upper bound; 0 disables
+    float accept_target;                // rolling-acceptance target
+    size_t adapt_window;                // rounds per rolling-average window
 } blt_block_gen_config;
+
+// Adaptive-B rule: given the current block size and the rolling acceptance
+// over the last adapt_window rounds, return the next block size. Moves one
+// byte at a time within [B_min, B_max]; grows when acceptance exceeds the
+// target by more than ADAPT_MARGIN, shrinks when it falls short by the same.
+// Pure helper over its arguments (unit-testable).
+#define BLT_ADAPT_B_MARGIN 0.10f
+size_t blt_block_adapt_b(size_t cur_b, double rolling_acceptance,
+                         size_t b_min, size_t b_max, float target);
+
+// Largest natural patch end in (l, verified_len] for boundary-aligned
+// commitment; exposed by src/infer/self_speculation.c as
+// blt_aligned_commit_select.
 
 // Selection kernels over the currently masked cells of one block row set.
 // masked[b] != 0 marks a still-masked cell; scores[b] holds p_max

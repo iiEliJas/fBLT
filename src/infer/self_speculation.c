@@ -96,6 +96,19 @@ static void compute_entropy_vals(blt_arena* arena, const blt_entropy_lm* entropy
 }
 
 
+// Largest natural patch end e with lo < e <= hi; 0 when none exists.
+// Public (declared in the header) so the commit-selection rule stays
+// unit-testable without a model.
+size_t blt_aligned_commit_select(const blt_patch_info* patches, size_t num_patches,
+                                 size_t lo, size_t hi) {
+    size_t best = 0;
+    for (size_t i = 0; i < num_patches; i++) {
+        const size_t e = patches[i].start_idx + patches[i].length;
+        if (e > lo && e <= hi && e > best) best = e;
+    }
+    return best;
+}
+
 size_t blt_verify_draft(
     const blt_model* model,
     const blt_entropy_lm* entropy_model,
@@ -220,6 +233,107 @@ size_t blt_verify_draft(
     }
     if (cand_len < target_len) {
         x[cand_len] = argmax_byte_host_check(rows + (cand_len - 1) * vocab_size, vocab_size);   // free byte
+        free(logits_host);
+        return cand_len + 1;
+    }
+    free(logits_host);
+    return cand_len;
+}
+
+size_t blt_verify_draft_aligned(
+    const blt_model* model,
+    const blt_entropy_lm* entropy_model,
+    const blt_patcher_config* patcher_config,
+    uint8_t* x,
+    size_t l,
+    size_t r,
+    size_t target_len,
+    blt_infer_stats* stats,
+    blt_arena* arena
+) {
+    BLT_REQUIRE(model != NULL && entropy_model != NULL && patcher_config != NULL &&
+                x != NULL && arena != NULL,
+        "blt_verify_draft_aligned: arguments cannot be NULL");
+    BLT_REQUIRE(l >= 1, "blt_verify_draft_aligned: committed length l must be >= 1");
+    const size_t cand_len = l + r;
+    BLT_REQUIRE(cand_len >= 2 && cand_len <= model->config.decoder_config.max_seq_len,
+        "blt_verify_draft_aligned: candidate length must be in [2, max_seq_len]");
+
+    const size_t vocab_size = model->config.decoder_config.vocab_size;
+
+    // Natural segmentation of the candidate; no forced split at l. Every
+    // commit chosen below is one of these patch ends, which a streaming
+    // patcher reproduces in all longer contexts.
+    blt_tensor entropy_vals;
+    compute_entropy_vals(arena, entropy_model, x, cand_len, &entropy_vals);
+
+    blt_tensor entropy_host_view;
+    float* entropy_host_buf = NULL;
+    const blt_tensor* entropy_for_patcher = stage_entropy_host(&entropy_vals,
+        &entropy_host_view, &entropy_host_buf);
+
+    blt_patch_info patches[BLT_SELFSPEC_MAX_PATCHES];
+    const size_t num_patches = blt_segment_patches(
+        entropy_for_patcher, x, patches, BLT_SELFSPEC_MAX_PATCHES, patcher_config);
+    free(entropy_host_buf);
+    entropy_host_buf = NULL;
+
+    size_t bytes_shape[1] = {cand_len};
+    blt_tensor cand_bytes = blt_tensor_create(arena, bytes_shape, 1, BLT_DTYPE_UINT8);
+    blt_tensor_upload(&cand_bytes, x, cand_len);
+
+    blt_model_enc_out enc;
+    blt_model_encode(model, &cand_bytes, patches, num_patches, NULL, 0, &enc, arena);
+    if (stats != NULL) {
+        stats->nfe_encoder_global++;
+    }
+
+    size_t logits_shape[2] = {cand_len, vocab_size};
+    blt_tensor logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
+    blt_local_decoder_forward_ext(model->decoder, &enc.byte_hidden_out, &enc.global_out,
+        patches, num_patches, NULL, NULL, 0, NULL, &logits, NULL, arena);
+    if (stats != NULL) {
+        stats->nfe_decoder++;
+    }
+
+    float* logits_host = (float*)malloc(logits.numel * sizeof(float));
+    BLT_REQUIRE(logits_host != NULL, "blt_verify_draft_aligned: failed to stage logits");
+    blt_tensor_download(&logits, logits_host, logits.numel * sizeof(float));
+    const float* rows = logits_host;
+
+    // Accept until the first mismatch. Commit only at natural patch ends:
+    // on mismatch at p the verified-good range is [l, p), so the commit is
+    // the largest boundary in (l, p]; everything past it is re-drafted.
+    for (size_t p = l; p < cand_len; p++) {
+        const uint8_t pred = argmax_byte_host_check(rows + (p - 1) * vocab_size, vocab_size);
+        if (x[p] != pred) {
+            const size_t b = blt_aligned_commit_select(patches, num_patches, l, p);
+            if (b > l) {
+                if (stats != NULL) {
+                    stats->bytes_accepted += b - l;
+                }
+                free(logits_host);
+                return b;
+            }
+            // Progress rule: no boundary inside the verified range -- take
+            // the corrected byte itself (the only unaligned commitment).
+            x[p] = pred;
+            if (stats != NULL) {
+                stats->bytes_accepted += 1;
+            }
+            free(logits_host);
+            return p + 1;
+        }
+    }
+
+    // Full match: every draft byte survived. cand_len closes the tiling and
+    // is therefore always a valid aligned commit; the free byte rides along
+    // because its prediction comes from this exact forward pass.
+    if (stats != NULL) {
+        stats->bytes_accepted += r;
+    }
+    if (cand_len < target_len) {
+        x[cand_len] = argmax_byte_host_check(rows + (cand_len - 1) * vocab_size, vocab_size);
         free(logits_host);
         return cand_len + 1;
     }

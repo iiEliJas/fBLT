@@ -147,6 +147,42 @@ static uint32_t tensor_ndim(const blt_tensor* t) {
     return (uint32_t)t->ndim;
 }
 
+// Host staging for tensor payload I/O: device-resident models cannot fread/
+// fwrite their storage directly. CPU tensors take the memcpy paths inside
+// upload/download, so behavior there is unchanged.
+static void tensor_payload_write(const blt_tensor* t, FILE* f, const char* name,
+                                 const char* path) {
+    if (t->backend == BLT_BACKEND_CPU) {
+        if (fwrite(t->data, sizeof(float), t->numel, f) != t->numel)
+            BLT_FATAL("checkpoint save: write failed at '%s' (%s)", name, path);
+        return;
+    }
+    float* stage = (float*)malloc(t->numel * sizeof(float));
+    BLT_REQUIRE(stage != NULL, "checkpoint save: staging alloc failed");
+    blt_tensor_download(t, stage, blt_tensor_bytes(t));
+    const size_t wrote = fwrite(stage, sizeof(float), t->numel, f);
+    free(stage);
+    if (wrote != t->numel)
+        BLT_FATAL("checkpoint save: write failed at '%s' (%s)", name, path);
+}
+
+static void tensor_payload_read(blt_tensor* t, FILE* f, const char* name,
+                                const char* path) {
+    if (t->backend == BLT_BACKEND_CPU) {
+        if (fread(t->data, sizeof(float), t->numel, f) != t->numel)
+            BLT_FATAL("checkpoint load: '%s' truncated payload", name);
+        return;
+    }
+    float* stage = (float*)malloc(t->numel * sizeof(float));
+    BLT_REQUIRE(stage != NULL, "checkpoint load: staging alloc failed");
+    if (fread(stage, sizeof(float), t->numel, f) != t->numel) {
+        free(stage);
+        BLT_FATAL("checkpoint load: '%s' truncated payload", name);
+    }
+    blt_tensor_upload(t, stage, blt_tensor_bytes(t));
+    free(stage);
+}
+
 void blt_model_save(const blt_model* model, const char* path) {
     FILE* f = fopen(path, "wb");
     if (!f) BLT_FATAL("checkpoint save: cannot open '%s'", path);
@@ -170,10 +206,10 @@ void blt_model_save(const blt_model* model, const char* path) {
         if (fwrite(&name_len, sizeof(uint16_t), 1, f) != 1 ||
             fwrite(name, 1, name_len, f) != name_len ||
             fwrite(&ndim, sizeof(uint32_t), 1, f) != 1 ||
-            fwrite(t->shape, sizeof(size_t), ndim, f) != ndim ||
-            fwrite(t->data, sizeof(float), t->numel, f) != t->numel) {
+            fwrite(t->shape, sizeof(size_t), ndim, f) != ndim) {
             BLT_FATAL("checkpoint save: write failed at '%s' (%s)", name, path);
         }
+        tensor_payload_write(t, f, name, path);
     }
 
     fclose(f);
@@ -225,9 +261,9 @@ void blt_entropy_lm_save(const blt_entropy_lm* lm, const char* path) {
         if (fwrite(&name_len, sizeof(uint16_t), 1, f) != 1 ||
             fwrite(name, 1, name_len, f) != name_len ||
             fwrite(&ndim, sizeof(uint32_t), 1, f) != 1 ||
-            fwrite(t->shape, sizeof(size_t), ndim, f) != ndim ||
-            fwrite(t->data, sizeof(float), t->numel, f) != t->numel)
+            fwrite(t->shape, sizeof(size_t), ndim, f) != ndim)
             BLT_FATAL("entropy lm save: write failed at '%s'", name);
+        tensor_payload_write(t, f, name, path);
     }
     fclose(f);
 }
@@ -291,8 +327,7 @@ void blt_entropy_lm_load(blt_entropy_lm* lm, const char* path) {
                 dim != t->shape[d])
                 BLT_FATAL("entropy lm load: '%s' shape mismatch", name);
         }
-        if (fread(t->data, sizeof(float), t->numel, f) != t->numel)
-            BLT_FATAL("entropy lm load: '%s' truncated payload", name);
+        tensor_payload_read(t, f, name, path);
     }
     fclose(f);
 }
@@ -340,8 +375,7 @@ void blt_model_load(blt_model* model, const char* path) {
                 BLT_FATAL("checkpoint load: '%s' dim[%u] %zu != %zu "
                           "(config mismatch?)", name, d, dim, t->shape[d]);
         }
-        if (fread(t->data, sizeof(float), t->numel, f) != t->numel)
-            BLT_FATAL("checkpoint load: '%s' truncated payload", name);
+        tensor_payload_read(t, f, want_name, path);
     }
 
     fclose(f);

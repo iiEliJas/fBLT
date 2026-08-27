@@ -49,6 +49,7 @@ int run_kv_cache_rollback_commit(void);
 int run_blockgen_select_kernels(void);
 int run_blockgen_draft_behavior(void);
 int run_blockgen_generation_gates(void);
+int run_blockgen_stage6_helpers(void);
 int run_block_diffusion_mask_fixture(void);
 int run_block_diffusion_gradcheck(void);
 int run_block_diffusion_overfit_gate(void);

@@ -48,6 +48,16 @@ typedef struct {
     int fixed_patches;      // 1 = fixed-stride-4 segmentation everywhere
                             // (matches how the checkpoints were trained)
     int use_cuda;           // 1 = run every model pass on the CUDA backend
+    size_t embed;           // checkpoint shape overrides (must match weights)
+    size_t hidden;
+    size_t enc_layers;
+    size_t glob_layers;
+    size_t dec_layers;
+    int cross_last;
+    int no_hetv;            // 1 = drop the hetero-verify method (arms whose
+                            // plain twin has a different shape)
+    double dv_gate;         // min agreement for verified methods (0 disables
+                            // the fatal gate; metric still recorded)
 } bench_args;
 
 static const bench_args DEFAULTS = {
@@ -62,19 +72,29 @@ static const bench_args DEFAULTS = {
     .entropy_lm = NULL,
     .fixed_patches = 0,
     .use_cuda = 0,
+    .embed = 64,
+    .hidden = 128,
+    .enc_layers = 2,
+    .glob_layers = 2,
+    .dec_layers = 2,
+    .cross_last = 0,
+    .no_hetv = 0,
+    .dv_gate = 0.90,
 };
 
 //----------------------------------------------------------------------
 // Shared setup
 //----------------------------------------------------------------------
 
-static void build_model_config(blt_model_config* cfg, size_t E, size_t HID,
-                               size_t L, size_t MS) {
+static void build_model_config(blt_model_config* cfg, const bench_args* a,
+                               size_t MS) {
+    const size_t E = a->embed, HID = a->hidden;
     memset(cfg, 0, sizeof(*cfg));
     cfg->encoder_config.embed_dim = E; cfg->encoder_config.patch_dim = 0;
-    cfg->encoder_config.num_layers = L; cfg->encoder_config.hidden_dim = HID;
+    cfg->encoder_config.num_layers = a->enc_layers; cfg->encoder_config.hidden_dim = HID;
     cfg->encoder_config.num_heads = 4; cfg->encoder_config.cross_attn_heads = 4;
-    cfg->encoder_config.local_window = 0; cfg->encoder_config.cross_attn_all_layers = true;
+    cfg->encoder_config.local_window = 0;
+    cfg->encoder_config.cross_attn_all_layers = !a->cross_last;
     cfg->encoder_config.pool_type = BLT_POOL_MEAN;
     cfg->encoder_config.rope_theta = 500000.0f;
     cfg->encoder_config.max_seq_len = MS;
@@ -85,13 +105,14 @@ static void build_model_config(blt_model_config* cfg, size_t E, size_t HID,
     cfg->encoder_config.ngram_config.hash_prime = 1000000007ULL;
     cfg->encoder_config.ngram_config.normalize = true;
     cfg->encoder_config.ngram_config.embed_dim = E;
-    cfg->global_config.embed_dim = E; cfg->global_config.num_layers = L;
+    cfg->global_config.embed_dim = E; cfg->global_config.num_layers = a->glob_layers;
     cfg->global_config.hidden_dim = HID; cfg->global_config.num_heads = 4;
     cfg->global_config.rope_theta = 500000.0f; cfg->global_config.max_seq_len = MS;
     cfg->decoder_config.embed_dim = E; cfg->decoder_config.patch_dim = 0;
-    cfg->decoder_config.num_layers = L; cfg->decoder_config.hidden_dim = HID;
+    cfg->decoder_config.num_layers = a->dec_layers; cfg->decoder_config.hidden_dim = HID;
     cfg->decoder_config.num_heads = 4; cfg->decoder_config.cross_attn_heads = 4;
-    cfg->decoder_config.local_window = 0; cfg->decoder_config.cross_attn_all_layers = true;
+    cfg->decoder_config.local_window = 0;
+    cfg->decoder_config.cross_attn_all_layers = !a->cross_last;
     cfg->decoder_config.rope_theta = 500000.0f; cfg->decoder_config.max_seq_len = MS;
     cfg->decoder_config.vocab_size = 256;
 }
@@ -221,6 +242,10 @@ typedef struct {
     size_t k_or_B;          // selfspec window or diffusion block size
     float threshold;        // alpha (conf) or gamma (EB)
     int use_eb;             // 1 = EB strategy for diffusion methods
+    int hetero;             // 1 = draft with bltd, verify with plain model;
+                            // agreement is measured against PLAIN greedy refs
+    int aligned;            // 1 = boundary-aligned commitment (Stage 6)
+    int adaptive;           // 1 = adaptive B per rolling acceptance
 } method_cfg;
 
 typedef struct {
@@ -236,9 +261,12 @@ typedef struct {
 
 // Runs one method over all prompts; fills per-prompt latency samples and
 // aggregate counters. Greedy reference for `model` is computed once.
+// `verifier` (nullable) overrides the verification model for DV methods;
+// when set, agreement is judged against that model's greedy output.
 static void run_method(const method_cfg* mc, const blt_model* model,
+                       const blt_model* verifier,
                        const blt_entropy_lm* lm, const blt_patcher_config* pcfg,
-                       uint8_t* const* prompts, uint8_t** refs,
+                       uint8_t* const* prompts, uint8_t* const* refs,
                        uint8_t** scratch_out,
                        const bench_args* a, blt_arena* scratch,
                        double* lat_samples, agg_metrics* agg) {
@@ -255,6 +283,15 @@ static void run_method(const method_cfg* mc, const blt_model* model,
     gc.d0_mode = BLT_D0_LEARNED;
     gc.opts.strategy = mc->use_eb ? BLT_UNMASK_EB : BLT_UNMASK_CONFIDENCE;
     gc.opts.threshold = mc->threshold;
+    gc.verifier_model = (mc->method == M_BLOCKDV && mc->hetero) ? verifier : NULL;
+    gc.boundary_aligned = mc->aligned;
+    if (mc->adaptive) {
+        gc.B_min = 4;
+        gc.B_max = 16;
+        gc.accept_target = 0.5f;
+        gc.adapt_window = 8;
+        gc.block_size = 8;   // adaptive sweep starts at B=8 within [4,16]
+    }
 
     size_t agree_count = 0;
     size_t compare_count = 0;
@@ -302,12 +339,13 @@ static void run_method(const method_cfg* mc, const blt_model* model,
                         match += (out[a->prompt_len + j] ==
                                   refs[p][a->prompt_len + j]);
                     }
-                    if (match < a->new_bytes &&
-                        (double)match / (double)a->new_bytes < 0.90) {
+                    const double agree =
+                        (double)match / (double)a->new_bytes;
+                    if (a->dv_gate > 0.0 && match < a->new_bytes &&
+                        agree < a->dv_gate) {
                         BLT_FATAL("infer_bench: DV agreement %.2f on prompt "
-                                  "%zu (method %s) below 0.90",
-                                  (double)match / (double)a->new_bytes,
-                                  p, mc->method_name);
+                                  "%zu (method %s) below %.2f",
+                                  agree, p, mc->method_name, a->dv_gate);
                     }
                 }
                 break;
@@ -350,6 +388,9 @@ static void write_result(const char* model_tag, const method_cfg* mc,
         snprintf(k, sizeof(k), "_B%zu_%s%.2f", mc->k_or_B,
                  mc->use_eb ? "g" : "a", (double)mc->threshold);
         strncat(tag, k, sizeof(tag) - strlen(tag) - 1);
+        if (mc->hetero) strncat(tag, "_hetv", sizeof(tag) - strlen(tag) - 1);
+        if (mc->aligned) strncat(tag, "_bal", sizeof(tag) - strlen(tag) - 1);
+        if (mc->adaptive) strncat(tag, "_adapt", sizeof(tag) - strlen(tag) - 1);
     }
 
     if (a->fixed_patches) {
@@ -397,6 +438,26 @@ int main(int argc, char** argv) {
             a.fixed_patches = 1;
         else if (!strcmp(argv[i], "--entropy-lm") && i + 1 < argc)
             a.entropy_lm = argv[++i];
+        else if (!strcmp(argv[i], "--embed") && i + 1 < argc)
+            a.embed = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--hidden") && i + 1 < argc)
+            a.hidden = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--enc-layers") && i + 1 < argc)
+            a.enc_layers = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--glob-layers") && i + 1 < argc)
+            a.glob_layers = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--dec-layers") && i + 1 < argc)
+            a.dec_layers = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--cross-attn") && i + 1 < argc) {
+            ++i;
+            if (!strcmp(argv[i], "all")) a.cross_last = 0;
+            else if (!strcmp(argv[i], "last")) a.cross_last = 1;
+            else BLT_FATAL("infer_bench: unknown --cross-attn '%s'", argv[i]);
+        }
+        else if (!strcmp(argv[i], "--dv-gate") && i + 1 < argc)
+            a.dv_gate = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--no-hetv"))
+            a.no_hetv = 1;
         else if (!strcmp(argv[i], "--backend") && i + 1 < argc) {
             ++i;
             if (!strcmp(argv[i], "cuda")) a.use_cuda = 1;
@@ -411,7 +472,7 @@ int main(int argc, char** argv) {
     }
 #endif
 
-    const size_t MS = 512, E = 64, HID = 128, L = 2;
+    const size_t MS = 512;
 
     blt_arena* arena = blt_arena_create(160 * 1024 * 1024,
                                         a.use_cuda ? BLT_BACKEND_CUDA : BLT_BACKEND_CPU);
@@ -419,7 +480,7 @@ int main(int argc, char** argv) {
                                           a.use_cuda ? BLT_BACKEND_CUDA : BLT_BACKEND_CPU);
 
     blt_model_config cfg;
-    build_model_config(&cfg, E, HID, L, MS);
+    build_model_config(&cfg, &a, MS);
 
     blt_model* plain;
     blt_model* bltd;
@@ -497,27 +558,40 @@ int main(int argc, char** argv) {
            a.num_prompts, a.new_bytes);
 
     static const method_cfg PLAIN_CFGS[] = {
-        {M_GREEDY,     "greedy",   0, 0, 0},
-        {M_SELFSPEC,   "selfspec", 4, 0, 0},
-        {M_SELFSPEC,   "selfspec", 8, 0, 0},
-        {M_SELFSPEC,   "selfspec", 16, 0, 0},
+        {M_GREEDY,     "greedy",   0, 0, 0, 0, 0, 0},
+        {M_SELFSPEC,   "selfspec", 4, 0, 0, 0, 0, 0},
+        {M_SELFSPEC,   "selfspec", 8, 0, 0, 0, 0, 0},
+        {M_SELFSPEC,   "selfspec", 16, 0, 0, 0, 0, 0},
     };
-    static const method_cfg BLTD_CFGS[] = {
-        {M_GREEDY,     "greedy",   0, 0, 0},
-        {M_SELFSPEC,   "selfspec", 4, 0, 0},
-        {M_SELFSPEC,   "selfspec", 8, 0, 0},
-        {M_SELFSPEC,   "selfspec", 16, 0, 0},
-        {M_BLOCKDIFF,  "blockdiff", 4, 0.7f, 0},
-        {M_BLOCKDIFF,  "blockdiff", 8, 0.7f, 0},
-        {M_BLOCKDIFF,  "blockdiff", 16, 0.7f, 0},
-        {M_BLOCKDV,    "blockdv",  4, 0.7f, 0},
-        {M_BLOCKDV,    "blockdv",  8, 0.7f, 0},
-        {M_BLOCKDV,    "blockdv",  16, 0.7f, 0},
-        {M_BLOCKDV,    "blockdv_onestep", 8, 0.0f, 0},   // whole block per pass
-        {M_BLOCKDV,    "blockdv_eb", 8, 1.0f, 1},
-        {M_BLOCKDV,    "blockdv_eb", 8, 2.0f, 1},
-        {M_BLOCKDIFF,  "blockdiff_eb", 8, 1.0f, 1},
+    static const method_cfg BLTD_CFGS_ALL[] = {
+        {M_GREEDY,     "greedy",   0, 0, 0, 0, 0, 0},
+        {M_SELFSPEC,   "selfspec", 4, 0, 0, 0, 0, 0},
+        {M_SELFSPEC,   "selfspec", 8, 0, 0, 0, 0, 0},
+        {M_SELFSPEC,   "selfspec", 16, 0, 0, 0, 0, 0},
+        {M_BLOCKDIFF,  "blockdiff", 4, 0.7f, 0, 0, 0, 0},
+        {M_BLOCKDIFF,  "blockdiff", 8, 0.7f, 0, 0, 0, 0},
+        {M_BLOCKDIFF,  "blockdiff", 16, 0.7f, 0, 0, 0, 0},
+        {M_BLOCKDV,    "blockdv",  4, 0.7f, 0, 0, 0, 0},
+        {M_BLOCKDV,    "blockdv",  8, 0.7f, 0, 0, 0, 0},
+        {M_BLOCKDV,    "blockdv",  16, 0.7f, 0, 0, 0, 0},
+        {M_BLOCKDV,    "blockdv_onestep", 8, 0.0f, 0, 0, 0, 0}, // whole block per pass
+        {M_BLOCKDV,    "blockdv_eb", 8, 1.0f, 1, 0, 0, 0},
+        {M_BLOCKDV,    "blockdv_eb", 8, 2.0f, 1, 0, 0, 0},
+        {M_BLOCKDIFF,  "blockdiff_eb", 8, 1.0f, 1, 0, 0, 0},
+        // Stage 6 add-ons: heterogeneous verification (draft bltd, verify
+        // plain -- agreement judged against PLAIN greedy), boundary-aligned
+        // commitment, and adaptive B per rolling acceptance.
+        {M_BLOCKDV,    "blockdv_hetv", 8, 0.7f, 0, 1, 0, 0},
+        {M_BLOCKDV,    "blockdv_bal", 8, 0.7f, 0, 0, 1, 0},
+        {M_BLOCKDV,    "blockdv_adapt", 8, 0.7f, 0, 0, 0, 1},
+        {M_BLOCKDV,    "blockdv_adapt_bal", 8, 0.7f, 0, 0, 1, 1},
     };
+    method_cfg BLTD_CFGS[sizeof(BLTD_CFGS_ALL) / sizeof(BLTD_CFGS_ALL[0])];
+    size_t num_bltd_cfgs = 0;
+    for (size_t i = 0; i < sizeof(BLTD_CFGS_ALL) / sizeof(BLTD_CFGS_ALL[0]); i++) {
+        if (a.no_hetv && BLTD_CFGS_ALL[i].hetero) continue;
+        BLTD_CFGS[num_bltd_cfgs++] = BLTD_CFGS_ALL[i];
+    }
 
     double* lat = malloc(a.num_prompts * sizeof(double));
     agg_metrics agg;
@@ -529,7 +603,7 @@ int main(int argc, char** argv) {
     printf("%s\n", "--------------------------------------------------------------------------");
 
     for (size_t i = 0; i < sizeof(PLAIN_CFGS) / sizeof(PLAIN_CFGS[0]); i++) {
-        run_method(&PLAIN_CFGS[i], plain, lm, &pcfg,
+        run_method(&PLAIN_CFGS[i], plain, NULL, lm, &pcfg,
                    prompts, refs_p, outs, &a, scratch, lat, &agg);
         write_result(plain_tag, &PLAIN_CFGS[i], &a, lat, &agg, a.results_path);
         printf("%-28s %10.3f %10.3f %10.3f %10.3f %12.2f\n", "plain_...",
@@ -537,9 +611,10 @@ int main(int argc, char** argv) {
                agg.total_drafted > 0 ? agg.acceptance : -1.0, agg.agreement,
                1000.0 * lat[0]);
     }
-    for (size_t i = 0; i < sizeof(BLTD_CFGS) / sizeof(BLTD_CFGS[0]); i++) {
-        run_method(&BLTD_CFGS[i], bltd, lm, &pcfg,
-                   prompts, refs_b, outs, &a, scratch, lat, &agg);
+    for (size_t i = 0; i < num_bltd_cfgs; i++) {
+        uint8_t** refs = BLTD_CFGS[i].hetero ? refs_p : refs_b;
+        run_method(&BLTD_CFGS[i], bltd, plain, lm, &pcfg,
+                   prompts, refs, outs, &a, scratch, lat, &agg);
         write_result(bltd_tag, &BLTD_CFGS[i], &a, lat, &agg, a.results_path);
         printf("%-28s %10.3f %10.3f %10.3f %10.3f %12.2f\n", "bltd_...",
                agg.dec_per_byte, agg.enc_per_byte,

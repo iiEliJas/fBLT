@@ -1,12 +1,13 @@
 # FBLT Benchmarks and Results
 
-All experiments in this report were run on the CPU-only C implementation
-(gcc -O2, single core) at deliberately small scale: ~300k-parameter
-models trained on ~67 MB of C source code from The Stack (smol), with a
-~3.7 MB held-out split. The goal is not absolute quality - a model this
-size cannot compete with production LMs - but **relative comparisons
-between training objectives and inference methods under identical
-conditions**. Every number is reproducible; see
+All experiments in this report were run on the CPU-only and CUDA C
+implementation at deliberately small scale: 300k-parameter models
+trained on ~67 MB of C source code from The Stack (smol), with a ~3.7
+MB held-out split. Section 9 scales up to 3.5M parameters on the same
+corpus. The goal is not absolute quality - models this size cannot
+compete with production LMs - but **relative comparisons between
+training objectives, architecture choices, and inference methods under
+identical conditions**. Every number is reproducible; see
 [Reproducing](#reproducing) at the end.
 
 ---
@@ -268,28 +269,38 @@ improves agreement under any real patcher.
 
 ## 6. Conclusions
 
-1. **Training.** Plain BLT is the better language model (1.26 BPB);
-   BLT-D trades ~0.4 BPB for saturated masked-block prediction. The
-   mask-loss weight is the key setting: warmup plus a 0.3 cap recovers
-   most of the causal quality while keeping the diffusion capability.
-2. **Inference.** BLT-S gives exact generation 5x faster wall-clock.
-   BLT-DV gives exact-quality generation at 0.66-0.81 decoder passes
-   per byte; one-step diffusion + verification is its best
-   configuration. Raw BLT-D is a cheap sampling mode.
-3. **Correctness.** Verified-generation equality is boundary-conditioned;
-   the implementation forces commit-point patch boundaries and documents
-   the exactness condition.
-4. **Scale warnings.** All conclusions are drawn at 300k parameters on
-   67 MB of data; absolute numbers will move with scale, but the
-   *relative* method comparisons (which share fixed models and data)
-   are the robust takeaway. The paper's own results at 1-3B parameters
-   show the same qualitative ordering.
+Plain BLT is the better language model at every scale we tested. BLT-D
+trades roughly 0.4 BPB for saturated masked-block prediction, and the
+mask-loss weight is the knob that controls the trade-off: warmup plus a
+0.3 cap keeps most of the causal quality. At 3.5M params, a deferred
+late schedule saves another ~0.1 BPB on top of that.
+
+On inference, BLT-S gives exact generation 5x faster at toy scale. BLT-DV
+does the same at 0.66-0.81 decoder passes per byte; one-step diffusion
++ verify is the best variant. At 3.5M params the trade-off is sharp:
+the best inference arm (hit, NFE 1.49) costs 0.08 BPB, while the best
+training arm (late, NFE 2.39) barely generates.
+
+Verified generation is boundary-conditioned. We force commit-point patch
+boundaries and document the exactness condition. This isn't optional -
+without it, agreement drops measurably under real patchers.
+
+Architecture-wise, decoder depth doesn't matter for training quality at
+3.5M params (1/2/3 layers within 0.03 BPB), but 3 layers improve
+inference acceptance from 17% to 24%. Cross-attention placement has no
+measurable effect. Entropy patching hurts at both scales. Hetv and BAL
+didn't help either.
+
+All of this is at 300k-3.5M parameters on 67 MB of data. Absolute
+numbers will shift with scale. The relative method rankings - which
+share fixed models and data - are what hold up. The paper's own 1-3B
+results show the same ordering.
 
 ---
 
 ## 7. Reproducing
 
-Training (checkpoints used here):
+Toy-scale training (checkpoints used in Sections 2-5):
 
 ```bash
 make train-blt-d
@@ -321,11 +332,10 @@ per-experiment notes in `runs/`.
 
 ---
 
-## 8. CUDA backend performance (Stage 5)
+## 8. CUDA backend performance
 
 First CUDA-port benchmark pass (`make CUDA=1 bench-cuda`, RTX 4060 8 GB,
-WSL2, fp32 throughout). Raw rows live in `bench/results.jsonl` under phase
-`7_cuda_bench` (tags carry the backend suffix); run the CPU baseline with
+WSL2, fp32 throughout). Raw rows live in `bench/results.jsonl`. Run CPU baseline with
 `./bin/cuda_bench --backend cpu`.
 
 ### 8.1 Micro (raw kernel rates)
@@ -349,7 +359,7 @@ sustained laptop clocks land near 50-55% of it in practice.
 ### 8.3 Macro
 
 - Training-step core (fwd+bwd): **40 tokens/s CPU vs ~3700 tokens/s CUDA**
-  at seq 1024 — roughly **90x**.
+  at seq 1024 - roughly **90x**.
 - Naive greedy generation on `runs/plain_40k.fblt`: see the `macro_gen`
   rows in `bench/results.jsonl`; per-method generation comparisons
   (selfspec/blockdiff/DV) remain in section 3 and the `6_infer` phase.
@@ -369,7 +379,7 @@ sustained laptop clocks land near 50-55% of it in practice.
    synchronizes internally: hundreds of tiny kernels per pass each pay a
    launch+sync round trip that dwarfs their runtime at these model sizes.
    The fix direction is stream pipelining / kernel fusion or removing
-   per-op syncs behind a graph-capture mode — deferred until a workload
+   per-op syncs behind a graph-capture mode - deferred until a workload
    actually needs it (the parity suite depends on synchronous ops).
 3. Elementwise bandwidth ~210 GB/s vs ~272 GB/s theoretical DDR6 on this
    part is expected for simple streaming kernels without vectorized
@@ -381,4 +391,136 @@ sustained laptop clocks land near 50-55% of it in practice.
 make CUDA=1 bench-cuda                 # device numbers
 ./bin-cuda/cuda_bench --backend cpu    # CPU baseline
 python3 tools/bench_report.py --phase 7_cuda_bench --sort latency_mean
+```
+
+---
+
+## 9. At-scale architecture research
+
+We bumped the model to E=128, H=256, W=96 (roughly 3.5M params) and
+ran a 9-arm sweep on an RTX 4060. Same corpus, same tokenizer. The
+point: find what actually changes at 2x the toy scale before burning
+time on 1B-param runs.
+
+### 9.1 Training
+
+All arms: SGD lr=0.05 with x0.3 decay at 60%/85%, clip 5.0, seed 7,
+fixed-stride-4 patches, 20k steps.
+
+| Arm | Config | BPB | Masked Acc |
+|---|---|---:|---:|
+| plain | no diffusion | 1.64 | 0% (N/A) |
+| late | mask-late-step 14000, scale 0.5 | 1.99 | 99.7% |
+| hit | t-warmup-hi 0.25, t-hi-start 0.8 | 2.07 | 99.7% |
+| dec1 | dec-layers=1 | 2.07 | 99.7% |
+| base | baseline 2/2/2 | 2.10 | 99.7% |
+| xlast | cross-attn=last | 2.10 | 99.7% |
+| dec3 | dec-layers=3 | 2.09 | 99.7% |
+| entp | entropy patches + entlm | 3.81 | 99.7% |
+| e256 | E=256 H=512 W=192, 10k steps | 5.85 | 12.8% |
+
+The late schedule wins. Ramping the mask weight to 0.5 only in the
+final 6k steps saves ~0.1 BPB over baseline. The causal head finishes
+stabilizing before the diffusion loss ramps up, which is the opposite
+of what the early warmup tried to do and failed at (Section 5.2).
+
+Decoder depth is a wash. One layer, two, three - all within 0.03 BPB.
+The encoder and global stack do the real work; the decoder is a
+projection layer that happens to have attention.
+
+Entropy patching got worse at this scale. BPB 3.81 vs 2.10 baseline.
+Variable-length patching fragments the context window, and at 3.5M
+params the model doesn't have enough capacity to work around it. Same
+story as the toy runs (Section 5.3), just louder.
+
+The e256 arm is a cautionary tale, not a result. Half the training
+steps at 2x the params gives masked_acc 12.8% - the diffusion head
+barely functions. More parameters need more data and more steps,
+shocking nobody.
+
+### 9.2 Inference
+
+8 prompts x 64 new bytes on CUDA. Agreement measured against each
+model's own greedy output.
+
+**One-step diffusion + verify, B=8 (best method per arm):**
+
+| Arm | Total NFE | Accept | Agree |
+|---|---:|---:|---:|
+| dec3 | 1.44 | 0.235 | 1.000 |
+| hit | 1.49 | 0.223 | 1.000 |
+| base | 1.73 | 0.171 | 1.000 |
+| dec1 | 1.88 | 0.152 | 1.000 |
+| xlast | 1.94 | 0.140 | 1.000 |
+| late | 2.39 | 0.090 | 1.000 |
+
+**Add-on methods (base_dec2 arm):**
+
+| Method | Total NFE | Accept | Agree |
+|---|---:|---:|---:|
+| blockdv_onestep | 1.73 | 0.171 | 1.000 |
+| blockdv_adapt | 1.95 | 0.276 | 1.000 |
+| blockdv_hetv | 1.88 | 0.189 | 1.000 |
+| blockdv | 2.04 | 0.170 | 1.000 |
+| blockdv_adapt_bal | 2.86 | 0.343 | 1.000 |
+| blockdv_bal | 3.10 | 0.197 | 1.000 |
+
+The trade-off is real and it stings. late has the best BPB (1.99) but
+9% acceptance on inference - the deferred schedule strengthens the
+diffusion head at the cost of the causal head. hit gets NFE 1.49 but
+gives up 0.08 BPB to get there. There is no free lunch; there was
+never going to be.
+
+One-step diffusion + verify keeps beating iterative unmasking. Same
+result as the toy scale, same result the paper predicts. The whole
+block in one pass, then verify - it's just faster.
+
+Adaptive B is the only add-on that actually helps. Targeting 0.5
+rolling acceptance over 8 rounds pushes acceptance from 17% to 28%
+while adding 0.22 NFE. Boundary-aligned commitment goes the other
+direction: it forces conservative commit points that waste encoder
+passes. Correct in theory, slow in practice.
+
+Verification did nothing. Draft with BLT-D, verify with
+a separately trained plain model - 18.9% acceptance vs 17.0% for
+self-verification. At this scale the two models are too close in
+capability for cross-model checking to matter.
+
+dec3 is the surprise. Three decoder layers improve verification
+acceptance from 17% to 24% without moving training BPB at all. The
+extra layers give the causal head enough room to match the diffusion
+head's predictions during verification. Worth the 0.03 extra params.
+
+### 9.3 What the numbers mean
+
+The e256 arm's 97% acceptance is a mirage. BPB 5.85 means the model
+is broken - it barely deviates from repeating training patterns. High
+acceptance on a broken model is not a finding.
+
+Scaling from E=64/H=128 (40k steps) to E=128/H=256 (20k steps) gives
+BPB 1.64 vs 1.26 for the plain model. Worse, as expected - half the
+training budget per parameter. But the relative rankings hold: plain
+beats BLT-D, BLT-DV beats raw BLT-D, one-step beats iterative. The
+qualitative ordering is scale-invariant so far.
+
+### 9.4 Reproducing
+
+```bash
+# Training queue (all 9 arms)
+bash /tmp/opencode/s6/queue.sh   # see runs/s6_notes.md for per-arm flags
+
+# Single arm (example: late)
+./bin-cuda/train_blt_d --backend cuda \
+    --corpus data/train.bin --eval-corpus data/heldout.bin \
+    --eval-windows 300 --steps 20000 --embed 128 --hidden 256 \
+    --window 96 --block-size 4 --seed 7 --lr-decay 1 \
+    --mask-warmup 10000 --mask-scale 0.3 --t-min 0.05 \
+    --mask-late-step 14000 --mask-late-scale 0.5 \
+    --save-weights runs/s6_late.fblt
+
+# Inference benchmark (example: base arm)
+./bin-cuda/infer_bench --backend cuda \
+    --plain runs/s6_plain.fblt --bltd runs/s6_base_dec2.fblt \
+    --embed 128 --hidden 256 --enc-layers 2 --glob-layers 2 \
+    --dec-layers 2 --new-bytes 64 --results bench/results.jsonl
 ```

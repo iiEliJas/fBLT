@@ -38,23 +38,26 @@ extern "C" float blt_vec_dot_cuda(blt_backend backend, const float* a, const flo
     (void)backend;
     BLT_REQUIRE(backend == BLT_BACKEND_CUDA, "blt_vec_dot: CUDA implementation called with non-CUDA backend");
 
-    float* d_out = NULL;
-    cudaError_t err = cudaMalloc(&d_out, sizeof(float));
-    if (err != cudaSuccess) {
-        BLT_FATAL("blt_vec_dot: cudaMalloc failed: %s", cudaGetErrorString(err));
+    // Grow-only device scratch for the scalar result: grad clipping calls
+    // this once per parameter tensor per step, and a cudaMalloc/cudaFree
+    // round trip per call dominated that path on WSL2.
+    static float* d_out = NULL;
+    if (d_out == NULL) {
+        cudaError_t err = cudaMalloc(&d_out, sizeof(float));
+        if (err != cudaSuccess) {
+            BLT_FATAL("blt_vec_dot: cudaMalloc failed: %s", cudaGetErrorString(err));
+        }
     }
     blt_vec_dot_kernel<<<1, BLT_VEC_DOT_BLOCK>>>(a, b, n, d_out);
-    err = cudaGetLastError();
+    cudaError_t err = cudaGetLastError();
     if (err == cudaSuccess) {
         err = cudaDeviceSynchronize();
     }
     if (err != cudaSuccess) {
-        cudaFree(d_out);
         BLT_FATAL("blt_vec_dot: kernel failed: %s", cudaGetErrorString(err));
     }
     float result = 0.0f;
     err = cudaMemcpy(&result, d_out, sizeof(float), cudaMemcpyDeviceToHost);
-    cudaFree(d_out);
     if (err != cudaSuccess) {
         BLT_FATAL("blt_vec_dot: result copy failed: %s", cudaGetErrorString(err));
     }

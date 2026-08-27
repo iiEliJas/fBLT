@@ -23,6 +23,7 @@
 #include "blt/models/local_common.h"
 #include "blt/models/patcher.h"
 #include "blt/infer/block_generation.h"
+#include "blt/infer/self_speculation.h"
 #include "blt/ops/optim.h"
 #include "generate_greedy.h"
 
@@ -597,6 +598,99 @@ int run_blockgen_generation_gates(void) {
     printf("[BLOCKGEN] DV==greedy ok; nfe_dec=%zu baseline=%zu drafted=%zu "
            "accepted=%zu\n",
            st.nfe_decoder, new_bytes, st.bytes_drafted, st.bytes_accepted);
+
+    blt_arena_destroy(model_arena);
+    blt_arena_destroy(scratch);
+    return 1;
+}
+
+//----------------------------------------------------------------------
+// Stage 6 add-on helpers: boundary-aligned commit selection, adaptive B,
+// and end-to-end boundary-aligned DV against the greedy reference.
+//----------------------------------------------------------------------
+
+int run_blockgen_stage6_helpers(void) {
+    // ---- blt_aligned_commit_select ------------------------------------
+    {
+        blt_patch_info p[5];
+        const size_t starts[] = {0, 4, 6, 7, 12};
+        const size_t lens[]   = {4, 2, 1, 5, 3};
+        for (size_t i = 0; i < 5; i++) {
+            p[i].start_idx = starts[i];
+            p[i].length = lens[i];
+            p[i].peak_entropy = 0.0f;
+        }
+        // ends: 4, 6, 7, 12, 15
+        TEST_ASSERT(blt_aligned_commit_select(p, 5, 0, 4) == 4);
+        TEST_ASSERT(blt_aligned_commit_select(p, 5, 4, 6) == 6);
+        TEST_ASSERT(blt_aligned_commit_select(p, 5, 5, 10) == 7);
+        TEST_ASSERT(blt_aligned_commit_select(p, 5, 7, 11) == 0);   // none
+        TEST_ASSERT(blt_aligned_commit_select(p, 5, 7, 12) == 12);
+        TEST_ASSERT(blt_aligned_commit_select(p, 5, 13, 15) == 15);
+    }
+
+    // ---- blt_block_adapt_b --------------------------------------------
+    {
+        TEST_ASSERT(blt_block_adapt_b(8, 0.9, 4, 16, 0.5f) == 9);   // grow
+        TEST_ASSERT(blt_block_adapt_b(8, 0.2, 4, 16, 0.5f) == 7);   // shrink
+        TEST_ASSERT(blt_block_adapt_b(8, 0.55, 4, 16, 0.5f) == 8);  // hold band
+        TEST_ASSERT(blt_block_adapt_b(16, 0.9, 4, 16, 0.5f) == 16); // cap
+        TEST_ASSERT(blt_block_adapt_b(4, 0.2, 4, 16, 0.5f) == 4);   // floor
+        TEST_ASSERT(blt_block_adapt_b(8, 0.2, 0, 16, 0.5f) == 7);   // b_min=0 -> floor 1
+        TEST_ASSERT(blt_block_adapt_b(1, 0.2, 0, 16, 0.5f) == 1);   // cannot shrink further
+        TEST_ASSERT(blt_block_adapt_b(8, 0.9, 0, 16, 0.5f) == 9);
+        TEST_ASSERT(blt_block_adapt_b(8, 0.2, 4, 0, 0.5f) == 8);    // disabled
+        TEST_ASSERT(blt_block_adapt_b(3, 0.9, 4, 16, 0.5f) == 5);   // clamp-in, then grow
+        TEST_ASSERT(blt_block_adapt_b(20, 0.2, 4, 16, 0.5f) == 15); // clamp-in, then shrink
+    }
+
+    // ---- boundary-aligned DV end-to-end (degenerate patcher => exact) --
+    srand(4321);
+
+    blt_arena* model_arena;
+    blt_arena* scratch;
+    blt_model* model;
+    blt_entropy_lm* lm;
+    blt_patcher_config pcfg;
+    setup_world(&model_arena, &scratch, &model, &lm, &pcfg);
+    TEST_ASSERT(model_arena && scratch && model && lm);
+
+    blt_model_grad* grad = blt_model_grad_create(model_arena, model);
+    TEST_ASSERT(grad != NULL);
+
+    static const char* snippets[] = { "the quick brown fox", "driftless tune" };
+    train_snippets(model, grad, scratch, snippets, 2, 2000);
+
+    static const char* prompt_str = "driftless ";
+    const size_t prompt_len = strlen(prompt_str);
+    const uint8_t* prompt = (const uint8_t*)prompt_str;
+    const size_t new_bytes = 8;
+
+    uint8_t ref[prompt_len + new_bytes];
+    blt_generate_greedy(model, lm, &pcfg, prompt, prompt_len, new_bytes,
+                        ref, scratch);
+
+    blt_block_gen_config gc;
+    memset(&gc, 0, sizeof(gc));
+    gc.block_size = 4;
+    gc.d0_mode = BLT_D0_LEARNED;
+    gc.opts.strategy = BLT_UNMASK_CONFIDENCE;
+    gc.opts.threshold = 0.7f;
+    gc.boundary_aligned = 1;
+
+    uint8_t out[prompt_len + new_bytes];
+    blt_infer_stats st;
+    memset(&st, 0, sizeof(st));
+    blt_generate_greedy_blockdiff_verify(model, lm, &pcfg, prompt, prompt_len,
+                                         new_bytes, out, &gc, &st, scratch);
+    // With the degenerate patcher every position is a patch boundary, so
+    // aligned commitment must reproduce greedy byte-for-byte.
+    TEST_ASSERT(memcmp(out, ref, prompt_len + new_bytes) == 0);
+    TEST_ASSERT(st.bytes_drafted >= st.bytes_accepted);
+    TEST_ASSERT(st.bytes_accepted >= new_bytes - 1);   // progress per round
+
+    printf("[BLOCKGEN] stage6 helpers ok; aligned DV drafted=%zu accepted=%zu\n",
+           st.bytes_drafted, st.bytes_accepted);
 
     blt_arena_destroy(model_arena);
     blt_arena_destroy(scratch);

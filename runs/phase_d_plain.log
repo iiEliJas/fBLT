@@ -1,7 +1,0 @@
-train_blt_d: mode=PLAIN-BLT corpus=data/train.bin (67497634 bytes) steps=10000 lr=0.05 B=4 W=48 embed=64 hidden=128 layers=2 d0=learned
-step    500/10000  window 500/1406200  avg_loss 3.3174
-step   1000/10000  window 1000/1406200  avg_loss 2.3022
-step   1500/10000  window 1500/1406200  avg_loss 2.5792
-step   2000/10000  window 2000/1406200  avg_loss 2.3292
-step   2500/10000  window 2500/1406200  avg_loss 2.1866
-step   3000/10000  window 3000/1406200  avg_loss 2.0828

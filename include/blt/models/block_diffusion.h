@@ -74,6 +74,15 @@ void blt_block_batch_build(blt_block_batch* out, blt_arena* arena,
                            const blt_patch_info* patches, size_t num_patches,
                            size_t B, uint64_t rng_seed);
 
+// Same as blt_block_batch_build but with a caller-supplied timestep:
+// t_in > 0 fixes both the masking probability and the 1/t loss weight
+// (curriculum schedules); t_in <= 0 samples t ~ U(0,1) from rng_seed like
+// the plain build. Masking draws still consume the seeded RNG stream.
+void blt_block_batch_build_t(blt_block_batch* out, blt_arena* arena,
+                             const uint8_t* bytes, size_t N,
+                             const blt_patch_info* patches, size_t num_patches,
+                             size_t B, uint64_t rng_seed, float t_in);
+
 
 //----------------------------------------------------------------------
 // Diffusion decoder forward / backward (Fast-BLT §3.2.2 / §3.2.3)

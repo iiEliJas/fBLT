@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "blt/core/allocator.h"
 #include "blt/core/backend.h"
@@ -39,6 +40,7 @@
 #include "blt/models/local_common.h"
 #include "blt/models/block_diffusion.h"
 #include "blt/ops/optim.h"
+#include "blt/ops/vecmath.h"
 
 
 typedef struct {
@@ -77,6 +79,16 @@ typedef struct {
                                 // schedule; 0 = disabled)
     int entropy_patches;        // segment training/eval windows with the
                                 // entropy LM + patcher (matches inference)
+    int use_cuda;               // 1 = model + training passes on the CUDA
+                                // backend (staged I/O; see --backend)
+    size_t enc_layers;          // per-submodule layer overrides (0 = --layers)
+    size_t glob_layers;
+    size_t dec_layers;
+    int cross_last;             // 1 = cross-attn only after the final local
+                                // layer (encoder + decoder); default all
+    float t_warmup_frac;        // high-t curriculum: fraction of steps over
+    float t_hi_start;           // which the t floor decays from t_hi_start
+                                // down to t_min (0 = disabled)
 } args_t;
 
 
@@ -91,11 +103,19 @@ static void usage(void) {
 //----------------------------------------------------------------------
 // Gradient clipping + SGD over every parameter in the model
 
+// splitmix64 stream for the trainer-side timestep draw (host-side so
+// curriculum schedules can reshape t before it reaches masking).
+static uint64_t t_rng_next(uint64_t* state) {
+    *state += 0x9E3779B97F4A7C15ULL;
+    uint64_t z = *state;
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
 static float grad_sq(blt_tensor* t) {
-    const float* d = (const float*)t->data;
-    float s = 0.0f;
-    for (size_t i = 0; i < t->numel; i++) s += d[i] * d[i];
-    return s;
+    return blt_vec_dot(t->backend, (const float*)t->data,
+                       (const float*)t->data, t->numel);
 }
 
 static void layer_grads(blt_local_layer_grad* l, blt_tensor* ts[12]) {
@@ -205,7 +225,7 @@ static double window_causal_ce(blt_arena* arena, const blt_model* model,
                                size_t* masked_hits, size_t* masked_total) {
     size_t bshape[1] = {N};
     blt_tensor bytes_in = blt_tensor_create(arena, bshape, 1, BLT_DTYPE_UINT8);
-    memcpy(bytes_in.data, text, N);
+    blt_tensor_upload(&bytes_in, text, N);
 
     size_t p_shape[2] = {M, model->config.encoder_config.embed_dim};
     blt_tensor P = blt_tensor_create(arena, p_shape, 2, BLT_DTYPE_FP32);
@@ -228,7 +248,9 @@ static double window_causal_ce(blt_arena* arena, const blt_model* model,
         blt_tensor loss = blt_tensor_create(arena, sc, 1, BLT_DTYPE_FP32);
         blt_local_decoder_forward_diffusion(model->decoder, &h, &O, patches, M,
             text, batch_or_null, d0m, &logits, &loss, arena);
-        const float* L = (const float*)logits.data;
+        float* L = (float*)malloc(logits.numel * sizeof(float));
+        BLT_REQUIRE(L != NULL, "window_causal_ce: logits staging alloc failed");
+        blt_tensor_download(&logits, L, logits.numel * sizeof(float));
 
         // argmax over a row
         #define ROW_ARGMAX(row_) ({ \
@@ -261,6 +283,7 @@ static double window_causal_ce(blt_arena* arena, const blt_model* model,
             }
         }
         #undef ROW_ARGMAX
+        free(L);
     } else {
         size_t lg[2] = {N, V};
         blt_tensor logits = blt_tensor_create(arena, lg, 2, BLT_DTYPE_FP32);
@@ -268,7 +291,9 @@ static double window_causal_ce(blt_arena* arena, const blt_model* model,
         blt_tensor loss = blt_tensor_create(arena, sc, 1, BLT_DTYPE_FP32);
         blt_local_decoder_forward(model->decoder, &h, &O, patches, M,
             &bytes_in, NULL, 0, &logits, &loss, arena);
-        const float* L = (const float*)logits.data;
+        float* L = (float*)malloc(logits.numel * sizeof(float));
+        BLT_REQUIRE(L != NULL, "window_causal_ce: logits staging alloc failed");
+        blt_tensor_download(&logits, L, logits.numel * sizeof(float));
         for (size_t i = 0; i + 1 < N; i++) {
             const float* row = L + i * V;
             float mx = row[0];
@@ -282,14 +307,10 @@ static double window_causal_ce(blt_arena* arena, const blt_model* model,
             ce_sum += -log(fmax(pt / sum, 1e-12));
             count++;
         }
+        free(L);
     }
     BLT_REQUIRE(count > 0, "eval window produced no predictions");
     return ce_sum / (double)count;
-}
-
-static void fill_const1(blt_tensor* t) {
-    float* d = (float*)t->data;
-    for (size_t i = 0; i < t->numel; i++) d[i] = 1.0f;
 }
 
 static size_t fixed_stride(size_t seq_len, size_t patch_len, blt_patch_info* out) {
@@ -345,12 +366,14 @@ static blt_entropy_lm* make_train_entropy_lm(blt_arena* arena, size_t ms) {
 }
 
 // Entropy-LM patching (same numerics as the inference controllers).
+// The patcher is host-only, so under a device backend the byte ids are
+// uploaded and the entropies staged back through host memory.
 static size_t entropy_segment(blt_arena* arena, blt_entropy_lm* lm,
                               const uint8_t* bytes, size_t len,
                               blt_patch_info* out, size_t max_patches) {
     size_t shape1[1] = {len};
     blt_tensor bytes_in = blt_tensor_create(arena, shape1, 1, BLT_DTYPE_UINT8);
-    memcpy(bytes_in.data, bytes, len);
+    blt_tensor_upload(&bytes_in, bytes, len);
 
     size_t logits_shape[2] = {len, 256};
     blt_tensor logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
@@ -374,7 +397,19 @@ static size_t entropy_segment(blt_arena* arena, blt_entropy_lm* lm,
     pcfg.max_patch_length = 16;
     pcfg.rule = BLT_PATCH_RULE_GLOBAL;
     pcfg.reset_on_newline = false;
-    return blt_segment_patches(&vals, bytes, out, max_patches, &pcfg);
+
+    if (vals.backend == BLT_BACKEND_CPU) {
+        return blt_segment_patches(&vals, bytes, out, max_patches, &pcfg);
+    }
+    float* vals_host = (float*)malloc(len * sizeof(float));
+    BLT_REQUIRE(vals_host != NULL, "entropy_segment: staging alloc failed");
+    blt_tensor_download(&vals, vals_host, len * sizeof(float));
+    blt_tensor vals_view;
+    view_1d(&vals_view, vals_host, len, BLT_DTYPE_FP32, BLT_BACKEND_CPU);
+    const size_t n = blt_segment_patches(&vals_view, bytes, out,
+                                         max_patches, &pcfg);
+    free(vals_host);
+    return n;
 }
 
 int main(int argc, char** argv) {
@@ -387,7 +422,10 @@ int main(int argc, char** argv) {
                  .t_min = 0.05f, .lr_decay = 0, .mask_warmup = 0,
                  .mask_scale = 1.0f, .mask_late_step = 0,
                  .mask_late_scale = 1.0f, .entropy_patches = 0,
-                 .train_entlm = NULL, .entropy_lm = NULL };
+                 .train_entlm = NULL, .entropy_lm = NULL,
+                 .use_cuda = 0,
+                 .enc_layers = 0, .glob_layers = 0, .dec_layers = 0,
+                 .cross_last = 0, .t_warmup_frac = 0.0f, .t_hi_start = 0.8f };
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--corpus") && i + 1 < argc) a.corpus_path = argv[++i];
@@ -428,6 +466,28 @@ int main(int argc, char** argv) {
             a.train_entlm = argv[++i];
         else if (!strcmp(argv[i], "--entropy-lm") && i + 1 < argc)
             a.entropy_lm = argv[++i];
+        else if (!strcmp(argv[i], "--backend") && i + 1 < argc) {
+            ++i;
+            if (!strcmp(argv[i], "cuda")) a.use_cuda = 1;
+            else if (!strcmp(argv[i], "cpu")) a.use_cuda = 0;
+            else { fprintf(stderr, "unknown --backend '%s'\n", argv[i]); return 1; }
+        }
+        else if (!strcmp(argv[i], "--enc-layers") && i + 1 < argc)
+            a.enc_layers = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--glob-layers") && i + 1 < argc)
+            a.glob_layers = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--dec-layers") && i + 1 < argc)
+            a.dec_layers = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--cross-attn") && i + 1 < argc) {
+            ++i;
+            if (!strcmp(argv[i], "all")) a.cross_last = 0;
+            else if (!strcmp(argv[i], "last")) a.cross_last = 1;
+            else { fprintf(stderr, "unknown --cross-attn '%s'\n", argv[i]); return 1; }
+        }
+        else if (!strcmp(argv[i], "--t-warmup-hi") && i + 1 < argc)
+            a.t_warmup_frac = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--t-hi-start") && i + 1 < argc)
+            a.t_hi_start = atof(argv[++i]);
         else { usage(); return 1; }
     }
     if (a.corpus_path == NULL) { usage(); return 1; }
@@ -445,22 +505,53 @@ int main(int argc, char** argv) {
     }
     fclose(fp);
 
-    const size_t MS = 512;   // max_seq_len headroom for clean + blocks
+    size_t MS = 512;   // max_seq_len headroom for clean + blocks
     if (a.window < 8 || a.window > 256) {
         fprintf(stderr, "--window must be in [8, 256]\n");
         return 1;
     }
+#if !defined(BLT_WITH_CUDA)
+    if (a.use_cuda) {
+        fprintf(stderr, "--backend cuda requires a CUDA=1 build\n");
+        return 1;
+    }
+#endif
+    // The standalone entropy-LM trainer stays CPU-only: it is a tiny
+    // side model whose save path and patcher interplay are host-bound,
+    // and it never benefits from the device at this size.
+    if (a.train_entlm && a.use_cuda) {
+        printf("[TRAIN] note: --train-entropy-lm runs on CPU regardless of "
+               "--backend\n");
+        a.use_cuda = 0;
+    }
+    const blt_backend dev = a.use_cuda ? BLT_BACKEND_CUDA : BLT_BACKEND_CPU;
 
-    blt_arena* model_arena = blt_arena_create(64 * 1024 * 1024, BLT_BACKEND_CPU);
-    blt_arena* scratch = blt_arena_create(256 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena* model_arena = blt_arena_create(
+        a.use_cuda ? 1024ULL * 1024 * 1024 : 64 * 1024 * 1024, dev);
+    blt_arena* scratch = blt_arena_create(256 * 1024 * 1024, dev);
+    // Host arena for the segmentation LM + patcher (host-only by design),
+    // valid in both backends. Segmentation buffers get their own resettable
+    // arena so per-step calls never overwrite the LM weights.
+    blt_arena* host_lm_arena = blt_arena_create(32 * 1024 * 1024,
+                                                BLT_BACKEND_CPU);
+    blt_arena* host_seg_arena = blt_arena_create(16 * 1024 * 1024,
+                                                 BLT_BACKEND_CPU);
 
-    // Model config (paper-ish defaults; ngram tables as in the repo baseline)
+    // Model config (paper-ish defaults; ngram tables as in the repo baseline).
+    // Per-submodule layer counts default to --layers; the decoder can be
+    // scaled independently for depth sweeps (paper: decoder scaling matters
+    // most for BLT-D/DV).
+    if (a.enc_layers == 0) a.enc_layers = a.layers;
+    if (a.glob_layers == 0) a.glob_layers = a.layers;
+    if (a.dec_layers == 0) a.dec_layers = a.layers;
+
     blt_model_config cfg;
     memset(&cfg, 0, sizeof(cfg));
     cfg.encoder_config.embed_dim = a.embed; cfg.encoder_config.patch_dim = 0;
-    cfg.encoder_config.num_layers = a.layers; cfg.encoder_config.hidden_dim = a.hidden;
+    cfg.encoder_config.num_layers = a.enc_layers; cfg.encoder_config.hidden_dim = a.hidden;
     cfg.encoder_config.num_heads = 4; cfg.encoder_config.cross_attn_heads = 4;
-    cfg.encoder_config.local_window = 0; cfg.encoder_config.cross_attn_all_layers = true;
+    cfg.encoder_config.local_window = 0;
+    cfg.encoder_config.cross_attn_all_layers = !a.cross_last;
     cfg.encoder_config.pool_type = BLT_POOL_MEAN; cfg.encoder_config.rope_theta = 500000.0f;
     cfg.encoder_config.max_seq_len = MS;
     cfg.encoder_config.ngram_config.ngram_sizes[0] = 3;
@@ -471,13 +562,14 @@ int main(int argc, char** argv) {
     cfg.encoder_config.ngram_config.normalize = true;
     cfg.encoder_config.ngram_config.embed_dim = a.embed;
     cfg.encoder_config.pool_type = BLT_POOL_MEAN;
-    cfg.global_config.embed_dim = a.embed; cfg.global_config.num_layers = a.layers;
+    cfg.global_config.embed_dim = a.embed; cfg.global_config.num_layers = a.glob_layers;
     cfg.global_config.hidden_dim = a.hidden; cfg.global_config.num_heads = 4;
     cfg.global_config.rope_theta = 500000.0f; cfg.global_config.max_seq_len = MS;
     cfg.decoder_config.embed_dim = a.embed; cfg.decoder_config.patch_dim = 0;
-    cfg.decoder_config.num_layers = a.layers; cfg.decoder_config.hidden_dim = a.hidden;
+    cfg.decoder_config.num_layers = a.dec_layers; cfg.decoder_config.hidden_dim = a.hidden;
     cfg.decoder_config.num_heads = 4; cfg.decoder_config.cross_attn_heads = 4;
-    cfg.decoder_config.local_window = 0; cfg.decoder_config.cross_attn_all_layers = true;
+    cfg.decoder_config.local_window = 0;
+    cfg.decoder_config.cross_attn_all_layers = !a.cross_last;
     cfg.decoder_config.rope_theta = 500000.0f; cfg.decoder_config.max_seq_len = MS;
     cfg.decoder_config.vocab_size = 256;
 
@@ -488,7 +580,7 @@ int main(int argc, char** argv) {
     }
     blt_model_grad* grad = blt_model_grad_create(model_arena, model);
     blt_entropy_lm* train_lm = a.entropy_patches
-        ? make_train_entropy_lm(model_arena, MS) : NULL;
+        ? make_train_entropy_lm(host_lm_arena, MS) : NULL;
     if (train_lm && a.entropy_lm) {
         blt_entropy_lm_load(train_lm, a.entropy_lm);
         printf("[TRAIN] entropy-patch segmentation (trained LM: %s)\n",
@@ -571,14 +663,34 @@ int main(int argc, char** argv) {
     }
 
     // Deterministic random init (libc-independent LCG). Skipped entirely
-    // when --load-weights supplied the full parameter set.
+    // when --load-weights supplied the full parameter set. Values are drawn
+    // in a fixed order; under a device backend they are generated host-side
+    // and uploaded per tensor.
     uint64_t rng_state = a.seed ? a.seed : 1;
     const int need_init = (a.load_path == NULL);
     if (need_init) {
     #define RAND01() ((float)((rng_state += 0x9E3779B97F4A7C15ULL) >> 40) / (float)(1u << 24))
     #define FILL_RAND(t, s) do { \
-        float* d_ = (float*)(t).data; \
-        for (size_t i_ = 0; i_ < (t).numel; i_++) d_[i_] = (RAND01() * 2.0f - 1.0f) * (s); \
+        blt_tensor* t_ = &(t); \
+        const size_t n_ = t_->numel; \
+        float* d_ = (float*)(t_->backend == BLT_BACKEND_CPU \
+            ? t_->data : malloc(n_ * sizeof(float))); \
+        BLT_REQUIRE(d_ != NULL, "init: staging alloc failed"); \
+        for (size_t i_ = 0; i_ < n_; i_++) d_[i_] = (RAND01() * 2.0f - 1.0f) * (s); \
+        if (t_->backend != BLT_BACKEND_CPU) { \
+            blt_tensor_upload(t_, d_, n_ * sizeof(float)); free(d_); \
+        } \
+    } while (0)
+    #define FILL_ONES(t) do { \
+        blt_tensor* t_ = &(t); \
+        const size_t n_ = t_->numel; \
+        float* d_ = (float*)(t_->backend == BLT_BACKEND_CPU \
+            ? t_->data : malloc(n_ * sizeof(float))); \
+        BLT_REQUIRE(d_ != NULL, "init: staging alloc failed"); \
+        for (size_t i2_ = 0; i2_ < n_; i2_++) d_[i2_] = 1.0f; \
+        if (t_->backend != BLT_BACKEND_CPU) { \
+            blt_tensor_upload(t_, d_, n_ * sizeof(float)); free(d_); \
+        } \
     } while (0)
 
     FILL_RAND(model->encoder->byte_embedding_weight, 0.1f);
@@ -590,14 +702,13 @@ int main(int argc, char** argv) {
             &ly->cross_weight_v, &ly->cross_weight_proj};
         for (size_t j = 0; j < 12; j++) {
             const int is_norm = (j == 0 || j == 3 || j == 7);
-            if (is_norm) { float* d = (float*)ws[j]->data;
-                for (size_t i2 = 0; i2 < ws[j]->numel; i2++) d[i2] = 1.0f; }
+            if (is_norm) FILL_ONES(*ws[j]);
             else FILL_RAND(*ws[j], 0.1f);
         }
     }
     for (size_t l = 0; l < cfg.global_config.num_layers; l++) {
         blt_transformer_layer_storage* ly = &model->global->stack.layer_storage[l];
-        fill_const1(&ly->norm1_weight); fill_const1(&ly->norm2_weight);
+        FILL_ONES(ly->norm1_weight); FILL_ONES(ly->norm2_weight);
         FILL_RAND(ly->attn_qkv_w, 0.1f); FILL_RAND(ly->attn_proj_w, 0.1f);
         FILL_RAND(ly->ffn_up_w, 0.1f); FILL_RAND(ly->ffn_gate_w, 0.1f);
         FILL_RAND(ly->ffn_down_w, 0.1f);
@@ -610,20 +721,25 @@ int main(int argc, char** argv) {
             &ly->cross_weight_v, &ly->cross_weight_proj};
         for (size_t j = 0; j < 12; j++) {
             const int is_norm = (j == 0 || j == 3 || j == 7);
-            if (is_norm) { float* d = (float*)ws[j]->data;
-                for (size_t i2 = 0; i2 < ws[j]->numel; i2++) d[i2] = 1.0f; }
+            if (is_norm) FILL_ONES(*ws[j]);
             else FILL_RAND(*ws[j], 0.1f);
         }
     }
     FILL_RAND(model->decoder->lm_head_weight, 0.1f);
     FILL_RAND(model->decoder->d0_embed_weight, 0.05f);
+    #undef FILL_ONES
+    #undef FILL_RAND
+    #undef RAND01
     }
 
     printf("train_blt_d: mode=%s corpus=%s (%ld bytes) steps=%zu lr=%.4g B=%zu W=%zu "
-           "embed=%zu hidden=%zu layers=%zu d0=%s\n",
+           "embed=%zu hidden=%zu enc/glob/dec layers=%zu/%zu/%zu xattn=%s backend=%s d0=%s\n",
         a.diffusion ? "BLT-D" : "PLAIN-BLT",
         a.corpus_path, fsize, a.steps, (double)a.lr, a.block_size, a.window,
-        a.embed, a.hidden, a.layers, a.d0_learned ? "learned" : "zeros");
+        a.embed, a.hidden, a.enc_layers, a.glob_layers, a.dec_layers,
+        a.cross_last ? "last" : "all",
+        a.use_cuda ? "cuda" : "cpu",
+        a.d0_learned ? "learned" : "zeros");
 
     // -----------------------------------------------------------------
     // Training loop: non-overlapping windows over the corpus, fixed-stride
@@ -635,7 +751,12 @@ int main(int argc, char** argv) {
     double running = 0.0f;
     size_t running_n = 0;
 
+    double t_fwd = 0.0, t_bwd = 0.0, t_opt = 0.0, t_step = 0.0;
+    struct timespec ts0, tsA, tsB, tsC, tsD;
+    const int timing = (getenv("BLT_TRAIN_TIMING") != NULL);
+
     for (size_t step = 0; step < a.steps; step++) {
+        if (timing) clock_gettime(CLOCK_MONOTONIC, &ts0);
         blt_arena_reset(scratch);
 
         const size_t w = step % num_windows;
@@ -644,15 +765,35 @@ int main(int argc, char** argv) {
 
         blt_patch_info patches[128];
         const size_t M = train_lm
-            ? entropy_segment(scratch, train_lm, text, N, patches, 128)
+            ? (blt_arena_reset(host_seg_arena),
+               entropy_segment(host_seg_arena, train_lm, text, N, patches, 128))
             : fixed_stride(N, 4, patches);
         BLT_REQUIRE(M >= 2, "training window produced < 2 patches");
         if (M < 2) continue;
 
         blt_block_batch batch;
         if (a.diffusion) {
-            blt_block_batch_build(&batch, scratch, text, N, patches, M,
-                a.block_size, a.seed + step);
+            uint64_t trng = a.seed * 0x9E3779B97F4A7C15ULL + step + 1;
+            float t_draw = (float)((double)(t_rng_next(&trng) >> 11) /
+                                   9007199254740992.0);
+            if (t_draw <= 1e-6f) t_draw = 1e-6f;
+            // High-t curriculum: hold the draw above a floor that decays
+            // linearly from --t-hi-start to t_min over the first
+            // --t-warmup-hi fraction of steps, so early training emphasizes
+            // heavily-masked blocks (the regime block drafting relies on)
+            // before annealing into the full U(0,1) distribution.
+            if (a.t_warmup_frac > 0.0f && a.steps > 0 &&
+                a.t_hi_start > a.t_min) {
+                const size_t warm =
+                    (size_t)((double)a.steps * (double)a.t_warmup_frac);
+                if (warm > 0 && step < warm) {
+                    const float thr = a.t_hi_start +
+                        (a.t_min - a.t_hi_start) * ((float)step / (float)warm);
+                    if (t_draw < thr) t_draw = thr;
+                }
+            }
+            blt_block_batch_build_t(&batch, scratch, text, N, patches, M,
+                a.block_size, a.seed + step, t_draw);
             // Floor the timestep: without it, rare tiny-t draws give 1/t
             // weights up to ~1e6 that dominate gradients and starve
             // L_clean (observed as wild loss swings). Standard masked-
@@ -676,7 +817,7 @@ int main(int argc, char** argv) {
 
         size_t bshape[1] = {N};
         blt_tensor bytes_in = blt_tensor_create(scratch, bshape, 1, BLT_DTYPE_UINT8);
-        memcpy(bytes_in.data, text, N);
+        blt_tensor_upload(&bytes_in, text, N);
 
         size_t h_shape[2] = {N, a.embed};
         size_t sc_shape[1] = {1};
@@ -690,6 +831,7 @@ int main(int argc, char** argv) {
             size_t p_shape2[2] = {M, a.embed};
             blt_tensor P = blt_tensor_create(scratch, p_shape2, 2, BLT_DTYPE_FP32);
             blt_tensor h = blt_tensor_create(scratch, h_shape, 2, BLT_DTYPE_FP32);
+            if (timing) clock_gettime(CLOCK_MONOTONIC, &tsA);
             blt_local_encoder_forward(model->encoder, &bytes_in, patches, M,
                 NULL, 0, &P, &h, scratch);
 
@@ -704,7 +846,10 @@ int main(int argc, char** argv) {
                 text, &batch,
                 a.d0_learned ? BLT_D0_LEARNED : BLT_D0_ZEROS, &logits, &loss, scratch);
 
-            const float lv = ((const float*)loss.data)[0];
+            float lv;
+            blt_tensor_download(&loss, &lv, sizeof(float));
+            if (timing) { clock_gettime(CLOCK_MONOTONIC, &tsB);
+                t_fwd += (tsB.tv_sec-tsA.tv_sec)+(tsB.tv_nsec-tsA.tv_nsec)/1e9; }
             running += lv;
             running_n++;
 
@@ -721,6 +866,8 @@ int main(int argc, char** argv) {
 
             blt_local_encoder_backward(model->encoder, &bytes_in, patches, M,
                 NULL, 0, &grad_P, &grad_h, grad->encoder_grad, scratch);
+            if (timing) { clock_gettime(CLOCK_MONOTONIC, &tsC);
+                t_bwd += (tsC.tv_sec-tsB.tv_sec)+(tsC.tv_nsec-tsB.tv_nsec)/1e9; }
         } else {
             // plain causal BLT baseline: identical pipeline, standard
             // shifted-CE objective through the composed model API
@@ -730,7 +877,8 @@ int main(int argc, char** argv) {
             blt_model_forward(model, &bytes_in, patches, M, NULL, 0,
                 &logits, &loss, scratch);
 
-            const float lv = ((const float*)loss.data)[0];
+            float lv;
+            blt_tensor_download(&loss, &lv, sizeof(float));
             running += lv;
             running_n++;
 
@@ -743,8 +891,21 @@ int main(int argc, char** argv) {
             else if (step >= (a.steps * 60) / 100) lr *= 0.3f;
         }
 
+        if (timing) clock_gettime(CLOCK_MONOTONIC, &tsC);
         clip_all(model, grad, 5.0f);
         sgd_all(model, grad, lr);
+        if (timing) {
+            clock_gettime(CLOCK_MONOTONIC, &tsD);
+            t_opt += (tsD.tv_sec-tsC.tv_sec)+(tsD.tv_nsec-tsC.tv_nsec)/1e9;
+            t_step += (tsD.tv_sec-ts0.tv_sec)+(tsD.tv_nsec-ts0.tv_nsec)/1e9;
+            if ((step % 50) == 49) {
+                printf("[TIMING] step %zu fwd %.1fms bwd %.1fms opt %.1fms step %.1fms\n",
+                    step + 1, 1000.0*t_fwd/50.0, 1000.0*t_bwd/50.0,
+                    1000.0*t_opt/50.0, 1000.0*t_step/50.0);
+                fflush(stdout);
+                t_fwd = t_bwd = t_opt = t_step = 0.0;
+            }
+        }
 
         if ((step + 1) % a.report_every == 0 || step + 1 == a.steps) {
             printf("step %6zu/%zu  window %zu/%zu  avg_loss %.4f\n",
@@ -796,9 +957,14 @@ int main(int argc, char** argv) {
             const uint8_t* text = base + wi * a.window;
 
             blt_patch_info ep[128];
-            size_t eM = train_lm
-                ? entropy_segment(scratch, train_lm, text, a.window, ep, 128)
-                : fixed_stride(a.window, 4, ep);
+            size_t eM = 0;
+            if (train_lm) {
+                blt_arena_reset(host_seg_arena);
+                eM = entropy_segment(host_seg_arena, train_lm, text,
+                                     a.window, ep, 128);
+            } else {
+                eM = fixed_stride(a.window, 4, ep);
+            }
 
             blt_block_batch ebatch;
             if (a.diffusion) {
@@ -814,13 +980,20 @@ int main(int argc, char** argv) {
         }
         bpb = (ce_sum / (double)eval_count) / log(2.0);
         printf("RESULT mode=%s steps=%zu embed=%zu window=%zu B=%zu "
+               "enc/glob/dec=%zu/%zu/%zu xattn=%s backend=%s "
                "eval_windows=%zu causal_bpb=%.4f masked_acc=%.3f (%zu/%zu)\n",
             a.diffusion ? "bltd" : "plain", a.steps, a.embed, a.window,
-            a.block_size, eval_count, bpb,
+            a.block_size, a.enc_layers, a.glob_layers, a.dec_layers,
+            a.cross_last ? "last" : "all", a.use_cuda ? "cuda" : "cpu",
+            eval_count, bpb,
             total ? (double)hits / (double)total : 0.0, hits, total);
         free(eval_bytes);
     }
 
+    blt_arena_destroy(host_lm_arena);
+    blt_arena_destroy(host_seg_arena);
+    blt_arena_destroy(model_arena);
+    blt_arena_destroy(scratch);
     free(corpus);
     return 0;
 }
