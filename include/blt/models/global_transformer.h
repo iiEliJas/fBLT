@@ -29,6 +29,7 @@ typedef struct {
     size_t num_heads;
     float  rope_theta;
     size_t max_seq_len;  // max on num_patches
+    bool   use_bf16;     // mixed-precision matmuls via bf16 weight copies
 } blt_global_transformer_config;
 
 typedef struct {

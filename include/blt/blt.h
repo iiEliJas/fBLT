@@ -11,6 +11,7 @@ extern "C" {
 #include "blt/core/tensor.h"
 
 // Ops
+#include "blt/ops/cast.h"
 #include "blt/ops/cross_entropy.h"
 #include "blt/ops/elementwise.h"
 #include "blt/ops/gelu.h"

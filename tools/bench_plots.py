@@ -495,6 +495,7 @@ def plot_cuda_speedup(out_dir):
 
     seqs = [256, 1024]
     cuda_fwd, cuda_bwd = [], []
+    bf16_fwd, bf16_bwd = [], []
     for s in seqs:
         tag = f"meso_pipeline_{s}_cuda"
         if tag in bench:
@@ -504,48 +505,62 @@ def plot_cuda_speedup(out_dir):
         else:
             cuda_fwd.append(0)
             cuda_bwd.append(0)
+        bf16_tag = f"meso_pipeline_bf16_{s}_cuda"
+        if bf16_tag in bench:
+            m = bench[bf16_tag]
+            bf16_fwd.append(m["fwd_ms"])
+            bf16_bwd.append(m["bwd_ms"])
+        else:
+            bf16_fwd.append(0)
+            bf16_bwd.append(0)
 
     cpu_fwd = [cpu_data[s]["fwd_ms"] for s in seqs]
     cpu_bwd = [cpu_data[s]["bwd_ms"] for s in seqs]
 
     x = np.arange(len(seqs))
-    width = 0.35
+    width = 0.25
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 5))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
 
     # Forward
-    ax1.bar(x - width/2, cpu_fwd, width, label="CPU",
+    ax1.bar(x - width, cpu_fwd, width, label="CPU",
             color="#aaaaaa", edgecolor="black", linewidth=0.5)
-    ax1.bar(x + width/2, cuda_fwd, width, label="CUDA",
+    ax1.bar(x, cuda_fwd, width, label="CUDA fp32",
             color="#ee6677", edgecolor="black", linewidth=0.5)
+    ax1.bar(x + width, bf16_fwd, width, label="CUDA bf16",
+            color="#44aa77", edgecolor="black", linewidth=0.5)
     ax1.set_xticks(x)
     ax1.set_xticklabels([f"seq={s}" for s in seqs])
     ax1.set_ylabel("forward time (ms)")
     ax1.set_title("Forward pass")
     ax1.legend(fontsize=8)
     ax1.set_yscale("log")
-    for i, (cv, cc) in enumerate(zip(cpu_fwd, cuda_fwd)):
-        ax1.text(i - width/2, cv * 1.2, f"{cv:.0f}", ha="center", fontsize=8)
-        ax1.text(i + width/2, cc * 1.2, f"{cc:.1f}", ha="center", fontsize=8)
+    for i, (cv, cc, cb) in enumerate(zip(cpu_fwd, cuda_fwd, bf16_fwd)):
+        ax1.text(i - width, cv * 1.2, f"{cv:.0f}", ha="center", fontsize=7)
+        ax1.text(i, cc * 1.2, f"{cc:.1f}", ha="center", fontsize=7)
+        ax1.text(i + width, cb * 1.2, f"{cb:.1f}", ha="center", fontsize=7)
     ax1.grid(axis="y", alpha=0.25)
 
     # Backward
-    ax2.bar(x - width/2, cpu_bwd, width, label="CPU",
+    ax2.bar(x - width, cpu_bwd, width, label="CPU",
             color="#aaaaaa", edgecolor="black", linewidth=0.5)
-    ax2.bar(x + width/2, cuda_bwd, width, label="CUDA",
+    ax2.bar(x, cuda_bwd, width, label="CUDA fp32",
             color="#ee6677", edgecolor="black", linewidth=0.5)
+    ax2.bar(x + width, bf16_bwd, width, label="CUDA bf16",
+            color="#44aa77", edgecolor="black", linewidth=0.5)
     ax2.set_xticks(x)
     ax2.set_xticklabels([f"seq={s}" for s in seqs])
     ax2.set_ylabel("backward time (ms)")
     ax2.set_title("Backward pass")
     ax2.legend(fontsize=8)
     ax2.set_yscale("log")
-    for i, (cv, cc) in enumerate(zip(cpu_bwd, cuda_bwd)):
-        ax2.text(i - width/2, cv * 1.2, f"{cv:.0f}", ha="center", fontsize=8)
-        ax2.text(i + width/2, cc * 1.2, f"{cc:.1f}", ha="center", fontsize=8)
+    for i, (cv, cc, cb) in enumerate(zip(cpu_bwd, cuda_bwd, bf16_bwd)):
+        ax2.text(i - width, cv * 1.2, f"{cv:.0f}", ha="center", fontsize=7)
+        ax2.text(i, cc * 1.2, f"{cc:.1f}", ha="center", fontsize=7)
+        ax2.text(i + width, cb * 1.2, f"{cb:.1f}", ha="center", fontsize=7)
     ax2.grid(axis="y", alpha=0.25)
 
-    fig.suptitle("CPU vs CUDA pipeline timing (E=256 L=2, fixed stride-4)",
+    fig.suptitle("CPU vs CUDA fp32 vs CUDA bf16 pipeline timing (E=256 L=2, fixed stride-4)",
                  fontsize=11, y=1.02)
     fig.tight_layout()
     fig.savefig(os.path.join(out_dir, "cuda_speedup.png"), dpi=150,

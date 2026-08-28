@@ -14,16 +14,11 @@ extern "C" {
 // forward+backward.
 
 typedef struct {
-    // Shared per-layer/per-call template. Fully populated by
-    // blt_transformer_stack_init() except the RoPE cos/sin views, which
-    // are seq_len-sized and therefore vary per call — see
-    // blt_transformer_stack_call_config(). Callers that also need a mask
-    // (e.g. global_transformer's block-causal doc mask) set
-    // cfg.attn_config.mask_config on the config returned from that helper.
     blt_transformer_config layer_config;
 
     blt_transformer_layer_storage* layer_storage;  // owned weights, [num_layers]
     blt_transformer_weights* layer_weights;        // const-views into layer_storage, [num_layers]
+    blt_transformer_weights_bf16* layer_weights_bf16; // bf16 weight views, [num_layers] (NULL when use_bf16=0)
 
     blt_tensor rope_cos_cache;  // [max_seq_len, head_dim/2]
     blt_tensor rope_sin_cache;  // [max_seq_len, head_dim/2]
@@ -34,6 +29,7 @@ typedef struct {
     size_t num_heads;
     size_t head_dim;
     size_t max_seq_len;
+    int use_bf16;
 } blt_transformer_stack;
 
 typedef struct {
@@ -52,6 +48,7 @@ typedef struct {
     size_t num_heads;    // embed_dim must be divisible by num_heads
     size_t max_seq_len;  // upper bound used to size the shared RoPE cache
     float rope_theta;
+    int use_bf16;        // 1 = allocate bf16 weight copies for mixed-precision matmul
 } blt_transformer_stack_config;
 
 

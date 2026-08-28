@@ -53,6 +53,8 @@ static void emit_name(char* buf, size_t cap, const char* prefix, size_t layer,
     snprintf(buf, cap, "%s.L%zu.%s", prefix, layer, leaf);
 }
 
+
+
 void blt_model_tensor_at(const blt_model* model, size_t index,
                          const char** name, blt_tensor** tensor) {
     static char name_buf[64];
@@ -147,6 +149,8 @@ static uint32_t tensor_ndim(const blt_tensor* t) {
     return (uint32_t)t->ndim;
 }
 
+
+
 // Host staging for tensor payload I/O: device-resident models cannot fread/
 // fwrite their storage directly. CPU tensors take the memcpy paths inside
 // upload/download, so behavior there is unchanged.
@@ -166,8 +170,7 @@ static void tensor_payload_write(const blt_tensor* t, FILE* f, const char* name,
         BLT_FATAL("checkpoint save: write failed at '%s' (%s)", name, path);
 }
 
-static void tensor_payload_read(blt_tensor* t, FILE* f, const char* name,
-                                const char* path) {
+static void tensor_payload_read(blt_tensor* t, FILE* f, const char* name) {
     if (t->backend == BLT_BACKEND_CPU) {
         if (fread(t->data, sizeof(float), t->numel, f) != t->numel)
             BLT_FATAL("checkpoint load: '%s' truncated payload", name);
@@ -327,7 +330,7 @@ void blt_entropy_lm_load(blt_entropy_lm* lm, const char* path) {
                 dim != t->shape[d])
                 BLT_FATAL("entropy lm load: '%s' shape mismatch", name);
         }
-        tensor_payload_read(t, f, name, path);
+        tensor_payload_read(t, f, name);
     }
     fclose(f);
 }
@@ -375,7 +378,7 @@ void blt_model_load(blt_model* model, const char* path) {
                 BLT_FATAL("checkpoint load: '%s' dim[%u] %zu != %zu "
                           "(config mismatch?)", name, d, dim, t->shape[d]);
         }
-        tensor_payload_read(t, f, want_name, path);
+        tensor_payload_read(t, f, want_name);
     }
 
     fclose(f);

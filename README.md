@@ -54,7 +54,7 @@ Default is `gcc -O2 -std=c99 -Wall -Wextra`. Change it:
 make CC=clang CFLAGS="-O3 -std=c99 -Wall"
 ```
 
-CUDA: `make CUDA=1 <target>` compiles `.cu` files with nvcc, outputs to `obj-cuda/` and `bin-cuda/`. Toggle freely — CPU and CUDA objects never share.
+CUDA: `make CUDA=1 <target>` compiles `.cu` files with nvcc, outputs to `obj-cuda/` and `bin-cuda/`. Toggle freely - CPU and CUDA objects never share.
 
 ## Layout
 
@@ -112,11 +112,11 @@ Reproduce: `make sweep` + configs in `configs/ablations/`.
 
 Three inference modes, benchmarked on 40k-step models (~300k params):
 
-- **BLT-S** — draft k bytes with decoder-only passes, verify with one
+- **BLT-S** - draft k bytes with decoder-only passes, verify with one
   full forward. Byte-identical output, big savings on encoder/global.
-- **BLT-D** — decoder generates a whole block of B future bytes in
+- **BLT-D** - decoder generates a whole block of B future bytes in
   parallel from masked states. Cheapest per byte, but drafts drift.
-- **BLT-DV** — BLT-D drafts, then the model verifies them.
+- **BLT-DV** - BLT-D drafts, then the model verifies them.
   Output matches greedy; the draft just makes it cheaper.
 
 ![quality frontier](graphs/nfe_quality_frontier.png)
@@ -154,14 +154,15 @@ placement barely matter. Entropy patching gets worse at this scale.
 
 The trade-off is real. Late sits top-left (best quality, worst speed),
 hit and dec3 sit bottom-right (good speed, decent quality). No
-Pareto-optimal arm — depends on whether you're bottlenecked on training
+Pareto-optimal arm - depends on whether you're bottlenecked on training
 or inference.
 
 ![CUDA speedup](graphs/cuda_speedup.png)
 
 CUDA delivers 150-460x speedup on the full pipeline at E=256. Matmul
-hits 4-5 TFLOP/s on the RTX 4060 (~40% MFU). The speedup grows with
-sequence length.
+fp32 hits 6-7 TFLOP/s on the RTX 4060 (~55% MFU). BF16 mixed-precision
+matmuls engage tensor cores and reach ~19-21 TFLOP/s (~3x the fp32
+rate).
 
 ```bash
 # Training

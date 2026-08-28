@@ -26,6 +26,8 @@
 #include "blt/ops/elementwise.h"
 #include "blt/ops/gelu.h"
 #include "blt/ops/matmul.h"
+#include "blt/ops/cast.h"
+#include "blt/models/transformer_stack.h"
 #include "flops.h"
 
 // Reference fp32 peak used for MFU reporting: RTX 4060 (AD107, CC 8.9)
@@ -113,6 +115,53 @@ static void bench_matmul_cell(blt_arena* arena, size_t n, size_t iters,
            tag, tflops, mfu, PEAK_TFLOPS_CUDA);
 
 
+}
+
+static void bench_matmul_bf16_cell(blt_arena* arena, size_t n, size_t iters,
+                                   const char* backend_tag, const char* results_path) {
+    uint32_t seed = 0xBEEF0000u ^ (uint32_t)n;
+    // Create bf16 inputs directly on the backend
+    blt_tensor a = blt_tensor_create(arena, (size_t[2]){n, n}, 2, BLT_DTYPE_BF16);
+    blt_tensor b = blt_tensor_create(arena, (size_t[2]){n, n}, 2, BLT_DTYPE_BF16);
+    blt_tensor c = blt_tensor_create(arena, (size_t[2]){n, n}, 2, BLT_DTYPE_FP32);
+    // Fill with random data via fp32→bf16 cast
+    blt_tensor tmp_a = blt_tensor_create(arena, (size_t[2]){n, n}, 2, BLT_DTYPE_FP32);
+    blt_tensor tmp_b = blt_tensor_create(arena, (size_t[2]){n, n}, 2, BLT_DTYPE_FP32);
+    if (arena->backend != BLT_BACKEND_CPU) {
+        float* stage = (float*)malloc(n * n * sizeof(float));
+        fill_random_host(stage, n * n, 0.05f, &seed);
+        blt_tensor_upload(&tmp_a, stage, n * n * sizeof(float));
+        fill_random_host(stage, n * n, 0.05f, &seed);
+        blt_tensor_upload(&tmp_b, stage, n * n * sizeof(float));
+        free(stage);
+    } else {
+        fill_random_host((float*)tmp_a.data, tmp_a.numel, 0.05f, &seed);
+        fill_random_host((float*)tmp_b.data, tmp_b.numel, 0.05f, &seed);
+    }
+    blt_cast(&tmp_a, &a);
+    blt_cast(&tmp_b, &b);
+
+    for (size_t i = 0; i < 3; i++) blt_matmul(&a, &b, &c);
+
+    bench_timer_start();
+    for (size_t i = 0; i < iters; i++) blt_matmul(&a, &b, &c);
+    backend_sync(&c);
+    const double sec = bench_timer_stop_sec();
+
+    const double tflops = 2.0 * (double)n * n * n * iters / sec / 1e12;
+    const double mfu = 100.0 * tflops / PEAK_TFLOPS_CUDA;
+
+    char tag[BENCH_TAG_LEN];
+    snprintf(tag, sizeof(tag), "micro_matmul_bf16_%zu_%s", n, backend_tag);
+    bench_result r;
+    bench_result_init(&r, "cuda_bench", tag, "7_cuda_bench");
+    double lat[1] = {sec};
+    bench_stats_compute(&r.latency, lat, 1);
+    bench_result_add_metric(&r, "tflops", tflops);
+    bench_result_add_metric(&r, "mfu_pct", mfu);
+    bench_write_json(results_path, &r);
+    printf("  %-28s %10.2f TFLOP/s (%5.1f%% of %.1f ref)\n",
+           tag, tflops, mfu, PEAK_TFLOPS_CUDA);
 }
 
 static void bench_elementwise_cell(blt_arena* arena, size_t n_floats, size_t iters,
@@ -248,10 +297,11 @@ typedef struct {
 // backward intermediates go through `scratch`, which callers reset per
 // iteration (ops allocate without freeing).
 static void scenario_build(scenario* sc, blt_arena* host, blt_arena* persist,
-                           blt_arena* scratch, size_t seq) {
+                           blt_arena* scratch, size_t seq, int use_bf16) {
     (void)scratch;
     blt_model_config cfg;
     build_model_config(&cfg, 2048);
+    cfg.global_config.use_bf16 = use_bf16;
 
     sc->model = blt_model_create(persist, &cfg);
     uint32_t seed = 0x5EED0000u ^ (uint32_t)seq;
@@ -284,7 +334,7 @@ static void meso_cell(blt_arena* host, blt_arena* arena, size_t seq,
     blt_arena* scratch = blt_arena_create(
         768 * 1024 * 1024, arena->backend);
     scenario sc;
-    scenario_build(&sc, host, arena, scratch, seq);
+    scenario_build(&sc, host, arena, scratch, seq, 0);
 
     bench_timer_start();
     for (size_t i = 0; i < iters + 2; i++) {
@@ -293,7 +343,7 @@ static void meso_cell(blt_arena* host, blt_arena* arena, size_t seq,
             (size_t[2]){seq, 256}, 2, BLT_DTYPE_FP32);
         blt_tensor loss = blt_tensor_create(scratch,
             (size_t[1]){1}, 1, BLT_DTYPE_FP32);
-        if (i < 2) continue;   // warmup, unmeasured
+        if (i < 2) continue;
         blt_model_forward(sc.model, &sc.bytes_in, sc.patches, sc.num_patches,
                           NULL, 0, &logits, &loss, scratch);
         backend_sync(&logits);
@@ -336,6 +386,81 @@ static void meso_cell(blt_arena* host, blt_arena* arena, size_t seq,
     blt_arena_destroy(scratch);
 }
 
+// Refresh bf16 weight copies from fp32 masters for the global transformer's
+// transformer stack. Called once after randomizing model weights.
+static void refresh_global_bf16_weights(blt_model* model) {
+    blt_transformer_stack* stack = &model->global->stack;
+    if (!stack->use_bf16) return;
+    for (size_t l = 0; l < stack->num_layers; l++) {
+        const blt_transformer_layer_storage* s = &stack->layer_storage[l];
+        blt_mixed_weight_refresh((blt_tensor*)&s->attn_qkv_w_bf16,  &s->attn_qkv_w);
+        blt_mixed_weight_refresh((blt_tensor*)&s->attn_proj_w_bf16, &s->attn_proj_w);
+        blt_mixed_weight_refresh((blt_tensor*)&s->ffn_up_w_bf16,   &s->ffn_up_w);
+        blt_mixed_weight_refresh((blt_tensor*)&s->ffn_gate_w_bf16, &s->ffn_gate_w);
+        blt_mixed_weight_refresh((blt_tensor*)&s->ffn_down_w_bf16, &s->ffn_down_w);
+    }
+}
+
+static void meso_cell_bf16(blt_arena* host, blt_arena* arena, size_t seq,
+                            size_t iters, const char* backend_tag,
+                            const char* results_path) {
+    blt_arena_reset(host);
+    blt_arena_reset(arena);
+    blt_arena* scratch = blt_arena_create(
+        768 * 1024 * 1024, arena->backend);
+    scenario sc;
+    scenario_build(&sc, host, arena, scratch, seq, 1);
+    refresh_global_bf16_weights(sc.model);
+
+    bench_timer_start();
+    for (size_t i = 0; i < iters + 2; i++) {
+        blt_arena_reset(scratch);
+        blt_tensor logits = blt_tensor_create(scratch,
+            (size_t[2]){seq, 256}, 2, BLT_DTYPE_FP32);
+        blt_tensor loss = blt_tensor_create(scratch,
+            (size_t[1]){1}, 1, BLT_DTYPE_FP32);
+        if (i < 2) continue;
+        blt_model_forward(sc.model, &sc.bytes_in, sc.patches, sc.num_patches,
+                          NULL, 0, &logits, &loss, scratch);
+        backend_sync(&logits);
+        if (i == 2) bench_timer_start();
+    }
+    const double sec_fwd = bench_timer_stop_sec() / (double)iters;
+
+    bench_timer_start();
+    for (size_t i = 0; i < iters; i++) {
+        blt_arena_reset(scratch);
+        blt_model_backward(sc.model, &sc.bytes_in, sc.patches, sc.num_patches,
+                           NULL, 0, sc.grad, scratch);
+    }
+    backend_sync((const blt_tensor*)&sc.model->decoder->lm_head_weight);
+    const double sec_bwd = bench_timer_stop_sec() / (double)iters;
+
+    const double fl_per_byte = pipeline_flops_per_byte(seq);
+    const double tflops_fwd = fl_per_byte * (double)seq / sec_fwd / 1e12;
+    const double tflops_step = 3.0 * fl_per_byte * (double)seq /
+                               (sec_fwd + sec_bwd) / 1e12;
+
+    char tag[BENCH_TAG_LEN];
+    bench_result r;
+    snprintf(tag, sizeof(tag), "meso_pipeline_bf16_%zu_%s", seq, backend_tag);
+    bench_result_init(&r, "cuda_bench", tag, "7_cuda_bench");
+    double lat[1] = {sec_fwd};
+    bench_stats_compute(&r.latency, lat, 1);
+    bench_result_add_metric(&r, "fwd_ms", 1000.0 * sec_fwd);
+    bench_result_add_metric(&r, "bwd_ms", 1000.0 * sec_bwd);
+    bench_result_add_metric(&r, "fwd_tflops", tflops_fwd);
+    bench_result_add_metric(&r, "steptflops", tflops_step);
+    bench_result_add_metric(&r, "mfu_pct",
+                            100.0 * tflops_step / PEAK_TFLOPS_CUDA);
+    bench_write_json(results_path, &r);
+    printf("  %-28s fwd %8.2f ms  bwd %8.2f ms  step %6.2f TFLOP/s (%5.1f%% MFU)\n",
+           tag, 1000.0 * sec_fwd, 1000.0 * sec_bwd, tflops_step,
+           100.0 * tflops_step / PEAK_TFLOPS_CUDA);
+
+    blt_arena_destroy(scratch);
+}
+
 static void macro_training_cell(blt_arena* host, blt_arena* arena, size_t seq,
                                 size_t steps, const char* backend_tag,
                                 const char* results_path) {
@@ -344,7 +469,7 @@ static void macro_training_cell(blt_arena* host, blt_arena* arena, size_t seq,
     blt_arena* scratch = blt_arena_create(
         768 * 1024 * 1024, arena->backend);
     scenario sc;
-    scenario_build(&sc, host, arena, scratch, seq);
+    scenario_build(&sc, host, arena, scratch, seq, 0);
 
     bench_timer_start();
     for (size_t i = 0; i < steps + 2; i++) {
@@ -534,10 +659,15 @@ int main(int argc, char** argv) {
     bench_matmul_cell(arena, 512, a.iters * 4, bt, a.results_path);
     bench_matmul_cell(arena, 1024, a.iters * 2, bt, a.results_path);
     bench_matmul_cell(arena, 2048, a.iters, bt, a.results_path);
+    bench_matmul_bf16_cell(arena, 512, a.iters * 4, bt, a.results_path);
+    bench_matmul_bf16_cell(arena, 1024, a.iters * 2, bt, a.results_path);
+    bench_matmul_bf16_cell(arena, 2048, a.iters, bt, a.results_path);
 
     printf(" meso (pipeline fwd/bwd, E=%d L=%d)\n", BENCH_E, BENCH_L);
     meso_cell(host, arena, 256, a.iters, bt, a.results_path);
     meso_cell(host, arena, 1024, a.iters, bt, a.results_path);
+    meso_cell_bf16(host, arena, 256, a.iters, bt, a.results_path);
+    meso_cell_bf16(host, arena, 1024, a.iters, bt, a.results_path);
 
     printf(" macro\n");
     macro_training_cell(host, arena, 1024, a.iters, bt, a.results_path);

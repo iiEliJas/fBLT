@@ -51,6 +51,8 @@ static void expect(json_parser* p, char c) {
     p->pos++;
 }
 
+
+
 //----------------------------------------------------------------------
 // Strings (with escape handling; \uXXXX decoded to UTF-8)
 //
@@ -191,6 +193,8 @@ static char* parse_string_raw(json_parser* p, size_t* out_len) {
     return NULL;
 }
 
+
+
 //----------------------------------------------------------------------
 // Numbers / literals
 //
@@ -230,6 +234,8 @@ static void parse_number(json_parser* p, blt_json_value* out) {
         out->int_val = (int64_t)strtoll(tmp, NULL, 10);
     }
 }
+
+
 
 //----------------------------------------------------------------------
 // Containers
@@ -366,6 +372,8 @@ static void parse_value(json_parser* p, blt_json_value* out) {
         fail(p, "unexpected token");
     }
 }
+
+
 
 //----------------------------------------------------------------------
 // Public API

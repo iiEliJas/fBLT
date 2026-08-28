@@ -3,6 +3,7 @@
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
+#include <cuda_bf16.h>
 
 // fp32 GEMMs on cuBLAS. cuBLAS is column-major; row-major C = A @ B maps to
 // the standard swapped-operand formulation C' = B' @ A' (primes denote the
@@ -37,6 +38,23 @@ extern "C" void blt_matmul_cuda(const blt_tensor* a, const blt_tensor* b, blt_te
     const float alpha = 1.0f;
     const float beta = 0.0f;
     cublasHandle_t h = blt_cublas_handle();
+
+    // bf16 inputs: use tensor cores via cublasGemmEx, accumulate in fp32
+    if (a->dtype == BLT_DTYPE_BF16 && b->dtype == BLT_DTYPE_BF16) {
+        blt_cublas_check(
+            cublasGemmEx(h, CUBLAS_OP_N, CUBLAS_OP_N,
+                         (int)n, (int)m, (int)k,
+                         &alpha,
+                         b->data, CUDA_R_16BF, (int)n,
+                         a->data, CUDA_R_16BF, (int)k,
+                         &beta,
+                         out->data, CUDA_R_32F, (int)n,
+                         CUBLAS_COMPUTE_32F,
+                         CUBLAS_GEMM_DEFAULT_TENSOR_OP),
+            "blt_matmul: cublasGemmEx bf16");
+        return;
+    }
+
     blt_cublas_check(
         cublasSgemm(h, CUBLAS_OP_N, CUBLAS_OP_N,
                     (int)n, (int)m, (int)k,

@@ -7,6 +7,33 @@
 #include "blt/ops/rmsnorm.h"
 #include "blt/ops/swiglu.h"
 #include "blt/ops/rope.h"
+#include "blt/ops/cast.h"
+
+
+
+//----------------------------------------------------------------------
+// Mixed-precision helpers
+
+blt_transformer_weights_bf16 blt_transformer_layer_bf16_view(
+    const blt_transformer_layer_storage* s, int use_bf16
+) {
+    blt_transformer_weights_bf16 w = {0};
+    if (!use_bf16) return w;
+    w.attn_qkv_w  = &s->attn_qkv_w_bf16;
+    w.attn_proj_w = &s->attn_proj_w_bf16;
+    w.ffn_up_w    = &s->ffn_up_w_bf16;
+    w.ffn_gate_w  = &s->ffn_gate_w_bf16;
+    w.ffn_down_w  = &s->ffn_down_w_bf16;
+    return w;
+}
+
+void blt_mixed_weight_refresh(blt_tensor* bf16_copy, const blt_tensor* fp32_master) {
+    BLT_REQUIRE(bf16_copy != NULL && fp32_master != NULL,
+        "blt_mixed_weight_refresh: bf16_copy and fp32_master must not be NULL");
+    BLT_REQUIRE(bf16_copy->numel == fp32_master->numel,
+        "blt_mixed_weight_refresh: bf16_copy and fp32_master must have same numel");
+    blt_cast(fp32_master, bf16_copy);
+}
 
 
 
@@ -62,10 +89,18 @@ void blt_transformer_stack_init(
     stack->layer_config.layer_norm_eps = 1e-6f;  // not used by RMSNorm
     stack->layer_config.norm_type = BLT_NORM_RMSNORM;
     stack->layer_config.activation_type = BLT_ACTIVATION_SWIGLU;
+    stack->layer_config.use_bf16 = config->use_bf16;
+    stack->use_bf16 = config->use_bf16;
 
     // Per-layer weights.
     stack->layer_storage = (blt_transformer_layer_storage*)blt_container_alloc(arena, config->num_layers * sizeof(blt_transformer_layer_storage));
     stack->layer_weights = (blt_transformer_weights*)blt_container_alloc(arena, config->num_layers * sizeof(blt_transformer_weights));
+
+    stack->layer_weights_bf16 = NULL;
+    if (config->use_bf16) {
+        stack->layer_weights_bf16 = (blt_transformer_weights_bf16*)blt_container_alloc(
+            arena, config->num_layers * sizeof(blt_transformer_weights_bf16));
+    }
 
     for (size_t l = 0; l < config->num_layers; ++l) {
         blt_transformer_layer_storage* s = &stack->layer_storage[l];
@@ -87,6 +122,15 @@ void blt_transformer_stack_init(
         size_t ffn_down_shape[2] = { hidden_dim, embed_dim };
         s->ffn_down_w = blt_tensor_create(arena, ffn_down_shape, 2, BLT_DTYPE_FP32);
 
+        // bf16 copies (same shapes, bf16 dtype)
+        if (config->use_bf16) {
+            s->attn_qkv_w_bf16  = blt_tensor_create(arena, qkv_shape, 2, BLT_DTYPE_BF16);
+            s->attn_proj_w_bf16 = blt_tensor_create(arena, proj_shape, 2, BLT_DTYPE_BF16);
+            s->ffn_up_w_bf16    = blt_tensor_create(arena, ffn_up_shape, 2, BLT_DTYPE_BF16);
+            s->ffn_gate_w_bf16  = blt_tensor_create(arena, ffn_up_shape, 2, BLT_DTYPE_BF16);
+            s->ffn_down_w_bf16  = blt_tensor_create(arena, ffn_down_shape, 2, BLT_DTYPE_BF16);
+        }
+
         blt_transformer_weights* w = &stack->layer_weights[l];
         w->norm1_weight = &s->norm1_weight;
         w->norm1_bias   = NULL;  // no bias for RMSNorm
@@ -97,6 +141,10 @@ void blt_transformer_stack_init(
         w->ffn_up_w     = &s->ffn_up_w;
         w->ffn_gate_w   = &s->ffn_gate_w;
         w->ffn_down_w   = &s->ffn_down_w;
+
+        if (config->use_bf16) {
+            stack->layer_weights_bf16[l] = blt_transformer_layer_bf16_view(s, 1);
+        }
     }
 }
 
@@ -169,6 +217,21 @@ blt_transformer_config blt_transformer_stack_call_config(
 //----------------------------------------------------------------------
 // forward (no caching)
 
+// Build a weights view that points to bf16 copies for matmul ops,
+// keeping norm weights as fp32 (norms are not bf16-accelerated).
+static blt_transformer_weights bf16_weights_view(
+    const blt_transformer_weights* w,
+    const blt_transformer_weights_bf16* w_bf16
+) {
+    blt_transformer_weights bw = *w;
+    if (w_bf16->attn_qkv_w)  bw.attn_qkv_w  = w_bf16->attn_qkv_w;
+    if (w_bf16->attn_proj_w) bw.attn_proj_w = w_bf16->attn_proj_w;
+    if (w_bf16->ffn_up_w)    bw.ffn_up_w    = w_bf16->ffn_up_w;
+    if (w_bf16->ffn_gate_w)  bw.ffn_gate_w  = w_bf16->ffn_gate_w;
+    if (w_bf16->ffn_down_w)  bw.ffn_down_w  = w_bf16->ffn_down_w;
+    return bw;
+}
+
 void blt_transformer_stack_forward(
     const blt_transformer_stack* stack, const blt_tensor* x,
     const blt_transformer_config* call_cfg, size_t seq_len,
@@ -181,7 +244,13 @@ void blt_transformer_stack_forward(
     blt_tensor cur = *x;
     for (size_t l = 0; l < stack->num_layers; ++l) {
         blt_tensor next = blt_tensor_create(arena, embed_shape, 2, BLT_DTYPE_FP32);
-        blt_transformer_forward(&cur, &stack->layer_weights[l], &next, call_cfg, arena);
+        const blt_transformer_weights* w = &stack->layer_weights[l];
+        blt_transformer_weights bf16_w;
+        if (stack->use_bf16 && stack->layer_weights_bf16) {
+            bf16_w = bf16_weights_view(w, &stack->layer_weights_bf16[l]);
+            w = &bf16_w;
+        }
+        blt_transformer_forward(&cur, w, &next, call_cfg, arena);
         cur = next;
     }
     *out = cur;
@@ -345,8 +414,14 @@ blt_transformer_stack_cache* blt_transformer_stack_forward_cached(
     blt_tensor cur = *x;
     for (size_t l = 0; l < stack->num_layers; ++l) {
         blt_tensor next;
+        const blt_transformer_weights* w = &stack->layer_weights[l];
+        blt_transformer_weights bf16_w;
+        if (stack->use_bf16 && stack->layer_weights_bf16) {
+            bf16_w = bf16_weights_view(w, &stack->layer_weights_bf16[l]);
+            w = &bf16_w;
+        }
         cache->layers[l] = blt_transformer_layer_forward_cached(
-            &cur, &stack->layer_weights[l], call_cfg, arena,
+            &cur, w, call_cfg, arena,
             seq_len, stack->embed_dim, stack->hidden_dim, &next);
         cur = next;
     }

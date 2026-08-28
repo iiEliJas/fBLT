@@ -15,6 +15,7 @@
 #include "blt/ops/attn_core.h"
 #include "blt/ops/gather_scatter.h"
 #include "blt/ops/row_stats.h"
+#include "blt/ops/cast.h"
 #include "blt/core/tensor.h"
 // ------------------------------------------------------------
 // CPU Implementation Declarations
@@ -83,6 +84,9 @@ void blt_rows_gather_cpu(const blt_tensor* src, const size_t* pos_host, blt_tens
 // row statistics
 void blt_entropy_rows_cpu(const blt_tensor* probs, blt_tensor* entropy_out, int use_log2);
 void blt_argmax_rows_cpu(const blt_tensor* logits, uint32_t* out_ids_host);
+
+// cast
+void blt_cast_cpu(const blt_tensor* in, blt_tensor* out);
 
 // reduction ops
 void blt_softmax_cpu(const blt_tensor* in, blt_tensor* out);
@@ -213,6 +217,9 @@ void blt_rows_gather_cuda(const blt_tensor* src, const size_t* pos_host, blt_ten
 // row statistics
 void blt_entropy_rows_cuda(const blt_tensor* probs, blt_tensor* entropy_out, int use_log2);
 void blt_argmax_rows_cuda(const blt_tensor* logits, uint32_t* out_ids_host);
+
+// cast
+void blt_cast_cuda(const blt_tensor* in, blt_tensor* out);
 #else
 #define BLT_DISPATCH(tensor, cpu_call, cuda_call)               \
     do {                                                         \
@@ -504,4 +511,11 @@ void blt_argmax_rows(const blt_tensor* logits, uint32_t* out_ids_host) {
     BLT_DISPATCH(logits,
         blt_argmax_rows_cpu(logits, out_ids_host),
         blt_argmax_rows_cuda(logits, out_ids_host));
+}
+
+// ------------------
+// CAST
+
+void blt_cast(const blt_tensor* in, blt_tensor* out) {
+    BLT_DISPATCH(in, blt_cast_cpu(in, out), blt_cast_cuda(in, out));
 }

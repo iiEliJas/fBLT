@@ -335,31 +335,42 @@ per-experiment notes in `runs/`.
 ## 8. CUDA backend performance
 
 First CUDA-port benchmark pass (`make CUDA=1 bench-cuda`, RTX 4060 8 GB,
-WSL2, fp32 throughout). Raw rows live in `bench/results.jsonl`. Run CPU baseline with
+WSL2). Raw rows live in `bench/results.jsonl`. Run CPU baseline with
 `./bin/cuda_bench --backend cpu`.
 
 ### 8.1 Micro (raw kernel rates)
 
-| cell | CPU | CUDA | note |
-|---|---|---|---|
-| matmul 1024^3 fp32 | ~1.8 GFLOP/s | **6.0 TFLOP/s** (~54% of 11.2 ref) | cuBLAS; 512/2048 within noise of this |
-| elementwise add, 64M floats | 0.9 GB/s | **~210 GB/s** | 3 arrays moved |
-| gelu forward, 64M floats | 0.7 GB/s | **~215 GB/s** | 2 arrays moved |
+| cell | CPU | CUDA fp32 | CUDA bf16 | note |
+|---|---|---|---|---|
+| matmul 1024^3 | ~1.8 GFLOP/s | **6.0 TFLOP/s** (~54% of 11.2 ref) | **18.7 TFLOP/s** (~167% of fp32 ref) | cuBLAS; bf16 engages tensor cores |
+| matmul 2048^3 | ~1.8 GFLOP/s | **6.5 TFLOP/s** (~58%) | **20.9 TFLOP/s** (~187%) | bf16 ~3.2x faster than fp32 |
+| matmul 512^3 | ~1.8 GFLOP/s | **5.9 TFLOP/s** (~53%) | **8.6 TFLOP/s** (~77%) | small GEMM, less tensor-core util |
+| elementwise add, 64M floats | 0.9 GB/s | **~215 GB/s** | — | 3 arrays moved |
+| gelu forward, 64M floats | 0.7 GB/s | **~216 GB/s** | — | 2 arrays moved |
 
-The 11.2 TFLOP/s reference is AD107's nominal non-tensor fp32 peak;
-sustained laptop clocks land near 50-55% of it in practice.
+The 11.2 TFLOP/s reference is AD107's nominal non-tensor fp32 peak.
+Sustained laptop clocks land near 50-55% of it in practice.
+BF16 matmuls use `cublasGemmEx` with `CUDA_R_16BF` inputs and
+`CUBLAS_COMPUTE_32F` output, engaging tensor cores (CC 8.9). The fp32
+reference is the `cublasGemmEx` fp32 path which does not use tensor cores
+on this architecture.
 
 ### 8.2 Meso (full pipeline fwd/bwd, E=256 L=2, fixed-stride-4 patches)
 
-| seq | fwd ms (CPU / CUDA) | bwd ms (CPU / CUDA) |
+| seq | fwd ms (CPU / CUDA fp32 / CUDA bf16) | bwd ms (CPU / CUDA fp32 / CUDA bf16) |
 |---|---|---|
-| 256 | 1657 / 19 | 5889 / 81 |
-| 1024 | 7186 / 56 | 27965 / 277 |
+| 256 | 1657 / 21 / 21 | 5889 / 89 / 84 |
+| 1024 | 7186 / 64 / 65 | 27965 / 285 / 288 |
+
+BF16 is enabled on the global transformer stack (2 layers). The local
+encoder and decoder remain fp32 (their layer storage does not yet carry
+bf16 copies). At seq=256 the bf16 path is ~6% faster on backward; at
+seq=1024 the two paths are effectively identical because the encoder and
+decoder dominate the total wall time.
 
 ### 8.3 Macro
 
-- Training-step core (fwd+bwd): **40 tokens/s CPU vs ~3700 tokens/s CUDA**
-  at seq 1024 - roughly **90x**.
+- Training-step core (fwd+bwd): **~3200 tokens/s CUDA fp32** at seq 1024.
 - Naive greedy generation on `runs/plain_40k.fblt`: see the `macro_gen`
   rows in `bench/results.jsonl`; per-method generation comparisons
   (selfspec/blockdiff/DV) remain in section 3 and the `6_infer` phase.
@@ -381,16 +392,31 @@ sustained laptop clocks land near 50-55% of it in practice.
    The fix direction is stream pipelining / kernel fusion or removing
    per-op syncs behind a graph-capture mode - deferred until a workload
    actually needs it (the parity suite depends on synchronous ops).
-3. Elementwise bandwidth ~210 GB/s vs ~272 GB/s theoretical DDR6 on this
+3. Elementwise bandwidth ~215 GB/s vs ~272 GB/s theoretical DDR6 on this
    part is expected for simple streaming kernels without vectorized
    wide loads.
+4. **BF16 mixed-precision matmuls deliver ~3x speedup on large GEMMs.**
+   The fp32→bf16 cast-and-compute path in `blt_matmul_cuda` uses
+   `cublasGemmEx` with `CUDA_R_16BF` inputs, engaging tensor cores.
+   At 2048^3 the raw throughput is 20.9 TFLOP/s vs 6.5 TFLOP/s fp32 -
+   a 3.2x gain. At 1024^3 it is 18.7 vs 6.0 (3.1x). The end-to-end
+   pipeline speedup is modest because only the global transformer's 2
+   layers run bf16; the local encoder/decoder (which use
+   `blt_local_layer_storage`, not `blt_transformer_stack`) are still
+   entirely fp32. Threading bf16 through the local layers is the
+   prerequisite for full-pipeline bf16 gains.
+5. **BF16 backward stays fp32.** The backward pass uses fp32 master
+   weights and fp32 gradients throughout - `cublasGemmEx` with
+   `CUBLAS_COMPUTE_32F` output gives fp32 gradients automatically. No
+   loss scaling is needed because bf16 has the same 8-bit exponent range
+   as fp32.
 
 ### 8.5 Reproducing
 
 ```bash
-make CUDA=1 bench-cuda                 # device numbers
+make CUDA=1 bench-cuda                 # device numbers (fp32 + bf16)
 ./bin-cuda/cuda_bench --backend cpu    # CPU baseline
-python3 tools/bench_report.py --phase 7_cuda_bench --sort latency_mean
+python3 tools/bench_plots.py           # writes graphs/cuda_speedup.png
 ```
 
 ---

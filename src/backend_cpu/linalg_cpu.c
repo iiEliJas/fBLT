@@ -1,24 +1,14 @@
 #include "blt/core/backend.h"
 #include "blt/ops/matmul.h"
+#include "blt/ops/cast.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 
-void blt_matmul_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
-    blt_check_nd_fp32(a, 2, (const size_t[]){0, 0}, "matmul: input tensor a must be 2D FP32");
-    blt_check_nd_fp32(b, 2, (const size_t[]){0, 0}, "matmul: input tensor b must be 2D FP32");
-    blt_check_nd_fp32(out, 2, (const size_t[]){0, 0}, "matmul: output tensor must be 2D FP32");
-    BLT_REQUIRE(a->shape[1] == b->shape[0], "matmul inner dimensions do not match");
-    BLT_REQUIRE(out->shape[0] == a->shape[0] && out->shape[1] == b->shape[1], "matmul output shape is incorrect");
-
-    const float* a_data = (const float*)a->data;
-    const float* b_data = (const float*)b->data;
-    float* out_data = (float*)out->data;
-
-    size_t m = a->shape[0];
-    size_t k = a->shape[1];
-    size_t n = b->shape[1];
-
+// Internal fp32 matmul (all inputs must be fp32, 2D).
+static void matmul_fp32(const float* a_data, const float* b_data, float* out_data,
+                        size_t m, size_t k, size_t n) {
     for (size_t row = 0; row < m; ++row) {
         for (size_t col = 0; col < n; ++col) {
             float sum = 0.0f;
@@ -28,6 +18,51 @@ void blt_matmul_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
             out_data[row * n + col] = sum;
         }
     }
+}
+
+
+void blt_matmul_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
+    BLT_REQUIRE(a != NULL && b != NULL && out != NULL, "matmul: inputs must not be NULL");
+    BLT_REQUIRE(a->ndim == 2 && b->ndim == 2 && out->ndim == 2, "matmul: all tensors must be 2D");
+    BLT_REQUIRE(a->dtype == BLT_DTYPE_FP32 || a->dtype == BLT_DTYPE_BF16,
+                "matmul: input a must be FP32 or BF16");
+    BLT_REQUIRE(b->dtype == BLT_DTYPE_FP32 || b->dtype == BLT_DTYPE_BF16,
+                "matmul: input b must be FP32 or BF16");
+    BLT_REQUIRE(out->dtype == BLT_DTYPE_FP32, "matmul: output must be FP32");
+    BLT_REQUIRE(a->shape[1] == b->shape[0], "matmul inner dimensions do not match");
+    BLT_REQUIRE(out->shape[0] == a->shape[0] && out->shape[1] == b->shape[1], "matmul output shape is incorrect");
+
+    size_t m = a->shape[0];
+    size_t k = a->shape[1];
+    size_t n = b->shape[1];
+    if (m == 0 || k == 0 || n == 0) return;
+
+    // fp32 path — no conversion needed
+    if (a->dtype == BLT_DTYPE_FP32 && b->dtype == BLT_DTYPE_FP32) {
+        matmul_fp32((const float*)a->data, (const float*)b->data, (float*)out->data, m, k, n);
+        return;
+    }
+
+    // bf16 inputs: cast to fp32, compute in fp32 (CPU reference path).
+    // This is not faster — it exists so the CPU output matches what the
+    // CUDA tensor-core path should produce after its own rounding.
+    float* a_fp32 = (float*)malloc(m * k * sizeof(float));
+    float* b_fp32 = (float*)malloc(k * n * sizeof(float));
+    BLT_REQUIRE(a_fp32 && b_fp32, "matmul: failed to allocate bf16->fp32 temporaries");
+
+    blt_tensor a_tmp = {0}, b_tmp = {0};
+    blt_tensor_view_2d(&a_tmp, a_fp32, m, k, BLT_BACKEND_CPU);
+    a_tmp.dtype = BLT_DTYPE_FP32;
+    blt_tensor_view_2d(&b_tmp, b_fp32, k, n, BLT_BACKEND_CPU);
+    b_tmp.dtype = BLT_DTYPE_FP32;
+
+    blt_cast(a, &a_tmp);
+    blt_cast(b, &b_tmp);
+
+    matmul_fp32(a_fp32, b_fp32, (float*)out->data, m, k, n);
+
+    free(a_fp32);
+    free(b_fp32);
 }
 
 

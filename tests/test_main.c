@@ -34,7 +34,8 @@ int main(void) {
         {"cross entropy backend", run_cross_entropy_tests},
         {"rope backend", run_rope_backend_test},
         {"optimizer backend", run_optim_backend_tests},
-        {"mask builder backend", run_mask_builder_backend_tests},  
+        {"mask builder backend", run_mask_builder_backend_tests},
+        {"bf16 cast", run_bf16_cast_tests},  
     };
 
     const test_case model_tests[] = {

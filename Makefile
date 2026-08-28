@@ -63,6 +63,7 @@ CORE_SRCS := \
 	$(SRC_DIR)/backend_cpu/attn_core_cpu.c \
 	$(SRC_DIR)/backend_cpu/gather_scatter_cpu.c \
 	$(SRC_DIR)/backend_cpu/row_stats_cpu.c \
+	$(SRC_DIR)/backend_cpu/cast_cpu.c \
     $(SRC_DIR)/models/entropy.c \
     $(SRC_DIR)/models/byte_embedding.c \
     $(SRC_DIR)/models/patcher.c \
@@ -101,7 +102,8 @@ CUDA_SRCS := \
 	$(SRC_DIR)/backend_cuda/optim.cu \
 	$(SRC_DIR)/backend_cuda/attn_core.cu \
 	$(SRC_DIR)/backend_cuda/gather_scatter.cu \
-	$(SRC_DIR)/backend_cuda/row_stats.cu
+	$(SRC_DIR)/backend_cuda/row_stats.cu \
+	$(SRC_DIR)/backend_cuda/cast_cuda.cu
 CUDA_SMOKE_SRCS := \
 	$(SRC_DIR)/backend_cuda/smoke.cu
 
@@ -199,7 +201,7 @@ cuda-smoke: $(BIN_DIR)/cuda_smoke$(EXE_EXT)
 	@echo [CUDA] Built successfully: $(BIN_DIR)/cuda_smoke$(EXE_EXT)
 	@./$(BIN_DIR)/cuda_smoke$(EXE_EXT)
 
-# Stage-4 sanitizer gate: run the full CUDA test suite (includes the
+# sanitizer gate: run the full CUDA test suite (includes the
 # training-step parity) under compute-sanitizer. Requires a native Linux
 # box: WSL2/dxg devices are rejected by the sanitizer ("Device not
 # supported"). TOOL selects memcheck (default), racecheck, initcheck, or
@@ -284,7 +286,7 @@ $(BIN_DIR)/train_sweep$(EXE_EXT): $(TOOLS_DIR)/train_sweep.c $(CORE_OBJS) $(TOOL
 	$(MKDIR_BIN)
 	@$(CC) $(CFLAGS) -I$(BENCH_DIR) $(TOOLS_DIR)/train_sweep.c $(CORE_OBJS) $(TOOLS_OBJS) $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)
 
-# Link BLT-D trainer exe (Phase D)
+# Link BLT-D trainer exe
 $(BIN_DIR)/train_blt_d$(EXE_EXT): $(RUN_DIR)/train_blt_d.c $(CORE_OBJS)
 	@echo [LD] Linking BLT-D trainer executable: $@
 	$(MKDIR_BIN)
@@ -336,12 +338,12 @@ help:
 -include $(shell find obj obj-cuda -name '*.d' 2>/dev/null)
 
 
-# Link Phase E end-to-end driver
+# Link end-to-end driver
 $(BIN_DIR)/e2e_blt_dv$(EXE_EXT): $(RUN_DIR)/e2e_blt_dv.c $(CORE_OBJS)
 	@mkdir -p $(BIN_DIR)
 	@$(CC) $(CFLAGS) $(RUN_DIR)/e2e_blt_dv.c $(CORE_OBJS) $(TOOLS_OBJS) -o $@ $(LDLIBS)
 
-# Link Phase F inference benchmark
+# Link inference benchmark
 $(BIN_DIR)/infer_bench$(EXE_EXT): bench/infer_bench.c $(CORE_OBJS) $(TOOLS_OBJS) $(BENCH_LIB_OBJS)
 	@mkdir -p $(BIN_DIR)
 	@echo "[CC] $< -> $@"

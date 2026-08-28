@@ -38,6 +38,7 @@ typedef struct {
     float layer_norm_eps;     // used only when norm_type == BLT_NORM_LAYERNORM
     blt_norm_type norm_type;
     blt_activation_type activation_type;
+    int use_bf16;             // 1 = use bf16 weight copies for matmul (mixed precision)
 } blt_transformer_config;
  
 // All learned weights for one block. Fields whose relevance depends on
@@ -55,6 +56,18 @@ typedef struct {
 } blt_transformer_weights;
 
 
+// Optional bf16 weight copies for mixed-precision matmul.
+// NULL when use_bf16 is disabled. Only the matmul-participating
+// weights have bf16 copies; norm weights stay fp32.
+typedef struct {
+    const blt_tensor* attn_qkv_w;
+    const blt_tensor* attn_proj_w;
+    const blt_tensor* ffn_up_w;
+    const blt_tensor* ffn_gate_w;
+    const blt_tensor* ffn_down_w;
+} blt_transformer_weights_bf16;
+
+
 // Owned storage for one transformer layer's weights. A parallel
 // blt_transformer_weights entry (of const pointers into this struct) is
 // what actually gets passed to blt_transformer_forward.
@@ -66,6 +79,12 @@ typedef struct {
     blt_tensor ffn_up_w;
     blt_tensor ffn_gate_w;
     blt_tensor ffn_down_w;
+    // bf16 copies for mixed-precision matmul (allocated only when use_bf16=1)
+    blt_tensor attn_qkv_w_bf16;
+    blt_tensor attn_proj_w_bf16;
+    blt_tensor ffn_up_w_bf16;
+    blt_tensor ffn_gate_w_bf16;
+    blt_tensor ffn_down_w_bf16;
 } blt_transformer_layer_storage;
 
 
@@ -87,6 +106,7 @@ typedef struct {
 // BLT's local encoder/decoder/patch-transformer blocks alike.
 // `arena` provides scratch storage for intermediates; it is not reset by
 // this function, so the caller controls intermediate lifetime.
+// `w_bf16` may be NULL (fp32-only path) or non-NULL (mixed-precision path).
 void blt_transformer_forward(
     const blt_tensor* input,
     const blt_transformer_weights* weights,
@@ -94,6 +114,16 @@ void blt_transformer_forward(
     const blt_transformer_config* config,
     blt_arena* arena
 );
+
+// Builds a blt_transformer_weights_bf16 view from a layer storage.
+// Returns a zeroed struct when use_bf16 is disabled.
+blt_transformer_weights_bf16 blt_transformer_layer_bf16_view(
+    const blt_transformer_layer_storage* s, int use_bf16);
+
+// Refresh bf16 weight copies from their fp32 masters.
+// Must be called once per training step after the optimizer update
+// and before the next forward pass.
+void blt_mixed_weight_refresh(blt_tensor* bf16_copy, const blt_tensor* fp32_master);
 
 #ifdef __cplusplus
 }

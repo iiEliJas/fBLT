@@ -76,7 +76,6 @@ void blt_attention_head_core_backward_cpu(blt_backend backend, const blt_attenti
                 if (wgt == 0.0f) {
                     continue;
                 }
-                const float* v_j = a->v + j * a->v_stride;
                 float* gv_j = a->grad_v + j * a->gv_stride;
                 for (size_t d = 0; d < hd; d++) {
                     gv_j[d] += wgt * go_i[d];
@@ -86,7 +85,7 @@ void blt_attention_head_core_backward_cpu(blt_backend backend, const blt_attenti
     }
 
     // Softmax backward, per row: gs_ij = w_ij * (gw_ij - dot_i).
-    // grad_w_ij = dot(go_i, v_j), computed on the fly.
+    // grad_w_ij = dot(go_i, v_j)
     if (a->grad_q != NULL || a->grad_k != NULL) {
         for (size_t i = 0; i < nq; i++) {
             const float* go_i = a->grad_combined + i * a->gc_stride + a->gc_col_offset;

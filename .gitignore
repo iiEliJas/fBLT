@@ -23,6 +23,10 @@ compile_commands.json
 .opencode/
 opencode.json
 
+fbltd_profile.nsys-rep
+fbltd_profile.sqlite
+report1.nsys-rep
+
 runs/
 data/raw/
 data/train.bin

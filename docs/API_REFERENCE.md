@@ -166,6 +166,7 @@ Minimal JSON parser for config files (objects, arrays of scalars, string/int/flo
 - `blt_matmul(const blt_tensor* a, const blt_tensor* b, blt_tensor* out)`
   - Input: two 2D input tensors and an output tensor.
   - Output: writes the matrix product into `out`.
+  - Behavior: supports FP32 and BF16 input dtypes. When either input is BF16, both inputs are cast to FP32 internally before the matmul; the result is written in FP32. On CUDA with BF16 inputs, `cublasGemmEx` with `CUDA_R_16BF` inputs and `CUBLAS_COMPUTE_32F` is used to engage tensor cores; on CPU, BF16 inputs are software-cast to FP32 before the reference compute.
 - `blt_matmul_backward(const blt_tensor* a, const blt_tensor* b, const blt_tensor* grad_out, blt_tensor* grad_a, blt_tensor* grad_b)`
   - Input: two 2D input tensors, gradient output, and output gradient tensors.
   - Output: computes backward gradients for `a` and `b`.
@@ -358,6 +359,13 @@ Row-wise statistics over 2D probability/logit tensors.
   - Input: FP32 logits `[rows, vocab]`.
   - Output: writes each row's argmax id into the host uint32 array.
 
+### blt/ops/cast.h
+Elementwise dtype conversion between FP32 and BF16.
+- `blt_cast(const blt_tensor* in, blt_tensor* out)`
+  - Input: source tensor `in` and destination tensor `out` with matching `numel`.
+  - Output: writes converted elements into `out`.
+  - Behavior: supported conversions are FP32→BF16 (round-to-nearest-even on mantissa, truncates to 16 bits) and BF16→FP32 (widens 16-bit stored value back to 32-bit float). Both tensors must have the same `numel` but may differ in shape; dtype determines the conversion direction. Dispatched by backend: CPU uses software bit-twiddle emulation, CUDA uses `__float2bfloat16`/`__bfloat162float` intrinsics.
+
 ## Model APIs
 
 ### blt/models/entropy.h
@@ -439,6 +447,7 @@ Row-wise statistics over 2D probability/logit tensors.
     - `float layer_norm_eps`: epsilon for layer normalization; only used when `norm_type == BLT_NORM_LAYERNORM`.
     - `blt_norm_type norm_type`: normalization type for both attention and FFN pre-norms.
     - `blt_activation_type activation_type`: activation type used inside the FFN.
+    - `bool use_bf16`: enable mixed-precision matmuls via bf16 weight copies.
 - `blt_transformer_weights` struct
   - Fields:
     - `const blt_tensor* norm1_weight`: first normalization weight.
@@ -450,10 +459,26 @@ Row-wise statistics over 2D probability/logit tensors.
     - `const blt_tensor* ffn_up_w`: FFN up-projection weights of shape `[embed_dim, hidden_dim]`.
     - `const blt_tensor* ffn_gate_w`: FFN gate projection weights of shape `[embed_dim, hidden_dim]`; required only when `activation_type == BLT_ACTIVATION_SWIGLU`.
     - `const blt_tensor* ffn_down_w`: FFN down-projection weights of shape `[hidden_dim, embed_dim]`.
+- `blt_transformer_weights_bf16` struct
+  - BF16 copies of the five matmul weight pointers from `blt_transformer_weights`. Normalization weights are excluded (norm stays in FP32 throughout).
+  - Fields:
+    - `const blt_tensor* attn_qkv_w`: BF16 QKV projection weights.
+    - `const blt_tensor* attn_proj_w`: BF16 output projection weights.
+    - `const blt_tensor* ffn_up_w`: BF16 FFN up-projection weights.
+    - `const blt_tensor* ffn_gate_w`: BF16 FFN gate-projection weights.
+    - `const blt_tensor* ffn_down_w`: BF16 FFN down-projection weights.
 - `blt_transformer_layer_storage` struct
-  - Fields: `blt_tensor norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w` - owned storage for one transformer layer's weights.
+  - Fields: `blt_tensor norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w` — owned storage for one transformer layer's weights.
+  - Additional field when `use_bf16` is enabled at stack level: `blt_tensor attn_qkv_w_bf16`, `attn_proj_w_bf16`, `ffn_up_w_bf16`, `ffn_gate_w_bf16`, `ffn_down_w_bf16` — owned BF16 copies of the five matmul weights, allocated by `blt_transformer_stack_init`.
 - `blt_transformer_layer_grad` struct
   - Fields: `blt_tensor norm1_weight`, `attn_qkv_w`, `attn_proj_w`, `norm2_weight`, `ffn_up_w`, `ffn_gate_w`, `ffn_down_w` — gradient counterpart of `blt_transformer_layer_storage`.
+- `blt_transformer_layer_bf16_view(const blt_transformer_layer_storage* storage, blt_transformer_weights_bf16* bf16_out)`
+  - Input: pointer to a layer's storage containing BF16 weight copies, and output BF16 weight view struct.
+  - Output: populates `bf16_out` with `blt_tensor` pointers to the five BF16 matmul weight tensors in `storage`.
+- `blt_mixed_weight_refresh(const blt_transformer_weights* fp32, const blt_transformer_weights_bf16* bf16)`
+  - Input: FP32 master weight pointers and corresponding BF16 copy pointers for the same layer.
+  - Output: none; casts each FP32 matmul weight to BF16 in place into the corresponding BF16 tensor via `blt_cast`.
+  - Behavior: call after every optimizer step to refresh the BF16 weight copies from the updated FP32 masters. Normalization weights are not touched (they remain FP32).
 - `blt_transformer_forward(input, weights, output, config, arena)`
   - Input: input sequence tensor, transformer weights, output tensor, transformer config, and scratch arena.
   - Output: writes a single transformer block forward pass result into `output`.
@@ -468,21 +493,24 @@ Row-wise statistics over 2D probability/logit tensors.
     - `size_t num_heads`: attention heads; `embed_dim` must be divisible by `num_heads`.
     - `size_t max_seq_len`: upper bound used to size the shared RoPE cache.
     - `float rope_theta`: RoPE base (e.g. `500000.0f`).
+    - `bool use_bf16`: enable mixed-precision forward passes using bf16 weight copies.
 - `blt_transformer_stack` struct
   - Fields:
     - `blt_transformer_config layer_config`: shared per-layer config for every block in the stack.
     - `blt_transformer_layer_storage* layer_storage`: owned weight storage, `[num_layers]`.
     - `blt_transformer_weights* layer_weights`: const-pointer views into `layer_storage`, `[num_layers]` — what is actually passed to the layer forward pass.
+    - `blt_transformer_weights_bf16* layer_weights_bf16`: BF16 weight views, `[num_layers]` — populated by `blt_transformer_layer_bf16_view` after init; NULL when `use_bf16` is false.
     - `blt_tensor rope_cos_cache`: shared precomputed cosine RoPE cache of shape `[max_seq_len, head_dim/2]`.
     - `blt_tensor rope_sin_cache`: shared precomputed sine RoPE cache of shape `[max_seq_len, head_dim/2]`.
     - `size_t num_layers`, `embed_dim`, `hidden_dim`, `num_heads`, `head_dim`, `max_seq_len`: stack metadata.
+    - `bool use_bf16`: mirrors config flag; controls BF16 allocation in init and weight routing in forward/backward.
 - `blt_transformer_stack_grad` struct
   - Fields:
     - `blt_transformer_layer_grad* layer_grads`: gradient storage for each layer, `[num_layers]`.
 - `blt_transformer_stack_init(blt_arena* arena, blt_transformer_stack* stack, const blt_transformer_stack_config* config)`
   - Input: scratch arena, stack to initialize, and stack config.
   - Output: allocates each layer's weight storage and precomputes the shared RoPE cache.
-  - Behavior: caller fills the weight tensors afterward, using the same contract as `blt_tensor_create`.
+  - Behavior: when `config->use_bf16` is true, additionally allocates BF16 copies of the five matmul weights per layer on `layer_storage[i]` and fills `stack->layer_weights_bf16` with per-layer `blt_transformer_weights_bf16` views. Caller fills the FP32 weight tensors afterward, then calls `blt_mixed_weight_refresh` to populate the BF16 copies.
 - `blt_transformer_stack_grad_create(blt_arena* arena, const blt_transformer_stack* stack)`
   - Input: arena for storage and the stack to mirror.
   - Output: allocated, zero-initialized gradient struct matching the stack's shapes.
