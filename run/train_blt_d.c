@@ -419,7 +419,7 @@ int main(int argc, char** argv) {
                  .diffusion = 1, .eval_path = NULL, .eval_windows = 200,
                  .save_path = NULL, .load_path = NULL,
                  .eval_skip = 0,
-                 .t_min = 0.05f, .lr_decay = 0, .mask_warmup = 0,
+                 .t_min = 0.1f, .lr_decay = 0, .mask_warmup = 0,
                  .mask_scale = 1.0f, .mask_late_step = 0,
                  .mask_late_scale = 1.0f, .entropy_patches = 0,
                  .train_entlm = NULL, .entropy_lm = NULL,
@@ -826,6 +826,21 @@ int main(int argc, char** argv) {
         for (size_t i = 0; i < model->encoder->ngram_weights.num_tables; i++)
             zero_tensor(&grad->encoder_grad->ngram_grads.tables[i]);
         zero_tensor(&grad->decoder_grad->d0_embed_grad);
+
+        for (size_t i = 0; i < model->encoder->config.num_layers; i++) {
+            zero_tensor(&grad->encoder_grad->layer_grads[i].norm1_weight);
+            zero_tensor(&grad->encoder_grad->layer_grads[i].norm2_weight);
+            zero_tensor(&grad->encoder_grad->layer_grads[i].cross_norm_weight);
+        }
+        for (size_t i = 0; i < model->global->stack.num_layers; i++) {
+            zero_tensor(&grad->global_grad->stack_grad->layer_grads[i].norm1_weight);
+            zero_tensor(&grad->global_grad->stack_grad->layer_grads[i].norm2_weight);
+        }
+        for (size_t i = 0; i < model->decoder->config.num_layers; i++) {
+            zero_tensor(&grad->decoder_grad->layer_grads[i].norm1_weight);
+            zero_tensor(&grad->decoder_grad->layer_grads[i].norm2_weight);
+            zero_tensor(&grad->decoder_grad->layer_grads[i].cross_norm_weight);
+        }
 
         if (a.diffusion) {
             size_t p_shape2[2] = {M, a.embed};

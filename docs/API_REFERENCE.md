@@ -218,7 +218,7 @@ Minimal JSON parser for config files (objects, arrays of scalars, string/int/flo
   - Output: writes row-wise RMS normalization into `out`.
 - `blt_rmsnorm_backward(grad_out, x, weight, grad_x, grad_weight)`
   - Input: gradient w.r.t. output, original input, weight tensor, and output gradient tensors.
-  - Output: computes backward gradients for `x` and `weight`.
+  - Output: computes backward gradients for `x` (overwritten) and `weight` (accumulated; must be zero-initialized by the caller before the backward pass).
 
 ### blt/ops/swiglu.h
 - `blt_swiglu_forward(gate, up, out)`

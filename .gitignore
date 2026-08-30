@@ -19,13 +19,13 @@ docs/fast_bltPAPER.md
 graphify-out/
 
 AGENTS.md
+docs/HANDOFF_RESET.md
 compile_commands.json
 .opencode/
 opencode.json
 
-fbltd_profile.nsys-rep
-fbltd_profile.sqlite
-report1.nsys-rep
+*.nsys-rep
+*.sqlite
 
 runs/
 data/raw/
