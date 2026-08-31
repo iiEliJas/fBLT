@@ -99,26 +99,11 @@ static void apply_rope_to_all_heads(
         size_t q_offset = head * head_dim;
         size_t k_offset = embed_dim + head * head_dim;
 
-        // Gather this head's Q and K slices out of the packed layout.
-        blt_strided_copy(backend, q_head_buf, head_dim,
-                         qkv_data + q_offset, qkv_stride, seq_len, head_dim);
-        blt_strided_copy(backend, k_head_buf, head_dim,
-                         qkv_data + k_offset, qkv_stride, seq_len, head_dim);
-
-        blt_tensor q_head_t, q_rot_t, k_head_t, k_rot_t;
-        blt_tensor_view_3d(&q_head_t, q_head_buf, seq_len, 1, head_dim, backend);
-        blt_tensor_view_3d(&q_rot_t, q_rot_buf, seq_len, 1, head_dim, backend);
-        blt_tensor_view_3d(&k_head_t, k_head_buf, seq_len, 1, head_dim, backend);
-        blt_tensor_view_3d(&k_rot_t, k_rot_buf, seq_len, 1, head_dim, backend);
-
-        blt_rope_apply(&q_head_t, rope_cos, rope_sin, &q_rot_t);
-        blt_rope_apply(&k_head_t, rope_cos, rope_sin, &k_rot_t);
-
-        // Scatter rotated values back into the packed layout.
-        blt_strided_copy(backend, qkv_data + q_offset, qkv_stride,
-                         q_rot_buf, head_dim, seq_len, head_dim);
-        blt_strided_copy(backend, qkv_data + k_offset, qkv_stride,
-                         k_rot_buf, head_dim, seq_len, head_dim);
+        // Fused RoPE on packed layout: eliminates strided_copy + rope_apply + strided_copy
+        blt_rope_apply_packed(qkv_data, qkv_stride, q_offset, seq_len, head_dim,
+                              (const float*)rope_cos->data, (const float*)rope_sin->data, backend);
+        blt_rope_apply_packed(qkv_data, qkv_stride, k_offset, seq_len, head_dim,
+                              (const float*)rope_cos->data, (const float*)rope_sin->data, backend);
     }
 }
 
@@ -471,36 +456,18 @@ void blt_multihead_attention_backward(const blt_tensor* input, const blt_tensor*
         blt_attention_head_core_backward(input->backend, &a);
     }
  
-    // ---- Step 5: backward through RoPE (rotate Q/K gradients back) ----
+// ---- Step 5: backward through RoPE (rotate Q/K gradients back) ----
     if (config->use_rope) {
-        size_t head_numel = seq_len * head_dim;
-        float* gq_head_buf = (float*)blt_arena_alloc(arena, head_numel * sizeof(float), sizeof(float));
-        float* gk_head_buf = (float*)blt_arena_alloc(arena, head_numel * sizeof(float), sizeof(float));
-        float* gq_unrot_buf = (float*)blt_arena_alloc(arena, head_numel * sizeof(float), sizeof(float));
-        float* gk_unrot_buf = (float*)blt_arena_alloc(arena, head_numel * sizeof(float), sizeof(float));
- 
+        size_t qkv_stride = 3 * embed_dim;
         for (size_t head = 0; head < num_heads; head++) {
             size_t q_offset = head * head_dim;
             size_t k_offset = embed_dim + head * head_dim;
 
-            blt_strided_copy(input->backend, gq_head_buf, head_dim,
-                             grad_qkv_data + q_offset, qkv_stride, seq_len, head_dim);
-            blt_strided_copy(input->backend, gk_head_buf, head_dim,
-                             grad_qkv_data + k_offset, qkv_stride, seq_len, head_dim);
-
-            blt_tensor gq_head_t, gq_unrot_t, gk_head_t, gk_unrot_t;
-            blt_tensor_view_3d(&gq_head_t, gq_head_buf, seq_len, 1, head_dim, input->backend);
-            blt_tensor_view_3d(&gq_unrot_t, gq_unrot_buf, seq_len, 1, head_dim, input->backend);
-            blt_tensor_view_3d(&gk_head_t, gk_head_buf, seq_len, 1, head_dim, input->backend);
-            blt_tensor_view_3d(&gk_unrot_t, gk_unrot_buf, seq_len, 1, head_dim, input->backend);
-
-            blt_rope_apply_backward(&gq_head_t, rope_cos_t, rope_sin_t, &gq_unrot_t);
-            blt_rope_apply_backward(&gk_head_t, rope_cos_t, rope_sin_t, &gk_unrot_t);
-
-            blt_strided_copy(input->backend, grad_qkv_data + q_offset, qkv_stride,
-                             gq_unrot_buf, head_dim, seq_len, head_dim);
-            blt_strided_copy(input->backend, grad_qkv_data + k_offset, qkv_stride,
-                             gk_unrot_buf, head_dim, seq_len, head_dim);
+            // Fused RoPE backward on packed layout - no intermediate buffers
+            blt_rope_apply_packed_backward(grad_qkv_data, qkv_stride, q_offset, seq_len, head_dim,
+                                           (const float*)rope_cos_t->data, (const float*)rope_sin_t->data, input->backend);
+            blt_rope_apply_packed_backward(grad_qkv_data, qkv_stride, k_offset, seq_len, head_dim,
+                                           (const float*)rope_cos_t->data, (const float*)rope_sin_t->data, input->backend);
         }
     }
  

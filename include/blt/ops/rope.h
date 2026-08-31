@@ -31,6 +31,18 @@ void blt_rope_apply(const blt_tensor* x, const blt_tensor* cos, const blt_tensor
 void blt_rope_apply_backward(const blt_tensor* grad_out, const blt_tensor* cos,
                             const blt_tensor* sin, blt_tensor* grad_in);
 
+// Fused strided_copy + RoPE + strided_copy for packed QKV layout.
+// Reads from qkv_data at head_offset with qkv_stride, applies RoPE in-place.
+// Eliminates intermediate buffers and 3 kernel launches per head.
+void blt_rope_apply_packed(float* qkv_data, size_t qkv_stride,
+                           size_t head_offset, size_t seq_len,
+                           size_t head_dim, const float* cos, const float* sin, blt_backend backend);
+
+// Backward pass for fused packed RoPE.
+void blt_rope_apply_packed_backward(float* qkv_data, size_t qkv_stride,
+                                    size_t head_offset, size_t seq_len,
+                                    size_t head_dim, const float* cos, const float* sin, blt_backend backend);
+
 #ifdef __cplusplus
 }
 #endif

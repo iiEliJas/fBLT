@@ -703,28 +703,15 @@ void blt_local_decoder_backward_diffusion(
 
         // RoPE backward on the Q/K gradients (same gathered tables)
         {
-            float* gq_head = (float*)blt_arena_alloc(arena, c.S * c.hd * sizeof(float), sizeof(float));
-            float* gk_head = (float*)blt_arena_alloc(arena, c.S * c.hd * sizeof(float), sizeof(float));
-            float* gq_unrot = (float*)blt_arena_alloc(arena, c.S * c.hd * sizeof(float), sizeof(float));
-            float* gk_unrot = (float*)blt_arena_alloc(arena, c.S * c.hd * sizeof(float), sizeof(float));
-            blt_tensor gqh_t, gqu_t, gkh_t, gku_t;
+            // Fused RoPE backward on packed layout - no intermediate buffers needed
+            const size_t stride3 = 3 * c.E;
             for (size_t h = 0; h < c.H; h++) {
                 const size_t q_off = h * c.hd;
                 const size_t k_off = c.E + h * c.hd;
-                blt_strided_copy(dh.backend, gq_head, c.hd,
-                                 gqkv + q_off, stride3, c.S, c.hd);
-                blt_strided_copy(dh.backend, gk_head, c.hd,
-                                 gqkv + k_off, stride3, c.S, c.hd);
-                blt_tensor_view_3d(&gqh_t, gq_head, c.S, 1, c.hd, dh.backend);
-                blt_tensor_view_3d(&gqu_t, gq_unrot, c.S, 1, c.hd, dh.backend);
-                blt_tensor_view_3d(&gkh_t, gk_head, c.S, 1, c.hd, dh.backend);
-                blt_tensor_view_3d(&gku_t, gk_unrot, c.S, 1, c.hd, dh.backend);
-                blt_rope_apply_backward(&gqh_t, &c.rope_cos, &c.rope_sin, &gqu_t);
-                blt_rope_apply_backward(&gkh_t, &c.rope_cos, &c.rope_sin, &gku_t);
-                blt_strided_copy(dh.backend, gqkv + q_off, stride3,
-                                 gq_unrot, c.hd, c.S, c.hd);
-                blt_strided_copy(dh.backend, gqkv + k_off, stride3,
-                                 gk_unrot, c.hd, c.S, c.hd);
+                blt_rope_apply_packed_backward(gqkv, stride3, q_off, c.S, c.hd,
+                                               (const float*)c.rope_cos.data, (const float*)c.rope_sin.data, dh.backend);
+                blt_rope_apply_packed_backward(gqkv, stride3, k_off, c.S, c.hd,
+                                               (const float*)c.rope_cos.data, (const float*)c.rope_sin.data, dh.backend);
             }
         }
 

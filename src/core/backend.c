@@ -17,6 +17,7 @@
 #include "blt/ops/row_stats.h"
 #include "blt/ops/cast.h"
 #include "blt/core/tensor.h"
+#include "blt/core/cuda_shim.h"
 // ------------------------------------------------------------
 // CPU Implementation Declarations
 
@@ -173,6 +174,15 @@ void blt_cross_entropy_backward_cuda(const blt_tensor* logits, const blt_tensor*
 void blt_rope_precompute_cuda(size_t max_seq_len, const blt_rope_config* config, blt_tensor* cos_out, blt_tensor* sin_out);
 void blt_rope_apply_cuda(const blt_tensor* x, const blt_tensor* cos, const blt_tensor* sin, blt_tensor* out);
 void blt_rope_apply_backward_cuda(const blt_tensor* grad_out, const blt_tensor* cos, const blt_tensor* sin, blt_tensor* grad_in);
+
+// Fused RoPE on packed QKV layout
+void blt_rope_apply_packed_cuda(float* qkv_data, size_t qkv_stride,
+                                size_t head_offset, size_t seq_len,
+                                size_t head_dim, const float* cos, const float* sin);
+void blt_rope_apply_packed_backward_cuda(float* qkv_data, size_t qkv_stride,
+                                         size_t head_offset, size_t seq_len,
+                                         size_t head_dim, const float* cos, const float* sin);
+
 void blt_layernorm_forward_cuda(const blt_tensor* x, const blt_tensor* weight, const blt_tensor* bias, blt_tensor* out, float eps);
 void blt_rmsnorm_forward_cuda(const blt_tensor* x, const blt_tensor* weight, blt_tensor* out);
 void blt_rmsnorm_backward_cuda(const blt_tensor* grad_out, const blt_tensor* x,
@@ -331,6 +341,57 @@ void blt_rope_apply(const blt_tensor* x, const blt_tensor* cos, const blt_tensor
 void blt_rope_apply_backward(const blt_tensor* grad_out, const blt_tensor* cos, const blt_tensor* sin, blt_tensor* grad_in){
     BLT_DISPATCH(grad_out, blt_rope_apply_backward_cpu(grad_out, cos, sin, grad_in),
                  blt_rope_apply_backward_cuda(grad_out, cos, sin, grad_in));
+}
+
+// Fused RoPE on packed QKV layout
+void blt_rope_apply_packed(float* qkv_data, size_t qkv_stride,
+                           size_t head_offset, size_t seq_len,
+                           size_t head_dim, const float* cos, const float* sin, blt_backend backend) {
+    if (backend == BLT_BACKEND_CUDA) {
+#ifdef BLT_WITH_CUDA
+        blt_rope_apply_packed_cuda(qkv_data, qkv_stride, head_offset, seq_len,
+                                   head_dim,
+                                   (const float*)cos, (const float*)sin);
+#endif
+    } else {
+        size_t half = head_dim / 2;
+        for (size_t t = 0; t < seq_len; t++) {
+            float* base = qkv_data + t * qkv_stride + head_offset;
+            const float* c = cos + t * half;
+            const float* s = sin + t * half;
+            for (size_t i = 0; i < half; i++) {
+                float x0 = base[2 * i];
+                float x1 = base[2 * i + 1];
+                base[2 * i]     = x0 * c[i] - x1 * s[i];
+                base[2 * i + 1] = x1 * c[i] + x0 * s[i];
+            }
+        }
+    }
+}
+
+void blt_rope_apply_packed_backward(float* qkv_data, size_t qkv_stride,
+                                    size_t head_offset, size_t seq_len,
+                                    size_t head_dim, const float* cos, const float* sin, blt_backend backend) {
+    if (backend == BLT_BACKEND_CUDA) {
+#ifdef BLT_WITH_CUDA
+        blt_rope_apply_packed_backward_cuda(qkv_data, qkv_stride, head_offset, seq_len,
+                                            head_dim,
+                                            (const float*)cos, (const float*)sin);
+#endif
+    } else {
+        size_t half = head_dim / 2;
+        for (size_t t = 0; t < seq_len; t++) {
+            float* base = qkv_data + t * qkv_stride + head_offset;
+            const float* c = cos + t * half;
+            const float* s = sin + t * half;
+            for (size_t i = 0; i < half; i++) {
+                float g0 = base[2 * i];
+                float g1 = base[2 * i + 1];
+                base[2 * i]     = g0 * c[i] + g1 * s[i];
+                base[2 * i + 1] = g1 * c[i] - g0 * s[i];
+            }
+        }
+    }
 }
 
 void blt_layernorm_forward(const blt_tensor* x, const blt_tensor* weight, const blt_tensor* bias,blt_tensor* out, float eps){

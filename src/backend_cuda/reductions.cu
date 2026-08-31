@@ -308,6 +308,86 @@ extern "C" void blt_rope_apply_backward_cuda(const blt_tensor* grad_out, const b
     blt_cuda_launch_check("blt_rope_apply_backward");
 }
 
+// Fused strided_copy + RoPE + strided_copy: reads from packed QKV layout,
+// applies RoPE in-place, writes back to packed layout.
+// Eliminates 3 kernel launches per head (strided_copy -> rope -> strided_copy).
+__global__ void blt_rope_apply_packed_kernel(float* qkv_data, size_t qkv_stride,
+                                             size_t head_offset, size_t seq_len,
+                                             size_t head_dim, const float* cos, const float* sin) {
+    const size_t half = head_dim / 2;
+    const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t total = seq_len * half;
+    
+    if (tid >= total) return;
+    
+    const size_t t = tid / half;
+    const size_t i = tid % half;
+    
+    const size_t base = t * qkv_stride + head_offset;
+    float x0 = qkv_data[base + 2 * i];
+    float x1 = qkv_data[base + 2 * i + 1];
+    float c = cos[t * half + i];
+    float s = sin[t * half + i];
+    
+    qkv_data[base + 2 * i]     = x0 * c - x1 * s;
+    qkv_data[base + 2 * i + 1] = x1 * c + x0 * s;
+}
+
+extern "C" void blt_rope_apply_packed_cuda(float* qkv_data, size_t qkv_stride,
+                                           size_t head_offset, size_t seq_len,
+                                           size_t head_dim, const float* cos, const float* sin) {
+    const size_t half = head_dim / 2;
+    const size_t total = seq_len * half;
+    const unsigned block = 256;
+    unsigned blocks = (unsigned)((total + block - 1) / block);
+    if (blocks > 4096) blocks = 4096;
+    if (blocks == 0) blocks = 1;
+    
+    blt_rope_apply_packed_kernel<<<blocks, block>>>(qkv_data, qkv_stride,
+                                                    head_offset, seq_len,
+                                                    head_dim, cos, sin);
+    blt_cuda_launch_check("blt_rope_apply_packed");
+}
+
+// Inverse rotation for backward pass on packed layout.
+__global__ void blt_rope_apply_packed_backward_kernel(float* qkv_data, size_t qkv_stride,
+                                                      size_t head_offset, size_t seq_len,
+                                                      size_t head_dim, const float* cos, const float* sin) {
+    const size_t half = head_dim / 2;
+    const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t total = seq_len * half;
+    
+    if (tid >= total) return;
+    
+    const size_t t = tid / half;
+    const size_t i = tid % half;
+    
+    const size_t base = t * qkv_stride + head_offset;
+    float g0 = qkv_data[base + 2 * i];
+    float g1 = qkv_data[base + 2 * i + 1];
+    float c = cos[t * half + i];
+    float s = sin[t * half + i];
+    
+    qkv_data[base + 2 * i]     = g0 * c + g1 * s;
+    qkv_data[base + 2 * i + 1] = g1 * c - g0 * s;
+}
+
+extern "C" void blt_rope_apply_packed_backward_cuda(float* qkv_data, size_t qkv_stride,
+                                                    size_t head_offset, size_t seq_len,
+                                                    size_t head_dim, const float* cos, const float* sin) {
+    const size_t half = head_dim / 2;
+    const size_t total = seq_len * half;
+    const unsigned block = 256;
+    unsigned blocks = (unsigned)((total + block - 1) / block);
+    if (blocks > 4096) blocks = 4096;
+    if (blocks == 0) blocks = 1;
+    
+    blt_rope_apply_packed_backward_kernel<<<blocks, block>>>(qkv_data, qkv_stride,
+                                                             head_offset, seq_len,
+                                                             head_dim, cos, sin);
+    blt_cuda_launch_check("blt_rope_apply_packed_backward");
+}
+
 //----------------------------------------------------------------
 // RMSNorm
 
