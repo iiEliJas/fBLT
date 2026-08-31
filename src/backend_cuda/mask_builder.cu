@@ -12,11 +12,8 @@
 // (query, key) cell. Row-validity is reduced to a per-row flag buffer that
 // is checked host-side after sync, mirroring the CPU BLT_REQUIRE.
 
-static int blt_cuda_sync_check(const char* what) {
+static int blt_cuda_launch_check(const char* what) {
     cudaError_t err = cudaGetLastError();
-    if (err == cudaSuccess) {
-        err = cudaDeviceSynchronize();
-    }
     if (err != cudaSuccess) {
         BLT_FATAL("%s failed: %s", what, cudaGetErrorString(err));
     }
@@ -142,18 +139,10 @@ extern "C" void blt_build_attention_mask_cuda(const blt_mask_config* config, blt
         d_docs, has_docs ? config->num_docs : 0,
         d_qg, d_kvg,
         config->bidirectional_within_group ? 1 : 0);
-    cudaError_t err = cudaGetLastError();
-    if (err == cudaSuccess) {
-        blt_mask_row_check_kernel<<<(unsigned)(seq_q > 4096 ? 4096 : (seq_q > 0 ? seq_q : 1)), block>>>(
-            (const float*)out_mask->data, seq_q, seq_kv, d_row_ok);
-        err = cudaGetLastError();
-    }
-    if (err == cudaSuccess) {
-        err = cudaDeviceSynchronize();
-    }
-    if (err != cudaSuccess) {
-        BLT_FATAL("blt_build_attention_mask: kernel failed: %s", cudaGetErrorString(err));
-    }
+    blt_cuda_launch_check("blt_attention_mask_kernel");
+    blt_mask_row_check_kernel<<<(unsigned)(seq_q > 4096 ? 4096 : (seq_q > 0 ? seq_q : 1)), block>>>(
+        (const float*)out_mask->data, seq_q, seq_kv, d_row_ok);
+    blt_cuda_launch_check("blt_mask_row_check_kernel");
 
     unsigned char* row_ok = (unsigned char*)malloc(seq_q);
     BLT_REQUIRE(row_ok != NULL, "blt_build_attention_mask: failed to allocate row check buffer");
@@ -207,7 +196,7 @@ extern "C" void blt_build_block_diffusion_mask_cuda(const blt_block_diffusion_co
 
     blt_block_diffusion_mask_kernel<<<(unsigned)blocks, block>>>(
         (float*)out_mask->data, S, N, config->mode == BLT_BDM_INFER ? 1 : 0);
-    blt_cuda_sync_check("blt_build_block_diffusion_mask");
+    blt_cuda_launch_check("blt_build_block_diffusion_mask");
 
     // Every supported configuration gives each row a valid key (row i sees
     // itself), so no extra validity scan is needed here.

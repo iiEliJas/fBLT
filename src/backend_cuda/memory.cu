@@ -54,3 +54,13 @@ extern "C" void blt_cuda_memcpy_h2d(void* dst, const void* src, size_t bytes) {
 extern "C" void blt_cuda_memcpy_d2h(void* dst, const void* src, size_t bytes) {
     blt_cuda_check(cudaMemcpy(dst, src, bytes, cudaMemcpyDeviceToHost), "cudaMemcpy D2H");
 }
+
+extern "C" void blt_backend_pass_sync_cuda(void) {
+    cudaError_t err = cudaGetLastError();
+    if (err == cudaSuccess) {
+        err = cudaDeviceSynchronize();
+    }
+    if (err != cudaSuccess) {
+        BLT_FATAL("blt_backend_pass_sync: %s", cudaGetErrorString(err));
+    }
+}

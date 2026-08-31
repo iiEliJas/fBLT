@@ -51,6 +51,10 @@ static inline void blt_check_elementwise_fp32(const blt_tensor* a, const blt_ten
     BLT_REQUIRE(a->numel == b->numel, "%s", msg);
 }
 
+// Synchronization point at pass boundaries (forward/backward).
+// CPU: no-op. CUDA: flushes stream and checks for kernel execution errors.
+void blt_backend_pass_sync(blt_backend backend);
+
 
 #ifdef __cplusplus
 }

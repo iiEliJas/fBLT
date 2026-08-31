@@ -20,11 +20,8 @@
 
 #define BLT_RMSNORM_EPS 1e-6f
 
-static int blt_cuda_sync_check(const char* what) {
+static int blt_cuda_launch_check(const char* what) {
     cudaError_t err = cudaGetLastError();
-    if (err == cudaSuccess) {
-        err = cudaDeviceSynchronize();
-    }
     if (err != cudaSuccess) {
         BLT_FATAL("%s failed: %s", what, cudaGetErrorString(err));
     }
@@ -72,7 +69,7 @@ extern "C" void blt_softmax_cuda(const blt_tensor* in, blt_tensor* out) {
     const size_t rows = in->numel / last_dim;
     blt_softmax_kernel<<<blt_cuda_grid(rows), 256>>>(
         (const float*)in->data, (float*)out->data, rows, last_dim);
-    blt_cuda_sync_check("blt_softmax");
+    blt_cuda_launch_check("blt_softmax");
 }
 
 // dx_i = y_i * (dy_i - sum_j(dy_j * y_j)), applied per row over the last dim.
@@ -99,7 +96,7 @@ extern "C" void blt_softmax_backward_cuda(const blt_tensor* grad_out, const blt_
     blt_softmax_backward_kernel<<<blt_cuda_grid(rows), 256>>>(
         (const float*)grad_out->data, (const float*)softmax_out->data, (float*)grad_in->data,
         rows, last_dim);
-    blt_cuda_sync_check("blt_softmax_backward");
+    blt_cuda_launch_check("blt_softmax_backward");
 }
 
 //----------------------------------------------------------------
@@ -174,12 +171,7 @@ extern "C" void blt_cross_entropy_forward_cuda(const blt_tensor* logits, const b
         blt_ce_mean_kernel<<<1, 1>>>(row_loss, (float*)loss_out->data, seq_len);
         err = cudaGetLastError();
     }
-    if (err == cudaSuccess) {
-        err = cudaDeviceSynchronize();
-    }
-    if (err != cudaSuccess) {
-        BLT_FATAL("blt_cross_entropy_forward: kernel failed: %s", cudaGetErrorString(err));
-    }
+    blt_cuda_launch_check("blt_cross_entropy_forward");
 }
 
 // dL/dlogits = (softmax(logits) - one_hot(targets)) / seq_len, one thread per row.
@@ -222,7 +214,7 @@ extern "C" void blt_cross_entropy_backward_cuda(const blt_tensor* logits, const 
     blt_cross_entropy_backward_kernel<<<blt_cuda_grid(seq_len), 256>>>(
         (const float*)logits->data, (const unsigned char*)targets->data,
         (float*)grad_logits->data, seq_len, vocab_size, 1.0f / (float)seq_len);
-    blt_cuda_sync_check("blt_cross_entropy_backward");
+    blt_cuda_launch_check("blt_cross_entropy_backward");
 }
 
 //----------------------------------------------------------------
@@ -249,7 +241,7 @@ extern "C" void blt_rope_precompute_cuda(size_t max_seq_len, const blt_rope_conf
     blt_rope_precompute_kernel<<<blt_cuda_grid(count), 256>>>(
         (float*)cos_out->data, (float*)sin_out->data, max_seq_len, half,
         config->theta, config->head_dim);
-    blt_cuda_sync_check("blt_rope_precompute");
+    blt_cuda_launch_check("blt_rope_precompute");
 }
 
 __global__ void blt_rope_apply_kernel(const float* x, const float* cos, const float* sin, float* out,
@@ -280,7 +272,7 @@ extern "C" void blt_rope_apply_cuda(const blt_tensor* x, const blt_tensor* cos, 
     blt_rope_apply_kernel<<<blt_cuda_grid(seq_len * num_heads), 256>>>(
         (const float*)x->data, (const float*)cos->data, (const float*)sin->data, (float*)out->data,
         seq_len, num_heads, head_dim, half);
-    blt_cuda_sync_check("blt_rope_apply");
+    blt_cuda_launch_check("blt_rope_apply");
 }
 
 // Inverse rotation: forward applied with sin negated.
@@ -313,7 +305,7 @@ extern "C" void blt_rope_apply_backward_cuda(const blt_tensor* grad_out, const b
     blt_rope_apply_backward_kernel<<<blt_cuda_grid(seq_len * num_heads), 256>>>(
         (const float*)grad_out->data, (const float*)cos->data, (const float*)sin->data,
         (float*)grad_in->data, seq_len, num_heads, head_dim, half);
-    blt_cuda_sync_check("blt_rope_apply_backward");
+    blt_cuda_launch_check("blt_rope_apply_backward");
 }
 
 //----------------------------------------------------------------
@@ -342,7 +334,7 @@ extern "C" void blt_rmsnorm_forward_cuda(const blt_tensor* x, const blt_tensor* 
     const size_t embed_dim = x->shape[1];
     blt_rmsnorm_forward_kernel<<<blt_cuda_grid(seq_len), 256>>>(
         (const float*)x->data, (const float*)weight->data, (float*)out->data, seq_len, embed_dim);
-    blt_cuda_sync_check("blt_rmsnorm_forward");
+    blt_cuda_launch_check("blt_rmsnorm_forward");
 }
 
 // Pass 1 (rows parallel): grad_x plus a per-row inv_rms table for pass 2.
@@ -406,12 +398,7 @@ extern "C" void blt_rmsnorm_backward_cuda(const blt_tensor* grad_out, const blt_
             (float*)grad_weight->data, seq_len, embed_dim);
         err = cudaGetLastError();
     }
-    if (err == cudaSuccess) {
-        err = cudaDeviceSynchronize();
-    }
-    if (err != cudaSuccess) {
-        BLT_FATAL("blt_rmsnorm_backward: kernel failed: %s", cudaGetErrorString(err));
-    }
+    blt_cuda_launch_check("blt_rmsnorm_backward");
 }
 
 //----------------------------------------------------------------
@@ -449,5 +436,5 @@ extern "C" void blt_layernorm_forward_cuda(const blt_tensor* x, const blt_tensor
     blt_layernorm_forward_kernel<<<blt_cuda_grid(seq_len), 256>>>(
         (const float*)x->data, (const float*)weight->data, (const float*)bias->data,
         (float*)out->data, seq_len, embed_dim, eps);
-    blt_cuda_sync_check("blt_layernorm_forward");
+    blt_cuda_launch_check("blt_layernorm_forward");
 }

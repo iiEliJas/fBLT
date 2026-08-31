@@ -519,3 +519,16 @@ void blt_argmax_rows(const blt_tensor* logits, uint32_t* out_ids_host) {
 void blt_cast(const blt_tensor* in, blt_tensor* out) {
     BLT_DISPATCH(in, blt_cast_cpu(in, out), blt_cast_cuda(in, out));
 }
+
+// ------------------
+// PASS SYNC
+
+void blt_backend_pass_sync(blt_backend backend) {
+#ifdef BLT_WITH_CUDA
+    if (backend == BLT_BACKEND_CUDA) {
+        blt_backend_pass_sync_cuda();
+        return;
+    }
+#endif
+    // CPU: no-op
+}

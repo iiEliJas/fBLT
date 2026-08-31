@@ -7,11 +7,8 @@
 #include <math.h>
 #include <stdlib.h>
 
-static int blt_cuda_sync_check(const char* what) {
+static int blt_cuda_launch_check(const char* what) {
     cudaError_t err = cudaGetLastError();
-    if (err == cudaSuccess) {
-        err = cudaDeviceSynchronize();
-    }
     if (err != cudaSuccess) {
         BLT_FATAL("%s failed: %s", what, cudaGetErrorString(err));
     }
@@ -43,7 +40,7 @@ extern "C" void blt_entropy_rows_cuda(const blt_tensor* probs, blt_tensor* entro
     const size_t vocab = probs->shape[1];
     blt_entropy_rows_kernel<<<(unsigned)(rows > 4096 ? 4096 : (rows > 0 ? rows : 1)), 256>>>(
         (const float*)probs->data, (float*)entropy_out->data, rows, vocab, use_log2);
-    blt_cuda_sync_check("blt_entropy_rows");
+    blt_cuda_launch_check("blt_entropy_rows");
 }
 
 // One block per row: threads find local maxima, block reduce to the argmax
@@ -97,7 +94,6 @@ extern "C" void blt_argmax_rows_cuda(const blt_tensor* logits, uint32_t* out_ids
     cudaError_t err = cudaSuccess;
     blt_argmax_rows_kernel<<<(unsigned)rows, 256>>>((const float*)logits->data, d_out, vocab);
     err = cudaGetLastError();
-    if (err == cudaSuccess) err = cudaDeviceSynchronize();
     if (err == cudaSuccess) {
         blt_cuda_memcpy_d2h(out_ids_host, d_out, rows * sizeof(unsigned int));
     }

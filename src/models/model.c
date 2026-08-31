@@ -186,6 +186,7 @@ void blt_model_forward(
     blt_model_encode(model, bytes_in, patches, num_patches, doc_boundaries, num_docs, &enc, arena);
     blt_model_decode(model, &enc, patches, num_patches, bytes_in, doc_boundaries, num_docs,
         NULL, logits_out, loss_out, arena);
+    blt_backend_pass_sync(bytes_in->backend);
 }
 
 
@@ -261,4 +262,6 @@ void blt_model_backward(
     blt_local_encoder_backward(model->encoder, bytes_in, patches, num_patches,
         doc_boundaries, num_docs, &grad_patch_out, &grad_byte_hidden,
         grad->encoder_grad, arena);
+
+    blt_backend_pass_sync(bytes_in->backend);
 }

@@ -28,6 +28,9 @@ void blt_cuda_memcpy_d2h(void* dst, const void* src, size_t bytes);
 blt_arena* blt_cuda_get_scratch_arena(void);
 void blt_cuda_scratch_reset(void);
 
+// Pass synchronization: flush stream and check for kernel execution errors.
+void blt_backend_pass_sync_cuda(void);
+
 #ifdef __cplusplus
 }
 #endif

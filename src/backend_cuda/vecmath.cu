@@ -6,6 +6,14 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+static int blt_cuda_launch_check(const char* what) {
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        BLT_FATAL("%s failed: %s", what, cudaGetErrorString(err));
+    }
+    return 1;
+}
+
 // One block reduces one dot product: strided partial sums in shared memory,
 // then a deterministic tree reduction. Block size is fixed so the summation
 // order is reproducible run to run.
@@ -49,15 +57,9 @@ extern "C" float blt_vec_dot_cuda(blt_backend backend, const float* a, const flo
         }
     }
     blt_vec_dot_kernel<<<1, BLT_VEC_DOT_BLOCK>>>(a, b, n, d_out);
-    cudaError_t err = cudaGetLastError();
-    if (err == cudaSuccess) {
-        err = cudaDeviceSynchronize();
-    }
-    if (err != cudaSuccess) {
-        BLT_FATAL("blt_vec_dot: kernel failed: %s", cudaGetErrorString(err));
-    }
+    blt_cuda_launch_check("blt_vec_dot_kernel");
     float result = 0.0f;
-    err = cudaMemcpy(&result, d_out, sizeof(float), cudaMemcpyDeviceToHost);
+    cudaError_t err = cudaMemcpy(&result, d_out, sizeof(float), cudaMemcpyDeviceToHost);
     if (err != cudaSuccess) {
         BLT_FATAL("blt_vec_dot: result copy failed: %s", cudaGetErrorString(err));
     }
@@ -109,13 +111,7 @@ extern "C" void blt_softmax_masked_row_inplace_cuda(
     BLT_REQUIRE(backend == BLT_BACKEND_CUDA, "blt_softmax_masked_row_inplace: CUDA implementation called with non-CUDA backend");
 
     blt_softmax_masked_row_kernel<<<1, 1>>>(row, row_len, row_idx, is_causal ? 1 : 0, mask_row, scale);
-    cudaError_t err = cudaGetLastError();
-    if (err == cudaSuccess) {
-        err = cudaDeviceSynchronize();
-    }
-    if (err != cudaSuccess) {
-        BLT_FATAL("blt_softmax_masked_row_inplace: kernel failed: %s", cudaGetErrorString(err));
-    }
+    blt_cuda_launch_check("blt_softmax_masked_row_inplace");
 }
 
 __global__ void blt_strided_copy_kernel(float* dst, size_t dst_stride,
@@ -145,11 +141,5 @@ extern "C" void blt_strided_copy_cuda(blt_backend backend, float* dst, size_t ds
     if (blocks > 4096) blocks = 4096;
     if (blocks == 0) blocks = 1;
     blt_strided_copy_kernel<<<blocks, 256>>>(dst, dst_stride, src, src_stride, rows, cols);
-    cudaError_t err = cudaGetLastError();
-    if (err == cudaSuccess) {
-        err = cudaDeviceSynchronize();
-    }
-    if (err != cudaSuccess) {
-        BLT_FATAL("blt_strided_copy: kernel failed: %s", cudaGetErrorString(err));
-    }
+    blt_cuda_launch_check("blt_strided_copy");
 }

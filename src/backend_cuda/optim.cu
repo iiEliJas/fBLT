@@ -8,11 +8,8 @@
 // correction terms are precomputed on the host so the kernel does a single
 // pass with no cross-element dependencies.
 
-static int blt_cuda_sync_check(const char* what) {
+static int blt_cuda_launch_check(const char* what) {
     cudaError_t err = cudaGetLastError();
-    if (err == cudaSuccess) {
-        err = cudaDeviceSynchronize();
-    }
     if (err != cudaSuccess) {
         BLT_FATAL("%s failed: %s", what, cudaGetErrorString(err));
     }
@@ -37,7 +34,7 @@ __global__ void blt_sgd_step_kernel(float* p, const float* g, float lr, size_t n
 extern "C" void blt_sgd_step_cuda(blt_tensor* param, const blt_tensor* grad, float lr) {
     blt_sgd_step_kernel<<<blt_cuda_grid(param->numel), 256>>>(
         (float*)param->data, (const float*)grad->data, lr, param->numel);
-    blt_cuda_sync_check("blt_sgd_step");
+    blt_cuda_launch_check("blt_sgd_step");
 }
 
 __global__ void blt_adamw_step_kernel(float* p, const float* g, float* m, float* v,
@@ -77,5 +74,5 @@ extern "C" void blt_adamw_step_cuda(blt_tensor* param, const blt_tensor* grad,
         param->numel, config->beta1, config->beta2,
         bc1, bc2,
         config->eps, lr, wd);
-    blt_cuda_sync_check("blt_adamw_step");
+    blt_cuda_launch_check("blt_adamw_step");
 }

@@ -5,6 +5,14 @@
 #include <cuda_runtime.h>
 #include <string.h>
 
+static int blt_cuda_launch_check(const char* what) {
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        BLT_FATAL("%s failed: %s", what, cudaGetErrorString(err));
+    }
+    return 1;
+}
+
 // Upload host patch table to device using scratch arena.
 static void* blt_cuda_upload_patches(const blt_patch_info* patches, size_t num_patches) {
     if (num_patches == 0) return NULL;
@@ -59,13 +67,7 @@ extern "C" void blt_patch_pool_forward_cuda(const blt_tensor* byte_hidden, const
     blt_patch_pool_forward_kernel<<<(unsigned)(num_patches > 4096 ? 4096 : (num_patches > 0 ? num_patches : 1)), 256>>>(
         (const float*)byte_hidden->data, d_patches, (float*)out->data,
         num_patches, embed_dim, pool_type == BLT_POOL_MAX ? 1 : 0);
-    cudaError_t err = cudaGetLastError();
-    if (err == cudaSuccess) {
-        err = cudaDeviceSynchronize();
-    }
-    if (err != cudaSuccess) {
-        BLT_FATAL("patch_pool forward failed: %s", cudaGetErrorString(err));
-    }
+    blt_cuda_launch_check("patch_pool forward");
 }
 
 __global__ void blt_patch_pool_backward_kernel(const float* g, const float* h,
@@ -125,11 +127,5 @@ extern "C" void blt_patch_pool_backward_cuda(const blt_tensor* grad_out, const b
         (const float*)grad_out->data, (const float*)byte_hidden->data, d_patches,
         (float*)grad_byte_hidden->data, num_patches, seq_len, embed_dim,
         pool_type == BLT_POOL_MAX ? 1 : 0);
-    cudaError_t err = cudaGetLastError();
-    if (err == cudaSuccess) {
-        err = cudaDeviceSynchronize();
-    }
-    if (err != cudaSuccess) {
-        BLT_FATAL("patch_pool backward failed: %s", cudaGetErrorString(err));
-    }
+    blt_cuda_launch_check("patch_pool backward");
 }

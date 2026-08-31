@@ -15,11 +15,8 @@
 
 #define ATTN_BLOCK 128
 
-static int blt_cuda_sync_check(const char* what) {
+static int blt_cuda_launch_check(const char* what) {
     cudaError_t err = cudaGetLastError();
-    if (err == cudaSuccess) {
-        err = cudaDeviceSynchronize();
-    }
     if (err != cudaSuccess) {
         BLT_FATAL("%s failed: %s", what, cudaGetErrorString(err));
     }
@@ -107,7 +104,7 @@ extern "C" void blt_attention_head_core_cuda(blt_backend backend, const blt_atte
         a->combined, a->combined_stride, a->combined_col_offset,
         scores, a->mask, a->nk, a->head_dim,
         a->is_causal ? 1 : 0, a->scale);
-    blt_cuda_sync_check("blt_attention_head_core");
+    blt_cuda_launch_check("blt_attention_head_core");
 }
 
 // One block per query row: softmax jacobian gs_ij into scratch
@@ -273,7 +270,7 @@ extern "C" void blt_attention_head_core_backward_cuda(blt_backend backend,
             a->weights, a->grad_combined, a->gc_stride, a->gc_col_offset,
             a->scores_scratch, a->grad_q, a->gq_stride,
             a->nk, a->head_dim, a->scale);
-        blt_cuda_sync_check("blt_attention_head_core_backward (row pass)");
+        blt_cuda_launch_check("blt_attention_head_core_backward (row pass)");
     }
 
     if (a->grad_k != NULL || a->grad_v != NULL) {
@@ -299,6 +296,6 @@ extern "C" void blt_attention_head_core_backward_cuda(blt_backend backend,
                 a->grad_v, a->gv_stride,
                 a->nq, a->nk, a->head_dim);
         }
-        blt_cuda_sync_check("blt_attention_head_core_backward (kv pass)");
+        blt_cuda_launch_check("blt_attention_head_core_backward (kv pass)");
     }
 }

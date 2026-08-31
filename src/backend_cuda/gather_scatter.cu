@@ -10,11 +10,8 @@
 // CUDA implementations. The small host-side id/index arrays are mirrored
 // into temporary device buffers from the scratch arena for the duration of each call.
 
-static int blt_cuda_sync_check(const char* what) {
+static int blt_cuda_launch_check(const char* what) {
     cudaError_t err = cudaGetLastError();
-    if (err == cudaSuccess) {
-        err = cudaDeviceSynchronize();
-    }
     if (err != cudaSuccess) {
         BLT_FATAL("%s failed: %s", what, cudaGetErrorString(err));
     }
@@ -57,10 +54,7 @@ extern "C" void blt_embedding_lookup_cuda(const blt_tensor* table, const uint8_t
         (const float*)table->data, table->shape[0], d_ids, (float*)out->data,
         seq_len, embed_dim);
     err = cudaGetLastError();
-    if (err == cudaSuccess) err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-        BLT_FATAL("blt_embedding_lookup failed: %s", cudaGetErrorString(err));
-    }
+    blt_cuda_launch_check("blt_embedding_lookup");
 }
 
 __global__ void blt_embedding_scatter_add_kernel(float* grad_table, size_t table_rows,
@@ -94,10 +88,7 @@ extern "C" void blt_embedding_scatter_add_cuda(const blt_tensor* grad_table, con
         (float*)grad_table->data, grad_table->shape[0], d_ids,
         (const float*)grad_out->data, seq_len, embed_dim);
     err = cudaGetLastError();
-    if (err == cudaSuccess) err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-        BLT_FATAL("blt_embedding_scatter_add failed: %s", cudaGetErrorString(err));
-    }
+    blt_cuda_launch_check("blt_embedding_scatter_add");
 }
 
 __global__ void blt_indexed_row_accumulate_kernel(const float* table, size_t table_rows,
@@ -131,10 +122,7 @@ extern "C" void blt_indexed_row_accumulate_cuda(const blt_tensor* table, const u
         (const float*)table->data, table->shape[0], d_idx, (float*)io->data,
         rows, embed_dim);
     err = cudaGetLastError();
-    if (err == cudaSuccess) err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-        BLT_FATAL("blt_indexed_row_accumulate failed: %s", cudaGetErrorString(err));
-    }
+    blt_cuda_launch_check("blt_indexed_row_accumulate");
 }
 
 __global__ void blt_indexed_row_scatter_add_kernel(float* grad_table, size_t table_rows,
@@ -168,10 +156,7 @@ extern "C" void blt_indexed_row_scatter_add_cuda(const blt_tensor* grad_table, c
         (float*)grad_table->data, grad_table->shape[0], d_idx,
         (const float*)grad_out->data, rows, embed_dim, scale);
     err = cudaGetLastError();
-    if (err == cudaSuccess) err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-        BLT_FATAL("blt_indexed_row_scatter_add failed: %s", cudaGetErrorString(err));
-    }
+    blt_cuda_launch_check("blt_indexed_row_scatter_add");
 }
 
 __global__ void blt_rows_gather_kernel(const float* src, const size_t* pos, float* dst,
@@ -200,8 +185,5 @@ extern "C" void blt_rows_gather_cuda(const blt_tensor* src, const size_t* pos_ho
     blt_rows_gather_kernel<<<blt_cuda_grid(rows * row_len), 256>>>(
         (const float*)src->data, d_pos, (float*)dst->data, rows, row_len);
     err = cudaGetLastError();
-    if (err == cudaSuccess) err = cudaDeviceSynchronize();
-    if (err != cudaSuccess) {
-        BLT_FATAL("blt_rows_gather failed: %s", cudaGetErrorString(err));
-    }
+    blt_cuda_launch_check("blt_rows_gather");
 }
