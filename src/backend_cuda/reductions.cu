@@ -337,44 +337,50 @@ extern "C" void blt_rmsnorm_forward_cuda(const blt_tensor* x, const blt_tensor* 
     blt_cuda_launch_check("blt_rmsnorm_forward");
 }
 
-// Pass 1 (rows parallel): grad_x plus a per-row inv_rms table for pass 2.
-__global__ void blt_rmsnorm_backward_rows_kernel(const float* grad_out, const float* x, const float* w,
-                                                 float* grad_x, float* inv_rms_table,
-                                                 size_t seq_len, size_t embed_dim) {
-    for (size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x; i < seq_len;
-         i += (size_t)gridDim.x * blockDim.x) {
+// Fused RMSNorm backward: computes inv_rms in shared memory, then grad_x and grad_weight.
+// One block per RMSNorm call. Uses shared memory for inv_rms table (seq_len * 4 bytes).
+__global__ void blt_rmsnorm_backward_fused_kernel(const float* grad_out, const float* x, const float* w,
+                                                  float* grad_x, float* grad_weight,
+                                                  size_t seq_len, size_t embed_dim) {
+    extern __shared__ float shmem[];
+    float* inv_rms = shmem;
+    
+    const size_t tid = threadIdx.x;
+    const size_t num_threads = blockDim.x;
+    
+    // Phase 1: Compute inv_rms per row (parallel over rows)
+    for (size_t i = tid; i < seq_len; i += num_threads) {
         const float* row = x + i * embed_dim;
-        const float* go_row = grad_out + i * embed_dim;
-        float* gx_row = grad_x + i * embed_dim;
-
         float sumsq = 0.0f;
         for (size_t j = 0; j < embed_dim; j++) sumsq += row[j] * row[j];
         float mean_sq = sumsq / (float)embed_dim;
-        float inv_rms = 1.0f / sqrtf(mean_sq + BLT_RMSNORM_EPS);
-        inv_rms_table[i] = inv_rms;
-
+        inv_rms[i] = 1.0f / sqrtf(mean_sq + BLT_RMSNORM_EPS);
+    }
+    __syncthreads();
+    
+    // Phase 2: Compute grad_x (parallel over rows)
+    for (size_t i = tid; i < seq_len; i += num_threads) {
+        const float* row = x + i * embed_dim;
+        const float* go_row = grad_out + i * embed_dim;
+        float* gx_row = grad_x + i * embed_dim;
+        
         float dot = 0.0f;
         for (size_t j = 0; j < embed_dim; j++) {
             dot += go_row[j] * w[j] * row[j];
         }
-
-        float inv_rms3_over_n = (inv_rms * inv_rms * inv_rms) / (float)embed_dim;
+        
+        float inv_rms3_over_n = (inv_rms[i] * inv_rms[i] * inv_rms[i]) / (float)embed_dim;
         for (size_t j = 0; j < embed_dim; j++) {
-            gx_row[j] = go_row[j] * w[j] * inv_rms - row[j] * inv_rms3_over_n * dot;
+            gx_row[j] = go_row[j] * w[j] * inv_rms[i] - row[j] * inv_rms3_over_n * dot;
         }
     }
-}
-
-// Pass 2 (columns parallel): grad_weight accumulated in fixed row order so
-// results are reproducible and match the CPU accumulation sequence.
-__global__ void blt_rmsnorm_backward_cols_kernel(const float* grad_out, const float* x,
-                                                 const float* inv_rms_table, float* grad_weight,
-                                                 size_t seq_len, size_t embed_dim) {
-    for (size_t j = (size_t)blockIdx.x * blockDim.x + threadIdx.x; j < embed_dim;
-         j += (size_t)gridDim.x * blockDim.x) {
+    __syncthreads();
+    
+    // Phase 3: Compute grad_weight (parallel over columns)
+    for (size_t j = tid; j < embed_dim; j += num_threads) {
         float acc = grad_weight[j];
         for (size_t i = 0; i < seq_len; i++) {
-            acc += grad_out[i * embed_dim + j] * x[i * embed_dim + j] * inv_rms_table[i];
+            acc += grad_out[i * embed_dim + j] * x[i * embed_dim + j] * inv_rms[i];
         }
         grad_weight[j] = acc;
     }
@@ -386,18 +392,13 @@ extern "C" void blt_rmsnorm_backward_cuda(const blt_tensor* grad_out, const blt_
     const size_t seq_len = x->shape[0];
     const size_t embed_dim = x->shape[1];
 
-    float* inv_rms_table = (float*)blt_arena_alloc(blt_cuda_get_scratch_arena(),
-                                                   seq_len * sizeof(float), 16);
-    blt_rmsnorm_backward_rows_kernel<<<blt_cuda_grid(seq_len), 256>>>(
+    // Use fused kernel with one block; requires shared memory = seq_len * 4 bytes
+    size_t shared_mem = seq_len * sizeof(float);
+    size_t threads = (seq_len > embed_dim ? seq_len : embed_dim);
+    if (threads > 256) threads = 256;
+    blt_rmsnorm_backward_fused_kernel<<<1, threads, shared_mem>>>(
         (const float*)grad_out->data, (const float*)x->data, (const float*)weight->data,
-        (float*)grad_x->data, inv_rms_table, seq_len, embed_dim);
-    cudaError_t err = cudaGetLastError();
-    if (err == cudaSuccess) {
-        blt_rmsnorm_backward_cols_kernel<<<blt_cuda_grid(embed_dim), 256>>>(
-            (const float*)grad_out->data, (const float*)x->data, inv_rms_table,
-            (float*)grad_weight->data, seq_len, embed_dim);
-        err = cudaGetLastError();
-    }
+        (float*)grad_x->data, (float*)grad_weight->data, seq_len, embed_dim);
     blt_cuda_launch_check("blt_rmsnorm_backward");
 }
 
