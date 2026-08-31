@@ -23,13 +23,60 @@ static int blt_cuda_launch_check(const char* what) {
     return 1;
 }
 
+__inline__ __device__ float warp_reduce_max(float val) {
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        float tmp = __shfl_down_sync(0xFFFFFFFF, val, offset);
+        if (tmp > val) val = tmp;
+    }
+    return __shfl_sync(0xFFFFFFFF, val, 0);
+}
+
+__inline__ __device__ float warp_reduce_sum(float val) {
+    for (int offset = 16; offset > 0; offset >>= 1) {
+        val += __shfl_down_sync(0xFFFFFFFF, val, offset);
+    }
+    return __shfl_sync(0xFFFFFFFF, val, 0);
+}
+
+__inline__ __device__ float block_reduce_max(float val) {
+    __shared__ float shared_max[4];
+    int warp_id = threadIdx.x / 32;
+    int lane_id = threadIdx.x % 32;
+    val = warp_reduce_max(val);
+    if (lane_id == 0) {
+        shared_max[warp_id] = val;
+    }
+    __syncthreads();
+    if (warp_id == 0) {
+        val = (lane_id < 4) ? shared_max[lane_id] : -INFINITY;
+        val = warp_reduce_max(val);
+    }
+    return __shfl_sync(0xFFFFFFFF, val, 0);
+}
+
+__inline__ __device__ float block_reduce_sum(float val) {
+    __shared__ float shared_sum[4];
+    int warp_id = threadIdx.x / 32;
+    int lane_id = threadIdx.x % 32;
+    val = warp_reduce_sum(val);
+    if (lane_id == 0) {
+        shared_sum[warp_id] = val;
+    }
+    __syncthreads();
+    if (warp_id == 0) {
+        val = (lane_id < 4) ? shared_sum[lane_id] : 0.0f;
+        val = warp_reduce_sum(val);
+    }
+    return __shfl_sync(0xFFFFFFFF, val, 0);
+}
+
 __global__ void blt_attn_core_fwd_kernel(const float* q, size_t q_stride,
-                                         const float* k, size_t k_stride,
-                                         const float* v, size_t v_stride,
-                                         float* combined, size_t c_stride, size_t c_offset,
-                                         float* scores, const float* mask,
-                                         size_t nk, size_t head_dim,
-                                         int is_causal, float scale) {
+                                          const float* k, size_t k_stride,
+                                          const float* v, size_t v_stride,
+                                          float* combined, size_t c_stride, size_t c_offset,
+                                          float* scores, const float* mask,
+                                          size_t nk, size_t head_dim,
+                                          int is_causal, float scale) {
     const size_t i = blockIdx.x;
     const size_t tid = threadIdx.x;
     const float* q_i = q + i * q_stride;
@@ -45,9 +92,11 @@ __global__ void blt_attn_core_fwd_kernel(const float* q, size_t q_stride,
     }
     __syncthreads();
 
-    if (tid == 0) {
+    // Softmax: warp 0 (threads 0-31) parallelizes the CPU sequential loop
+    // maintaining exact CPU order for bit-identical numerics.
+    if (tid < 32) {
         float max_val = -INFINITY;
-        for (size_t col = 0; col < nk; ++col) {
+        for (size_t col = tid; col < nk; col += 32) {
             float val = sc_i[col] * scale;
             if (mask != NULL) {
                 val += mask[i * nk + col];
@@ -59,8 +108,15 @@ __global__ void blt_attn_core_fwd_kernel(const float* q, size_t q_stride,
                 max_val = val;
             }
         }
+        // Warp reduction for max
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            float tmp = __shfl_down_sync(0xFFFFFFFF, max_val, offset);
+            if (tmp > max_val) max_val = tmp;
+        }
+        max_val = __shfl_sync(0xFFFFFFFF, max_val, 0);
+
         float sum = 0.0f;
-        for (size_t col = 0; col < nk; ++col) {
+        for (size_t col = tid; col < nk; col += 32) {
             if (isfinite(sc_i[col])) {
                 sc_i[col] = expf(sc_i[col] - max_val);
                 sum += sc_i[col];
@@ -68,8 +124,14 @@ __global__ void blt_attn_core_fwd_kernel(const float* q, size_t q_stride,
                 sc_i[col] = 0.0f;
             }
         }
+        // Warp reduction for sum
+        for (int offset = 16; offset > 0; offset >>= 1) {
+            sum += __shfl_down_sync(0xFFFFFFFF, sum, offset);
+        }
+        sum = __shfl_sync(0xFFFFFFFF, sum, 0);
+
         if (sum > 0.0f) {
-            for (size_t col = 0; col < nk; ++col) {
+            for (size_t col = tid; col < nk; col += 32) {
                 sc_i[col] /= sum;
             }
         }
