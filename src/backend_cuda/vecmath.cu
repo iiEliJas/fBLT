@@ -118,6 +118,28 @@ __global__ void blt_strided_copy_kernel(float* dst, size_t dst_stride,
                                          const float* src, size_t src_stride,
                                          size_t rows, size_t cols) {
     const size_t work = rows * cols;
+    
+    // Vectorized path: aligned addresses, contiguous columns (stride == cols), multiple of 4
+    bool can_vectorize = (cols % 4 == 0) && 
+                         (dst_stride == cols) && (src_stride == cols) &&
+                         (reinterpret_cast<uintptr_t>(dst) % 16 == 0) &&
+                         (reinterpret_cast<uintptr_t>(src) % 16 == 0);
+    
+    if (can_vectorize) {
+        const float4* src4 = reinterpret_cast<const float4*>(src);
+        float4* dst4 = reinterpret_cast<float4*>(dst);
+        size_t cols4 = cols / 4;
+        size_t work4 = rows * cols4;
+        
+        for (size_t off = (size_t)blockIdx.x * blockDim.x + threadIdx.x; off < work4;
+             off += (size_t)gridDim.x * blockDim.x) {
+            const size_t r = off / cols4;
+            dst4[r * cols4 + (off % cols4)] = src4[r * cols4 + (off % cols4)];
+        }
+        return;
+    }
+    
+    // Scalar fallback
     for (size_t off = (size_t)blockIdx.x * blockDim.x + threadIdx.x; off < work;
          off += (size_t)gridDim.x * blockDim.x) {
         const size_t r = off / cols;
