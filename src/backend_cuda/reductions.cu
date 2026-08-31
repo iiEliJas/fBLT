@@ -1,5 +1,6 @@
 #include "blt/core/backend.h"
 #include "blt/core/cuda_shim.h"
+#include "blt/core/allocator.h"
 #include "blt/ops/softmax.h"
 #include "blt/ops/cross_entropy.h"
 #include "blt/ops/rope.h"
@@ -163,15 +164,12 @@ extern "C" void blt_cross_entropy_forward_cuda(const blt_tensor* logits, const b
     const size_t vocab_size = logits->shape[1];
     blt_ce_validate_targets_device(targets, seq_len, vocab_size, "blt_cross_entropy_forward");
 
-    float* row_loss = NULL;
-    cudaError_t err = cudaMalloc(&row_loss, seq_len * sizeof(float));
-    if (err != cudaSuccess) {
-        BLT_FATAL("blt_cross_entropy_forward: cudaMalloc failed: %s", cudaGetErrorString(err));
-    }
+    float* row_loss = (float*)blt_arena_alloc(blt_cuda_get_scratch_arena(),
+                                              seq_len * sizeof(float), 16);
     blt_ce_row_loss_kernel<<<blt_cuda_grid(seq_len), 256>>>(
         (const float*)logits->data, (const unsigned char*)targets->data,
         row_loss, seq_len, vocab_size);
-    err = cudaGetLastError();
+    cudaError_t err = cudaGetLastError();
     if (err == cudaSuccess) {
         blt_ce_mean_kernel<<<1, 1>>>(row_loss, (float*)loss_out->data, seq_len);
         err = cudaGetLastError();
@@ -180,10 +178,8 @@ extern "C" void blt_cross_entropy_forward_cuda(const blt_tensor* logits, const b
         err = cudaDeviceSynchronize();
     }
     if (err != cudaSuccess) {
-        cudaFree(row_loss);
         BLT_FATAL("blt_cross_entropy_forward: kernel failed: %s", cudaGetErrorString(err));
     }
-    cudaFree(row_loss);
 }
 
 // dL/dlogits = (softmax(logits) - one_hot(targets)) / seq_len, one thread per row.
@@ -398,15 +394,12 @@ extern "C" void blt_rmsnorm_backward_cuda(const blt_tensor* grad_out, const blt_
     const size_t seq_len = x->shape[0];
     const size_t embed_dim = x->shape[1];
 
-    float* inv_rms_table = NULL;
-    cudaError_t err = cudaMalloc(&inv_rms_table, seq_len * sizeof(float));
-    if (err != cudaSuccess) {
-        BLT_FATAL("blt_rmsnorm_backward: cudaMalloc failed: %s", cudaGetErrorString(err));
-    }
+    float* inv_rms_table = (float*)blt_arena_alloc(blt_cuda_get_scratch_arena(),
+                                                   seq_len * sizeof(float), 16);
     blt_rmsnorm_backward_rows_kernel<<<blt_cuda_grid(seq_len), 256>>>(
         (const float*)grad_out->data, (const float*)x->data, (const float*)weight->data,
         (float*)grad_x->data, inv_rms_table, seq_len, embed_dim);
-    err = cudaGetLastError();
+    cudaError_t err = cudaGetLastError();
     if (err == cudaSuccess) {
         blt_rmsnorm_backward_cols_kernel<<<blt_cuda_grid(embed_dim), 256>>>(
             (const float*)grad_out->data, (const float*)x->data, inv_rms_table,
@@ -417,10 +410,8 @@ extern "C" void blt_rmsnorm_backward_cuda(const blt_tensor* grad_out, const blt_
         err = cudaDeviceSynchronize();
     }
     if (err != cudaSuccess) {
-        cudaFree(inv_rms_table);
         BLT_FATAL("blt_rmsnorm_backward: kernel failed: %s", cudaGetErrorString(err));
     }
-    cudaFree(inv_rms_table);
 }
 
 //----------------------------------------------------------------

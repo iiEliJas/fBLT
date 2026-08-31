@@ -5,20 +5,12 @@
 #include <cuda_runtime.h>
 #include <string.h>
 
-// Patch pooling on device. The patch table is host memory, so it is mirrored
-// to a temporary device buffer. Patches tile the sequence contiguously, so
-// backward writes touch disjoint row ranges and need no atomics; MAX-pool
-// argmax recompute matches the CPU reference loop-for-loop.
-
+// Upload host patch table to device using scratch arena.
 static void* blt_cuda_upload_patches(const blt_patch_info* patches, size_t num_patches) {
-    void* dev_ptr = NULL;
-    cudaError_t err = cudaMalloc(&dev_ptr, num_patches > 0 ? num_patches * sizeof(blt_patch_info) : 1);
-    if (err != cudaSuccess) {
-        BLT_FATAL("patch_pool: temp upload malloc failed: %s", cudaGetErrorString(err));
-    }
-    if (num_patches > 0) {
-        blt_cuda_memcpy_h2d(dev_ptr, patches, num_patches * sizeof(blt_patch_info));
-    }
+    if (num_patches == 0) return NULL;
+    size_t bytes = num_patches * sizeof(blt_patch_info);
+    void* dev_ptr = blt_arena_alloc(blt_cuda_get_scratch_arena(), bytes, 16);
+    blt_cuda_memcpy_h2d(dev_ptr, patches, bytes);
     return dev_ptr;
 }
 
@@ -72,10 +64,8 @@ extern "C" void blt_patch_pool_forward_cuda(const blt_tensor* byte_hidden, const
         err = cudaDeviceSynchronize();
     }
     if (err != cudaSuccess) {
-        cudaFree(d_patches);
         BLT_FATAL("patch_pool forward failed: %s", cudaGetErrorString(err));
     }
-    cudaFree(d_patches);
 }
 
 __global__ void blt_patch_pool_backward_kernel(const float* g, const float* h,
@@ -140,8 +130,6 @@ extern "C" void blt_patch_pool_backward_cuda(const blt_tensor* grad_out, const b
         err = cudaDeviceSynchronize();
     }
     if (err != cudaSuccess) {
-        cudaFree(d_patches);
         BLT_FATAL("patch_pool backward failed: %s", cudaGetErrorString(err));
     }
-    cudaFree(d_patches);
 }

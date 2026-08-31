@@ -2,6 +2,7 @@
 #define BLT_CORE_CUDA_SHIM_H
 
 #include <stddef.h>
+#include "blt/core/allocator.h"
 
 // Internal host-side bridge to CUDA memory management. Declarations are
 // visible in every build mode, but the symbols only exist when the build
@@ -21,6 +22,11 @@ void blt_cuda_free(void* ptr);
 void blt_cuda_memset(void* dst, int value, size_t bytes);
 void blt_cuda_memcpy_h2d(void* dst, const void* src, size_t bytes);
 void blt_cuda_memcpy_d2h(void* dst, const void* src, size_t bytes);
+
+// Scratch arena for temporary CUDA allocations (avoids per-call cudaMalloc/free).
+// Initialized on first use with 256MB capacity. Thread-local.
+blt_arena* blt_cuda_get_scratch_arena(void);
+void blt_cuda_scratch_reset(void);
 
 #ifdef __cplusplus
 }

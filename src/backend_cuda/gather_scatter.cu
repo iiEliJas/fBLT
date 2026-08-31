@@ -1,13 +1,14 @@
 #include "blt/ops/gather_scatter.h"
 #include "blt/core/backend.h"
 #include "blt/core/cuda_shim.h"
+#include "blt/core/allocator.h"
 
 #include <cuda_runtime.h>
 #include <stdlib.h>
 #include <string.h>
 
 // CUDA implementations. The small host-side id/index arrays are mirrored
-// into temporary device buffers for the duration of each call.
+// into temporary device buffers from the scratch arena for the duration of each call.
 
 static int blt_cuda_sync_check(const char* what) {
     cudaError_t err = cudaGetLastError();
@@ -48,17 +49,15 @@ extern "C" void blt_embedding_lookup_cuda(const blt_tensor* table, const uint8_t
         BLT_REQUIRE(ids_host[i] < table->shape[0], "blt_embedding_lookup: id out of range");
     }
 
-    unsigned char* d_ids = NULL;
-    cudaError_t err = cudaMalloc(&d_ids, seq_len > 0 ? seq_len : 1);
-    if (err == cudaSuccess) {
-        blt_cuda_memcpy_h2d(d_ids, ids_host, seq_len);
-        blt_embedding_lookup_kernel<<<blt_cuda_grid(seq_len * embed_dim), 256>>>(
-            (const float*)table->data, table->shape[0], d_ids, (float*)out->data,
-            seq_len, embed_dim);
-        err = cudaGetLastError();
-        if (err == cudaSuccess) err = cudaDeviceSynchronize();
-        cudaFree(d_ids);
-    }
+    unsigned char* d_ids = (unsigned char*)blt_arena_alloc(blt_cuda_get_scratch_arena(),
+                                                           seq_len > 0 ? seq_len : 1, 1);
+    cudaError_t err = cudaSuccess;
+    blt_cuda_memcpy_h2d(d_ids, ids_host, seq_len);
+    blt_embedding_lookup_kernel<<<blt_cuda_grid(seq_len * embed_dim), 256>>>(
+        (const float*)table->data, table->shape[0], d_ids, (float*)out->data,
+        seq_len, embed_dim);
+    err = cudaGetLastError();
+    if (err == cudaSuccess) err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
         BLT_FATAL("blt_embedding_lookup failed: %s", cudaGetErrorString(err));
     }
@@ -85,19 +84,17 @@ extern "C" void blt_embedding_scatter_add_cuda(const blt_tensor* grad_table, con
         BLT_REQUIRE(ids_host[i] < grad_table->shape[0], "blt_embedding_scatter_add: id out of range");
     }
 
-    unsigned char* d_ids = NULL;
-    cudaError_t err = cudaMalloc(&d_ids, seq_len > 0 ? seq_len : 1);
-    if (err == cudaSuccess) {
-        blt_cuda_memcpy_h2d(d_ids, ids_host, seq_len);
-        // Duplicate byte values accumulate via atomics here; the CPU path is
-        // order-deterministic, so results agree within fp32 tolerance.
-        blt_embedding_scatter_add_kernel<<<blt_cuda_grid(seq_len * embed_dim), 256>>>(
-            (float*)grad_table->data, grad_table->shape[0], d_ids,
-            (const float*)grad_out->data, seq_len, embed_dim);
-        err = cudaGetLastError();
-        if (err == cudaSuccess) err = cudaDeviceSynchronize();
-        cudaFree(d_ids);
-    }
+    unsigned char* d_ids = (unsigned char*)blt_arena_alloc(blt_cuda_get_scratch_arena(),
+                                                           seq_len > 0 ? seq_len : 1, 1);
+    cudaError_t err = cudaSuccess;
+    blt_cuda_memcpy_h2d(d_ids, ids_host, seq_len);
+    // Duplicate byte values accumulate via atomics here; the CPU path is
+    // order-deterministic, so results agree within fp32 tolerance.
+    blt_embedding_scatter_add_kernel<<<blt_cuda_grid(seq_len * embed_dim), 256>>>(
+        (float*)grad_table->data, grad_table->shape[0], d_ids,
+        (const float*)grad_out->data, seq_len, embed_dim);
+    err = cudaGetLastError();
+    if (err == cudaSuccess) err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
         BLT_FATAL("blt_embedding_scatter_add failed: %s", cudaGetErrorString(err));
     }
@@ -126,17 +123,15 @@ extern "C" void blt_indexed_row_accumulate_cuda(const blt_tensor* table, const u
                     "blt_indexed_row_accumulate: index out of range");
     }
 
-    unsigned int* d_idx = NULL;
-    cudaError_t err = cudaMalloc(&d_idx, rows > 0 ? rows * sizeof(unsigned int) : 1);
-    if (err == cudaSuccess) {
-        blt_cuda_memcpy_h2d(d_idx, idx_host, rows * sizeof(unsigned int));
-        blt_indexed_row_accumulate_kernel<<<blt_cuda_grid(rows * embed_dim), 256>>>(
-            (const float*)table->data, table->shape[0], d_idx, (float*)io->data,
-            rows, embed_dim);
-        err = cudaGetLastError();
-        if (err == cudaSuccess) err = cudaDeviceSynchronize();
-        cudaFree(d_idx);
-    }
+    unsigned int* d_idx = (unsigned int*)blt_arena_alloc(blt_cuda_get_scratch_arena(),
+                                                         rows > 0 ? rows * sizeof(unsigned int) : 1, 4);
+    cudaError_t err = cudaSuccess;
+    blt_cuda_memcpy_h2d(d_idx, idx_host, rows * sizeof(unsigned int));
+    blt_indexed_row_accumulate_kernel<<<blt_cuda_grid(rows * embed_dim), 256>>>(
+        (const float*)table->data, table->shape[0], d_idx, (float*)io->data,
+        rows, embed_dim);
+    err = cudaGetLastError();
+    if (err == cudaSuccess) err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
         BLT_FATAL("blt_indexed_row_accumulate failed: %s", cudaGetErrorString(err));
     }
@@ -165,17 +160,15 @@ extern "C" void blt_indexed_row_scatter_add_cuda(const blt_tensor* grad_table, c
                     "blt_indexed_row_scatter_add: index out of range");
     }
 
-    unsigned int* d_idx = NULL;
-    cudaError_t err = cudaMalloc(&d_idx, rows > 0 ? rows * sizeof(unsigned int) : 1);
-    if (err == cudaSuccess) {
-        blt_cuda_memcpy_h2d(d_idx, idx_host, rows * sizeof(unsigned int));
-        blt_indexed_row_scatter_add_kernel<<<blt_cuda_grid(rows * embed_dim), 256>>>(
-            (float*)grad_table->data, grad_table->shape[0], d_idx,
-            (const float*)grad_out->data, rows, embed_dim, scale);
-        err = cudaGetLastError();
-        if (err == cudaSuccess) err = cudaDeviceSynchronize();
-        cudaFree(d_idx);
-    }
+    unsigned int* d_idx = (unsigned int*)blt_arena_alloc(blt_cuda_get_scratch_arena(),
+                                                         rows > 0 ? rows * sizeof(unsigned int) : 1, 4);
+    cudaError_t err = cudaSuccess;
+    blt_cuda_memcpy_h2d(d_idx, idx_host, rows * sizeof(unsigned int));
+    blt_indexed_row_scatter_add_kernel<<<blt_cuda_grid(rows * embed_dim), 256>>>(
+        (float*)grad_table->data, grad_table->shape[0], d_idx,
+        (const float*)grad_out->data, rows, embed_dim, scale);
+    err = cudaGetLastError();
+    if (err == cudaSuccess) err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
         BLT_FATAL("blt_indexed_row_scatter_add failed: %s", cudaGetErrorString(err));
     }
@@ -200,16 +193,14 @@ extern "C" void blt_rows_gather_cuda(const blt_tensor* src, const size_t* pos_ho
                     "blt_rows_gather: position out of range");
     }
 
-    size_t* d_pos = NULL;
-    cudaError_t err = cudaMalloc(&d_pos, rows > 0 ? rows * sizeof(size_t) : 1);
-    if (err == cudaSuccess) {
-        blt_cuda_memcpy_h2d(d_pos, pos_host, rows * sizeof(size_t));
-        blt_rows_gather_kernel<<<blt_cuda_grid(rows * row_len), 256>>>(
-            (const float*)src->data, d_pos, (float*)dst->data, rows, row_len);
-        err = cudaGetLastError();
-        if (err == cudaSuccess) err = cudaDeviceSynchronize();
-        cudaFree(d_pos);
-    }
+    size_t* d_pos = (size_t*)blt_arena_alloc(blt_cuda_get_scratch_arena(),
+                                             rows > 0 ? rows * sizeof(size_t) : 1, 8);
+    cudaError_t err = cudaSuccess;
+    blt_cuda_memcpy_h2d(d_pos, pos_host, rows * sizeof(size_t));
+    blt_rows_gather_kernel<<<blt_cuda_grid(rows * row_len), 256>>>(
+        (const float*)src->data, d_pos, (float*)dst->data, rows, row_len);
+    err = cudaGetLastError();
+    if (err == cudaSuccess) err = cudaDeviceSynchronize();
     if (err != cudaSuccess) {
         BLT_FATAL("blt_rows_gather failed: %s", cudaGetErrorString(err));
     }

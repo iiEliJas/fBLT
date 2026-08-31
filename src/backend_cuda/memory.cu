@@ -1,11 +1,29 @@
 #include "blt/core/cuda_shim.h"
 #include "blt/core/backend.h"
+#include "blt/core/allocator.h"
 
 #include <cuda_runtime.h>
 
 static void blt_cuda_check(cudaError_t err, const char* what) {
     if (err != cudaSuccess) {
         BLT_FATAL("CUDA %s failed: %s", what, cudaGetErrorString(err));
+    }
+}
+
+// Thread-local scratch arena for temporary CUDA allocations.
+// Avoids per-call cudaMalloc/free churn. Initialized on first use with 256MB capacity.
+static __thread blt_arena* blt_cuda_scratch_arena = NULL;
+
+extern "C" blt_arena* blt_cuda_get_scratch_arena(void) {
+    if (blt_cuda_scratch_arena == NULL) {
+        blt_cuda_scratch_arena = blt_arena_create(256 * 1024 * 1024, BLT_BACKEND_CUDA);
+    }
+    return blt_cuda_scratch_arena;
+}
+
+extern "C" void blt_cuda_scratch_reset(void) {
+    if (blt_cuda_scratch_arena != NULL) {
+        blt_arena_reset(blt_cuda_scratch_arena);
     }
 }
 

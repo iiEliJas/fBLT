@@ -1,6 +1,7 @@
 #include "blt/ops/row_stats.h"
 #include "blt/core/backend.h"
 #include "blt/core/cuda_shim.h"
+#include "blt/core/allocator.h"
 
 #include <cuda_runtime.h>
 #include <math.h>
@@ -91,16 +92,14 @@ extern "C" void blt_argmax_rows_cuda(const blt_tensor* logits, uint32_t* out_ids
     const size_t rows = logits->shape[0];
     const size_t vocab = logits->shape[1];
 
-    unsigned int* d_out = NULL;
-    cudaError_t err = cudaMalloc(&d_out, rows * sizeof(unsigned int));
+    unsigned int* d_out = (unsigned int*)blt_arena_alloc(blt_cuda_get_scratch_arena(),
+                                                         rows * sizeof(unsigned int), 16);
+    cudaError_t err = cudaSuccess;
+    blt_argmax_rows_kernel<<<(unsigned)rows, 256>>>((const float*)logits->data, d_out, vocab);
+    err = cudaGetLastError();
+    if (err == cudaSuccess) err = cudaDeviceSynchronize();
     if (err == cudaSuccess) {
-        blt_argmax_rows_kernel<<<(unsigned)rows, 256>>>((const float*)logits->data, d_out, vocab);
-        err = cudaGetLastError();
-        if (err == cudaSuccess) err = cudaDeviceSynchronize();
-        if (err == cudaSuccess) {
-            blt_cuda_memcpy_d2h(out_ids_host, d_out, rows * sizeof(unsigned int));
-        }
-        cudaFree(d_out);
+        blt_cuda_memcpy_d2h(out_ids_host, d_out, rows * sizeof(unsigned int));
     }
     if (err != cudaSuccess) {
         BLT_FATAL("blt_argmax_rows failed: %s", cudaGetErrorString(err));

@@ -23,15 +23,10 @@ static int blt_cuda_sync_check(const char* what) {
     return 1;
 }
 
-static void* blt_cuda_upload_temp(const void* host_data, size_t bytes) {
-    void* dev_ptr = NULL;
-    cudaError_t err = cudaMalloc(&dev_ptr, bytes > 0 ? bytes : 1);
-    if (err != cudaSuccess) {
-        BLT_FATAL("mask_builder: temp upload malloc failed: %s", cudaGetErrorString(err));
-    }
-    if (bytes > 0) {
-        blt_cuda_memcpy_h2d(dev_ptr, host_data, bytes);
-    }
+static void* blt_cuda_upload_temp(const void* host_data, size_t bytes, blt_arena* arena) {
+    if (bytes == 0) return NULL;
+    void* dev_ptr = blt_arena_alloc(arena, bytes, 16);
+    blt_cuda_memcpy_h2d(dev_ptr, host_data, bytes);
     return dev_ptr;
 }
 
@@ -125,17 +120,14 @@ extern "C" void blt_build_attention_mask_cuda(const blt_mask_config* config, blt
     size_t* d_kvg = NULL;
     unsigned char* d_row_ok = NULL;
     if (has_docs) {
-        d_docs = (size_t*)blt_cuda_upload_temp(config->doc_boundaries, config->num_docs * sizeof(size_t));
+        d_docs = (size_t*)blt_cuda_upload_temp(config->doc_boundaries, config->num_docs * sizeof(size_t), arena);
     }
     if (has_groups) {
-        d_qg = (size_t*)blt_cuda_upload_temp(config->query_group_ids, seq_q * sizeof(size_t));
-        d_kvg = (size_t*)blt_cuda_upload_temp(config->kv_group_ids, seq_kv * sizeof(size_t));
+        d_qg = (size_t*)blt_cuda_upload_temp(config->query_group_ids, seq_q * sizeof(size_t), arena);
+        d_kvg = (size_t*)blt_cuda_upload_temp(config->kv_group_ids, seq_kv * sizeof(size_t), arena);
     }
 
-    cudaError_t err = cudaMalloc(&d_row_ok, seq_q);
-    if (err != cudaSuccess) {
-        BLT_FATAL("blt_build_attention_mask: row flag malloc failed: %s", cudaGetErrorString(err));
-    }
+    d_row_ok = (unsigned char*)blt_arena_alloc(arena, seq_q, 1);
 
     const size_t count = seq_q * seq_kv;
     const unsigned block = 256;
@@ -150,7 +142,7 @@ extern "C" void blt_build_attention_mask_cuda(const blt_mask_config* config, blt
         d_docs, has_docs ? config->num_docs : 0,
         d_qg, d_kvg,
         config->bidirectional_within_group ? 1 : 0);
-    err = cudaGetLastError();
+    cudaError_t err = cudaGetLastError();
     if (err == cudaSuccess) {
         blt_mask_row_check_kernel<<<(unsigned)(seq_q > 4096 ? 4096 : (seq_q > 0 ? seq_q : 1)), block>>>(
             (const float*)out_mask->data, seq_q, seq_kv, d_row_ok);
@@ -171,19 +163,10 @@ extern "C" void blt_build_attention_mask_cuda(const blt_mask_config* config, blt
         // (causal keeps j=0; window keeps |i-j|<w with j=i; docs/groups include self).
         if (!row_ok[i]) {
             free(row_ok);
-            cudaFree(d_row_ok);
-            if (d_docs) cudaFree(d_docs);
-            if (d_qg) cudaFree(d_qg);
-            if (d_kvg) cudaFree(d_kvg);
             BLT_FATAL("blt_build_attention_mask: query position has no valid key");
         }
     }
     free(row_ok);
-
-    cudaFree(d_row_ok);
-    if (d_docs) cudaFree(d_docs);
-    if (d_qg) cudaFree(d_qg);
-    if (d_kvg) cudaFree(d_kvg);
 }
 
 __global__ void blt_block_diffusion_mask_kernel(float* m, size_t S, size_t N, int infer_mode) {
