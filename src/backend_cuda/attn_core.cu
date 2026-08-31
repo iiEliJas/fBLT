@@ -273,12 +273,11 @@ __global__ void blt_attn_core_bwd_kv_cells_kernel(
     }
 }
 
-// Fast path: one BLOCK per kv row j, threads mapped to head-dim lanes so
-// q/go reads are coalesced and the w_ij / gs_ij scalars broadcast to the
-// whole block. Threads hold register accumulators for their lanes (requires
-// head_dim <= blockDim, i.e. at most one lane per thread); query rows are
-// walked in ascending order, preserving the CPU reference's per-cell term
-// order.
+// Fast path: one BLOCK per kv row j, all threads participate in query loop.
+// Threads 0..head_dim-1 are primary lanes; threads head_dim..ATTN_BLOCK-1
+// help process additional query chunks for the same dimensions.
+// Accumulation order per dimension is preserved by assigning contiguous
+// query ranges to threads in tid order, then reducing in tid order.
 __global__ void blt_attn_core_bwd_kv_kernel(
     const float* q, size_t q_stride,
     const float* weights, const float* grad_combined, size_t gc_stride, size_t gc_offset,
@@ -288,14 +287,23 @@ __global__ void blt_attn_core_bwd_kv_kernel(
     size_t nq, size_t nk, size_t head_dim) {
     const size_t j = blockIdx.x;
     const size_t tid = threadIdx.x;
+    const size_t num_lanes = min(head_dim, (size_t)ATTN_BLOCK);
+    const size_t lane_id = tid % num_lanes;
+    const size_t chunk_id = tid / num_lanes;
+    const size_t num_chunks = (ATTN_BLOCK + num_lanes - 1) / num_lanes;
 
     float acc_k = 0.0f;
     float acc_v = 0.0f;
-    const bool k_lane = (grad_k != NULL && tid < head_dim);
-    const bool v_lane = (grad_v != NULL && tid < head_dim);
-    const size_t d = tid;
+    const bool k_lane = (grad_k != NULL && lane_id < head_dim);
+    const bool v_lane = (grad_v != NULL && lane_id < head_dim);
+    const size_t d = lane_id;
 
-    for (size_t i = 0; i < nq; ++i) {
+    // Split queries among chunks; each thread processes its chunk sequentially
+    size_t queries_per_chunk = (nq + num_chunks - 1) / num_chunks;
+    size_t i_start = chunk_id * queries_per_chunk;
+    size_t i_end = min(i_start + queries_per_chunk, nq);
+
+    for (size_t i = i_start; i < i_end; ++i) {
         if (v_lane) {
             const float w = weights[i * nk + j];
             if (w != 0.0f) {
@@ -310,8 +318,27 @@ __global__ void blt_attn_core_bwd_kv_kernel(
         }
     }
 
-    if (k_lane) grad_k[j * gk_stride + d] += acc_k;
-    if (v_lane) grad_v[j * gv_stride + d] += acc_v;
+    // Deterministic reduction across chunks in tid order (chunk 0, then 1, ...)
+    // using shared memory and sequential reduction by thread 0 of each lane group
+    __shared__ float shared_acc_k[ATTN_BLOCK];
+    __shared__ float shared_acc_v[ATTN_BLOCK];
+    
+    if (k_lane) shared_acc_k[tid] = acc_k;
+    if (v_lane) shared_acc_v[tid] = acc_v;
+    __syncthreads();
+
+    // First thread of each lane group (chunk_id=0) reduces across chunks
+    if (chunk_id == 0 && (k_lane || v_lane)) {
+        for (size_t c = 1; c < num_chunks; ++c) {
+            size_t other_tid = c * num_lanes + lane_id;
+            if (other_tid < ATTN_BLOCK) {
+                if (k_lane) shared_acc_k[tid] += shared_acc_k[other_tid];
+                if (v_lane) shared_acc_v[tid] += shared_acc_v[other_tid];
+            }
+        }
+        if (k_lane) grad_k[j * gk_stride + d] += shared_acc_k[tid];
+        if (v_lane) grad_v[j * gv_stride + d] += shared_acc_v[tid];
+    }
 }
 
 extern "C" void blt_attention_head_core_backward_cuda(blt_backend backend,
