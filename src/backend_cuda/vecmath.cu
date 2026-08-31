@@ -115,8 +115,8 @@ extern "C" void blt_softmax_masked_row_inplace_cuda(
 }
 
 __global__ void blt_strided_copy_kernel(float* dst, size_t dst_stride,
-                                        const float* src, size_t src_stride,
-                                        size_t rows, size_t cols) {
+                                         const float* src, size_t src_stride,
+                                         size_t rows, size_t cols) {
     const size_t work = rows * cols;
     for (size_t off = (size_t)blockIdx.x * blockDim.x + threadIdx.x; off < work;
          off += (size_t)gridDim.x * blockDim.x) {
