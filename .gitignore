@@ -8,6 +8,7 @@ obj-cuda/
 *.o
 *.obj
 bench/results.jsonl
+bench/results_old_wrong_scale.jsonl
 bench/dummy_results.jsonl
 __pycache__/
 .venv

@@ -65,14 +65,20 @@ static uint64_t rng_next_u64(void) {
     return x * 0x2545F4914F6CDD1DULL;
 }
 
-static float rng_uniform(float scale) {
-    // 24 random bits -> uniform in [-scale, scale]
-    return (((float)(rng_next_u64() >> 40) / 16777216.0f) * 2.0f - 1.0f) * scale;
-}
 
 static void fill_uniform(blt_tensor* t, float scale) {
     static uint64_t fill_rng = 0x123456789ABCDEF0ULL;
-    blt_fill_uniform(t->backend, (float*)t->data, t->numel, &fill_rng);
+    size_t n = t->numel;
+    float* host_buf = (float*)malloc(n * sizeof(float));
+    BLT_REQUIRE(host_buf != NULL, "fill_uniform: staging alloc failed");
+    for (size_t i = 0; i < n; i++) {
+        uint64_t x = fill_rng;
+        x ^= x >> 12; x ^= x << 25; x ^= x >> 27;
+        fill_rng = x;
+        host_buf[i] = (((float)(x >> 40) / 16777216.0f) * 2.0f - 1.0f) * scale;
+    }
+    blt_tensor_upload(t, host_buf, n * sizeof(float));
+    free(host_buf);
 }
 
 static void fill_constant(blt_tensor* t, float v) {
@@ -908,7 +914,7 @@ static void on_signal(int sig) {
 static void usage(const char* argv0) {
     fprintf(stderr,
             "usage: %s --config <json> [--resume <ckpt>] "
-            "[--results bench/results.jsonl] [--steps N] [--backend cpu|cuda]\n",
+            "[--results bench/results.jsonl] [--steps N] [--seed N] [--backend cpu|cuda]\n",
             argv0);
 }
 
@@ -917,6 +923,7 @@ int main(int argc, char** argv) {
     const char* resume_path = NULL;
     const char* results_path = "bench/results.jsonl";
     long steps_override = -1;
+    long long seed_override = -1;
     blt_backend backend = BLT_BACKEND_CPU;
 
     for (int i = 1; i < argc; i++) {
@@ -928,6 +935,8 @@ int main(int argc, char** argv) {
             results_path = argv[++i];
         } else if (strcmp(argv[i], "--steps") == 0 && i + 1 < argc) {
             steps_override = atol(argv[++i]);
+        } else if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
+            seed_override = atoll(argv[++i]);
         } else if (strcmp(argv[i], "--backend") == 0 && i + 1 < argc) {
             const char* b = argv[++i];
             if (strcmp(b, "cpu") == 0) backend = BLT_BACKEND_CPU;
@@ -948,6 +957,7 @@ int main(int argc, char** argv) {
 
     sweep_config cfg;
     load_config(config_path, &cfg);
+    if (seed_override >= 0) cfg.seed = (uint64_t)seed_override;
     long total_steps = (steps_override > 0) ? steps_override : cfg.steps;
 
     printf("[sweep] tag=%s phase=%s steps=%ld seq_len=%zu lr=%g seed=%llu\n",
