@@ -42,6 +42,8 @@ void blt_softmax_masked_row_inplace_cpu(blt_backend backend, float* row, size_t 
                                         const float* mask_row, float scale);
 void blt_strided_copy_cpu(blt_backend backend, float* dst, size_t dst_stride,
                           const float* src, size_t src_stride, size_t rows, size_t cols);
+void blt_fill_uniform_cpu(blt_backend backend, float* data, size_t n, uint64_t* rng_state);
+void blt_fill_constant_cpu(blt_backend backend, float* data, size_t n, float v);
 
 // container allocation helper
 void* blt_container_alloc_cpu(blt_arena* arena, size_t bytes);
@@ -154,6 +156,8 @@ void blt_softmax_masked_row_inplace_cuda(blt_backend backend, float* row, size_t
                                          const float* mask_row, float scale);
 void blt_strided_copy_cuda(blt_backend backend, float* dst, size_t dst_stride,
                            const float* src, size_t src_stride, size_t rows, size_t cols);
+void blt_fill_uniform_cuda(blt_backend backend, float* data, size_t n, uint64_t* rng_state);
+void blt_fill_constant_cuda(blt_backend backend, float* data, size_t n, float v);
 
 // elementwise ops
 void blt_add_cuda(const blt_tensor* a, const blt_tensor* b, blt_tensor* out);
@@ -449,6 +453,18 @@ void blt_strided_copy(blt_backend backend, float* dst, size_t dst_stride,
     BLT_DISPATCH_BACKEND(backend,
         blt_strided_copy_cpu(backend, dst, dst_stride, src, src_stride, rows, cols),
         blt_strided_copy_cuda(backend, dst, dst_stride, src, src_stride, rows, cols));
+}
+
+void blt_fill_uniform(blt_backend backend, float* data, size_t n, uint64_t* rng_state) {
+    BLT_DISPATCH_BACKEND(backend,
+        blt_fill_uniform_cpu(backend, data, n, rng_state),
+        blt_fill_uniform_cuda(backend, data, n, rng_state));
+}
+
+void blt_fill_constant(blt_backend backend, float* data, size_t n, float v) {
+    BLT_DISPATCH_BACKEND(backend,
+        blt_fill_constant_cpu(backend, data, n, v),
+        blt_fill_constant_cuda(backend, data, n, v));
 }
 
 // ------------------

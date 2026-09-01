@@ -113,8 +113,8 @@ void blt_model_encode(
     // -----------------------------------------------------------------
     out->patch_doc_boundaries = NULL;
     if (num_docs > 0) {
-        out->patch_doc_boundaries = (size_t*)blt_arena_alloc(
-            arena, num_docs * sizeof(size_t), sizeof(size_t));
+        out->patch_doc_boundaries = (size_t*)blt_container_alloc(
+            arena, num_docs * sizeof(size_t));
         map_byte_boundaries_to_patch_boundaries(
             doc_boundaries, num_docs, patches, num_patches, out->patch_doc_boundaries);
     }
@@ -231,8 +231,8 @@ void blt_model_backward(
 
     size_t* patch_doc_boundaries = NULL;
     if (num_docs > 0) {
-        patch_doc_boundaries = (size_t*)blt_arena_alloc(
-            arena, num_docs * sizeof(size_t), sizeof(size_t));
+        patch_doc_boundaries = (size_t*)blt_container_alloc(
+            arena, num_docs * sizeof(size_t));
         map_byte_boundaries_to_patch_boundaries(
             doc_boundaries, num_docs, patches, num_patches, patch_doc_boundaries);
     }

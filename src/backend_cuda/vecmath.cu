@@ -165,3 +165,43 @@ extern "C" void blt_strided_copy_cuda(blt_backend backend, float* dst, size_t ds
     blt_strided_copy_kernel<<<blocks, 256>>>(dst, dst_stride, src, src_stride, rows, cols);
     blt_cuda_launch_check("blt_strided_copy");
 }
+
+__global__ void blt_fill_uniform_kernel(float* data, size_t n, uint64_t rng_state) {
+    // Simple xorshift64* per-thread
+    uint64_t x = rng_state + threadIdx.x + blockIdx.x * blockDim.x;
+    for (size_t i = threadIdx.x + blockIdx.x * blockDim.x; i < n; i += blockDim.x * gridDim.x) {
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        float val = (((float)(x >> 40) / 16777216.0f) * 2.0f - 1.0f);
+        data[i] = val;
+    }
+}
+
+__global__ void blt_fill_constant_kernel(float* data, size_t n, float v) {
+    for (size_t i = threadIdx.x + blockIdx.x * blockDim.x; i < n; i += blockDim.x * gridDim.x) {
+        data[i] = v;
+    }
+}
+
+extern "C" void blt_fill_uniform_cuda(blt_backend backend, float* data, size_t n, uint64_t* rng_state) {
+    (void)backend;
+    BLT_REQUIRE(backend == BLT_BACKEND_CUDA, "blt_fill_uniform: CUDA implementation called with non-CUDA backend");
+    uint64_t seed = *rng_state;
+    unsigned blocks = (unsigned)((n + 255) / 256);
+    if (blocks > 4096) blocks = 4096;
+    if (blocks == 0) blocks = 1;
+    blt_fill_uniform_kernel<<<blocks, 256>>>(data, n, seed);
+    blt_cuda_launch_check("blt_fill_uniform");
+    *rng_state = seed + n;  // advance state
+}
+
+extern "C" void blt_fill_constant_cuda(blt_backend backend, float* data, size_t n, float v) {
+    (void)backend;
+    BLT_REQUIRE(backend == BLT_BACKEND_CUDA, "blt_fill_constant: CUDA implementation called with non-CUDA backend");
+    unsigned blocks = (unsigned)((n + 255) / 256);
+    if (blocks > 4096) blocks = 4096;
+    if (blocks == 0) blocks = 1;
+    blt_fill_constant_kernel<<<blocks, 256>>>(data, n, v);
+    blt_cuda_launch_check("blt_fill_constant");
+}

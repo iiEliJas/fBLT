@@ -170,3 +170,33 @@ void* blt_container_alloc_cuda(blt_arena* arena, size_t bytes) {
     memset(p, 0, bytes);
     return p;
 }
+
+void blt_tensor_copy_from_host(blt_tensor* t, const void* host_src, size_t bytes) {
+    BLT_REQUIRE(t != NULL && host_src != NULL, "blt_tensor_copy_from_host: arguments cannot be NULL");
+    BLT_REQUIRE(bytes <= blt_tensor_bytes(t), "blt_tensor_copy_from_host: copy size exceeds tensor size");
+    
+    if (t->backend == BLT_BACKEND_CUDA) {
+#ifdef BLT_WITH_CUDA
+        blt_cuda_memcpy_h2d(t->data, host_src, bytes);
+#else
+        BLT_FATAL("blt_tensor_copy_from_host: CUDA backend not available in this build");
+#endif
+    } else {
+        memcpy(t->data, host_src, bytes);
+    }
+}
+
+void blt_tensor_copy_to_host(const blt_tensor* t, void* host_dst, size_t bytes) {
+    BLT_REQUIRE(t != NULL && host_dst != NULL, "blt_tensor_copy_to_host: arguments cannot be NULL");
+    BLT_REQUIRE(bytes <= blt_tensor_bytes(t), "blt_tensor_copy_to_host: copy size exceeds tensor size");
+    
+    if (t->backend == BLT_BACKEND_CUDA) {
+#ifdef BLT_WITH_CUDA
+        blt_cuda_memcpy_d2h(host_dst, t->data, bytes);
+#else
+        BLT_FATAL("blt_tensor_copy_to_host: CUDA backend not available in this build");
+#endif
+    } else {
+        memcpy(host_dst, t->data, bytes);
+    }
+}

@@ -34,6 +34,7 @@
 #include "blt/models/entropy.h"
 #include "blt/ops/softmax.h"
 #include "blt/ops/optim.h"
+#include "blt/ops/vecmath.h"
 
 #include "harness.h"
 #include "flops.h"
@@ -70,13 +71,12 @@ static float rng_uniform(float scale) {
 }
 
 static void fill_uniform(blt_tensor* t, float scale) {
-    float* d = (float*)t->data;
-    for (size_t i = 0; i < t->numel; i++) d[i] = rng_uniform(scale);
+    static uint64_t fill_rng = 0x123456789ABCDEF0ULL;
+    blt_fill_uniform(t->backend, (float*)t->data, t->numel, &fill_rng);
 }
 
 static void fill_constant(blt_tensor* t, float v) {
-    float* d = (float*)t->data;
-    for (size_t i = 0; i < t->numel; i++) d[i] = v;
+    blt_fill_constant(t->backend, (float*)t->data, t->numel, v);
 }
 
 // ---------------------------------------------------------------------------
@@ -412,126 +412,6 @@ static void init_entropy_lm(blt_entropy_lm* lm) {
     fill_uniform(&lm->lm_head_weight, INIT_SCALE);
 }
 // ---------------------------------------------------------------------------
-// Checkpointing
-//
-// Binary format: u64 magic | u32 version | u32 num_tensors | u64 step |
-//                u64 rng_state | per tensor: u64 numel + numel float32
-// Tensor order is a fixed walk over encoder -> global -> decoder ->
-// entropy LM; a checkpoint is only valid for an unchanged config.
-// ---------------------------------------------------------------------------
-
-typedef struct {
-    blt_tensor** tensors;
-    size_t num;
-} tensor_walk;
-
-static void walk_add(tensor_walk* w, blt_tensor* t) {
-    w->tensors[w->num++] = t;
-}
-
-static void collect_tensors(blt_model* m, blt_entropy_lm* ent, tensor_walk* w) {
-    walk_add(w, &m->encoder->byte_embedding_weight);
-    for (size_t i = 0; i < m->encoder->ngram_weights.num_tables; i++) {
-        walk_add(w, &m->encoder->ngram_weights.tables[i]);
-    }
-    for (size_t l = 0; l < m->encoder->config.num_layers; l++) {
-        blt_local_layer_storage* s = &m->encoder->layers[l];
-        walk_add(w, &s->norm1_weight); walk_add(w, &s->attn_qkv_w);
-        walk_add(w, &s->attn_proj_w); walk_add(w, &s->norm2_weight);
-        walk_add(w, &s->ffn_up_w); walk_add(w, &s->ffn_gate_w);
-        walk_add(w, &s->ffn_down_w); walk_add(w, &s->cross_norm_weight);
-        walk_add(w, &s->cross_weight_q); walk_add(w, &s->cross_weight_k);
-        walk_add(w, &s->cross_weight_v); walk_add(w, &s->cross_weight_proj);
-    }
-    for (size_t l = 0; l < m->global->stack.num_layers; l++) {
-        blt_transformer_layer_storage* s = &m->global->stack.layer_storage[l];
-        walk_add(w, &s->norm1_weight); walk_add(w, &s->attn_qkv_w);
-        walk_add(w, &s->attn_proj_w); walk_add(w, &s->norm2_weight);
-        walk_add(w, &s->ffn_up_w); walk_add(w, &s->ffn_gate_w);
-        walk_add(w, &s->ffn_down_w);
-    }
-    for (size_t l = 0; l < m->decoder->config.num_layers; l++) {
-        blt_local_layer_storage* s = &m->decoder->layers[l];
-        walk_add(w, &s->cross_norm_weight); walk_add(w, &s->cross_weight_q);
-        walk_add(w, &s->cross_weight_k); walk_add(w, &s->cross_weight_v);
-        walk_add(w, &s->cross_weight_proj); walk_add(w, &s->norm1_weight);
-        walk_add(w, &s->attn_qkv_w); walk_add(w, &s->attn_proj_w);
-        walk_add(w, &s->norm2_weight); walk_add(w, &s->ffn_up_w);
-        walk_add(w, &s->ffn_gate_w); walk_add(w, &s->ffn_down_w);
-    }
-    walk_add(w, &m->decoder->lm_head_weight);
-
-    if (ent) {
-        walk_add(w, &ent->embedding_weight);
-        for (size_t l = 0; l < ent->stack.num_layers; l++) {
-            blt_transformer_layer_storage* s = &ent->stack.layer_storage[l];
-            walk_add(w, &s->norm1_weight); walk_add(w, &s->attn_qkv_w);
-            walk_add(w, &s->attn_proj_w); walk_add(w, &s->norm2_weight);
-            walk_add(w, &s->ffn_up_w); walk_add(w, &s->ffn_gate_w);
-            walk_add(w, &s->ffn_down_w);
-        }
-        walk_add(w, &ent->lm_head_weight);
-    }
-}
-
-static void ckpt_save(const char* path, const tensor_walk* w,
-                      long step, uint64_t rng_state) {
-    char tmp[512];
-    snprintf(tmp, sizeof(tmp), "%.500s.tmp", path);
-    FILE* f = fopen(tmp, "wb");
-    if (!f) BLT_FATAL("ckpt_save: cannot open %s", tmp);
-    uint64_t magic_hdr = CKPT_MAGIC;
-    uint32_t version = CKPT_VERSION;
-    uint32_t nt = (uint32_t)w->num;
-    fwrite(&magic_hdr, sizeof(uint64_t), 1, f);
-    fwrite(&version, sizeof(uint32_t), 1, f);
-    fwrite(&nt, sizeof(uint32_t), 1, f);
-    uint64_t st = (uint64_t)step;
-    fwrite(&st, sizeof(uint64_t), 1, f);
-    fwrite(&rng_state, sizeof(uint64_t), 1, f);
-    for (size_t i = 0; i < w->num; i++) {
-        uint64_t n = w->tensors[i]->numel;
-        fwrite(&n, sizeof(uint64_t), 1, f);
-        fwrite(w->tensors[i]->data, sizeof(float), n, f);
-    }
-    if (ferror(f)) {
-        fclose(f);
-        BLT_FATAL("ckpt_save: write error on %s", tmp);
-    }
-    fclose(f);
-    if (rename(tmp, path) != 0) {
-        BLT_FATAL("ckpt_save: rename %s -> %s failed", tmp, path);
-    }
-}
-
-static long ckpt_load(const char* path, const tensor_walk* w,
-                      uint64_t* rng_state) {
-    FILE* f = fopen(path, "rb");
-    if (!f) BLT_FATAL("ckpt_load: cannot open %s", path);
-    uint64_t magic = 0, step = 0;
-    uint32_t version = 0, nt = 0;
-    if (fread(&magic, sizeof(uint64_t), 1, f) != 1 || magic != CKPT_MAGIC ||
-        fread(&version, sizeof(uint32_t), 1, f) != 1 || version != CKPT_VERSION ||
-        fread(&nt, sizeof(uint32_t), 1, f) != 1 ||
-        fread(&step, sizeof(uint64_t), 1, f) != 1 ||
-        fread(rng_state, sizeof(uint64_t), 1, f) != 1) {
-        BLT_FATAL("ckpt_load: bad header in %s", path);
-    }
-    if ((size_t)nt != w->num) {
-        BLT_FATAL("ckpt_load: tensor count mismatch (%u vs %zu), config changed?",
-                  nt, w->num);
-    }
-    for (size_t i = 0; i < w->num; i++) {
-        uint64_t n = 0;
-        if (fread(&n, sizeof(uint64_t), 1, f) != 1 ||
-            n != w->tensors[i]->numel ||
-            fread(w->tensors[i]->data, sizeof(float), n, f) != n) {
-            BLT_FATAL("ckpt_load: tensor %zu mismatch/corrupt in %s", i, path);
-        }
-    }
-    fclose(f);
-    return (long)step;
-}
 // ---------------------------------------------------------------------------
 // Data + windows
 //
@@ -552,11 +432,12 @@ static void load_file(const char* path, byte_buf* b) {
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
     if (sz <= 0) BLT_FATAL("load_file: empty file %s", path);
-    b->data = (uint8_t*)malloc((size_t)sz);
+    b->data = (uint8_t*)malloc((size_t)sz + 1);
     if (!b->data) BLT_FATAL("load_file: OOM for %s", path);
     if (fread(b->data, 1, (size_t)sz, f) != (size_t)sz) {
         BLT_FATAL("load_file: short read on %s", path);
     }
+    b->data[sz] = '\0';
     fclose(f);
     b->len = (size_t)sz;
 }
@@ -697,8 +578,24 @@ static size_t make_patches(const train_ctx* tc, const uint8_t* window_bytes,
     blt_entropy_config ecfg = {.vocab_size = 256, .use_log2 = false};
     blt_compute_entropy(&probs, &ent_vals, &ecfg);
 
-    return blt_segment_patches(&ent_vals, window_bytes, patches, seq_len,
+    // blt_segment_patches expects CPU pointers; copy entropy to host if on CUDA
+    float* ent_host = (float*)malloc(seq_len * sizeof(float));
+    blt_tensor_copy_to_host(&ent_vals, ent_host, seq_len * sizeof(float));
+
+    blt_tensor ent_vals_host;
+    memset(&ent_vals_host, 0, sizeof(ent_vals_host));
+    ent_vals_host.data = ent_host;
+    ent_vals_host.shape[0] = seq_len;
+    ent_vals_host.ndim = 1;
+    ent_vals_host.numel = seq_len;
+    ent_vals_host.dtype = BLT_DTYPE_FP32;
+    ent_vals_host.backend = BLT_BACKEND_CPU;
+    ent_vals_host.strides[0] = 1;
+
+    size_t n = blt_segment_patches(&ent_vals_host, window_bytes, patches, seq_len,
                                &tc->cfg->patcher);
+    free(ent_host);
+    return n;
 }
 
 static void forward_model(const train_ctx* tc, blt_tensor* bytes_in,
@@ -714,9 +611,11 @@ static void forward_model(const train_ctx* tc, blt_tensor* bytes_in,
 // ---------------------------------------------------------------------------
 
 static float tensor_sq_norm(const blt_tensor* t) {
-    const float* d = (const float*)t->data;
+    float* d_host = (float*)malloc(t->numel * sizeof(float));
+    blt_tensor_copy_to_host(t, d_host, t->numel * sizeof(float));
     float sum = 0.0f;
-    for (size_t i = 0; i < t->numel; i++) sum += d[i] * d[i];
+    for (size_t i = 0; i < t->numel; i++) sum += d_host[i] * d_host[i];
+    free(d_host);
     return sum;
 }
 
@@ -794,11 +693,37 @@ static void clip_model_grads(blt_model_grad* g, const blt_model* m) {
     }
 }
 
-static void zero_scatter_grads(blt_model_grad* g, const blt_local_encoder* enc) {
+static void zero_scatter_grads(blt_model_grad* g, const blt_local_encoder* enc, const blt_model_config* cfg) {
     zero_tensor(&g->encoder_grad->embedding_grad);
     for (size_t i = 0; i < enc->ngram_weights.num_tables; i++) {
         zero_tensor(&g->encoder_grad->ngram_grads.tables[i]);
     }
+    for (size_t l = 0; l < enc->config.num_layers; l++) {
+        blt_local_layer_grad* s = &g->encoder_grad->layer_grads[l];
+        zero_tensor(&s->norm1_weight); zero_tensor(&s->attn_qkv_w);
+        zero_tensor(&s->attn_proj_w); zero_tensor(&s->norm2_weight);
+        zero_tensor(&s->ffn_up_w); zero_tensor(&s->ffn_gate_w);
+        zero_tensor(&s->ffn_down_w); zero_tensor(&s->cross_norm_weight);
+        zero_tensor(&s->cross_weight_q); zero_tensor(&s->cross_weight_k);
+        zero_tensor(&s->cross_weight_v); zero_tensor(&s->cross_weight_proj);
+    }
+    for (size_t l = 0; l < cfg->global_config.num_layers; l++) {
+        blt_transformer_layer_grad* s = &g->global_grad->stack_grad->layer_grads[l];
+        zero_tensor(&s->norm1_weight); zero_tensor(&s->attn_qkv_w);
+        zero_tensor(&s->attn_proj_w); zero_tensor(&s->norm2_weight);
+        zero_tensor(&s->ffn_up_w); zero_tensor(&s->ffn_gate_w);
+        zero_tensor(&s->ffn_down_w);
+    }
+    for (size_t l = 0; l < cfg->decoder_config.num_layers; l++) {
+        blt_local_layer_grad* s = &g->decoder_grad->layer_grads[l];
+        zero_tensor(&s->cross_norm_weight); zero_tensor(&s->cross_weight_q);
+        zero_tensor(&s->cross_weight_k); zero_tensor(&s->cross_weight_v);
+        zero_tensor(&s->cross_weight_proj); zero_tensor(&s->norm1_weight);
+        zero_tensor(&s->attn_qkv_w); zero_tensor(&s->attn_proj_w);
+        zero_tensor(&s->norm2_weight); zero_tensor(&s->ffn_up_w);
+        zero_tensor(&s->ffn_gate_w); zero_tensor(&s->ffn_down_w);
+    }
+    zero_tensor(&g->decoder_grad->lm_head_grad);
 }
 
 static void sgd_layer_transformer(blt_transformer_layer_storage* w,
@@ -882,8 +807,16 @@ static void clip_entropy_grads(blt_entropy_lm* m, blt_entropy_lm_grad* g) {
     }
 }
 
-static void zero_entropy_scatter(blt_entropy_lm_grad* g) {
+static void zero_entropy_scatter(blt_entropy_lm_grad* g, const blt_entropy_lm* lm) {
     zero_tensor(&g->embedding_grad);
+    for (size_t l = 0; l < lm->stack.num_layers; l++) {
+        blt_transformer_layer_grad* s = &g->stack_grad->layer_grads[l];
+        zero_tensor(&s->norm1_weight); zero_tensor(&s->attn_qkv_w);
+        zero_tensor(&s->attn_proj_w); zero_tensor(&s->norm2_weight);
+        zero_tensor(&s->ffn_up_w); zero_tensor(&s->ffn_gate_w);
+        zero_tensor(&s->ffn_down_w);
+    }
+    zero_tensor(&g->lm_head_grad);
 }
 
 static void sgd_apply_entropy_lm(blt_entropy_lm* m, blt_entropy_lm_grad* g, float lr) {
@@ -923,23 +856,28 @@ static void eval_stream(const train_ctx* tc, const byte_buf* buf,
 
         size_t bytes_shape[1] = {L};
         blt_tensor bytes_in = blt_tensor_create(arena, bytes_shape, 1, BLT_DTYPE_UINT8);
-        memcpy(bytes_in.data, wbytes, L);
+        blt_tensor_copy_from_host(&bytes_in, wbytes, L);
 
-        blt_patch_info* patches = (blt_patch_info*)blt_arena_alloc(
-            arena, L * sizeof(blt_patch_info), sizeof(void*));
+        blt_patch_info* patches = (blt_patch_info*)malloc(L * sizeof(blt_patch_info));
         size_t num_patches = make_patches(tc, wbytes, L, &bytes_in, arena, patches);
-        if (num_patches == 0) continue;
+        if (num_patches == 0) {
+            free(patches);
+            continue;
+        }
 
         blt_tensor logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
         blt_tensor loss = blt_tensor_create(arena, scalar_shape, 1, BLT_DTYPE_FP32);
         forward_model(tc, &bytes_in, patches, num_patches, &logits, &loss, arena);
 
-        loss_sum += ((const float*)loss.data)[0] * (double)(L - 1);
+        float loss_val = 0.0f;
+        blt_tensor_copy_to_host(&loss, &loss_val, sizeof(float));
+        loss_sum += loss_val * (double)(L - 1);
         positions += L - 1;
         for (size_t p = 0; p < num_patches; p++) {
             patch_bytes += (double)patches[p].length;
             patch_count += 1.0;
         }
+        free(patches);
     }
 
     out->bpb = (positions > 0)
@@ -970,7 +908,7 @@ static void on_signal(int sig) {
 static void usage(const char* argv0) {
     fprintf(stderr,
             "usage: %s --config <json> [--resume <ckpt>] "
-            "[--results bench/results.jsonl] [--steps N]\n",
+            "[--results bench/results.jsonl] [--steps N] [--backend cpu|cuda]\n",
             argv0);
 }
 
@@ -979,6 +917,7 @@ int main(int argc, char** argv) {
     const char* resume_path = NULL;
     const char* results_path = "bench/results.jsonl";
     long steps_override = -1;
+    blt_backend backend = BLT_BACKEND_CPU;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
@@ -989,6 +928,11 @@ int main(int argc, char** argv) {
             results_path = argv[++i];
         } else if (strcmp(argv[i], "--steps") == 0 && i + 1 < argc) {
             steps_override = atol(argv[++i]);
+        } else if (strcmp(argv[i], "--backend") == 0 && i + 1 < argc) {
+            const char* b = argv[++i];
+            if (strcmp(b, "cpu") == 0) backend = BLT_BACKEND_CPU;
+            else if (strcmp(b, "cuda") == 0) backend = BLT_BACKEND_CUDA;
+            else { fprintf(stderr, "Invalid backend: %s (cpu|cuda)\n", b); return 2; }
         } else {
             usage(argv[0]);
             return 2;
@@ -1014,12 +958,14 @@ int main(int argc, char** argv) {
     g_rng_state = cfg.seed ^ 0x9E3779B97F4A7C15ULL;
     rng_next_u64();
 
+    printf("[sweep] backend=%s\n", backend == BLT_BACKEND_CUDA ? "cuda" : "cpu");
+
     // ---- Model + entropy LM
     blt_model_config mc;
     build_model_config(&cfg, &mc);
 
-    blt_arena* model_arena = blt_arena_create(2048UL * 1024 * 1024, BLT_BACKEND_CPU);
-    blt_arena* scratch = blt_arena_create(4096UL * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena* model_arena = blt_arena_create(2048UL * 1024 * 1024, backend);
+    blt_arena* scratch = blt_arena_create(4096UL * 1024 * 1024, backend);
     if (!model_arena || !scratch) BLT_FATAL("main: arena creation failed");
 
     blt_model* model = blt_model_create(model_arena, &mc);
@@ -1046,30 +992,7 @@ int main(int argc, char** argv) {
 
     train_ctx tc = {.model = model, .ent_lm = ent_lm, .cfg = &cfg};
 
-    // ---- Checkpoint walk
-    size_t max_tensors =
-        1 + mc.encoder_config.ngram_config.num_ngram_sizes +
-        mc.encoder_config.num_layers * 12 +
-        cfg.glob_num_layers * 7 +
-        cfg.dec_num_layers * 12 + 1 +
-        (ent_lm ? (1 + ENT_LM_LAYERS * 7 + 1) : 0);
-    tensor_walk walk;
-    walk.tensors = (blt_tensor**)malloc(max_tensors * sizeof(blt_tensor*));
-    if (!walk.tensors) BLT_FATAL("main: OOM for tensor walk");
-    walk.num = 0;
-    collect_tensors(model, ent_lm, &walk);
-    if (walk.num > max_tensors) BLT_FATAL("main: tensor walk overflow");
-
-    char ckpt_path[512];
-    snprintf(ckpt_path, sizeof(ckpt_path), "bench/ckpts/%.200s.ckpt", cfg.tag);
-
     long start_step = 0;
-    if (resume_path) {
-        uint64_t saved_rng = 0;
-        start_step = ckpt_load(resume_path, &walk, &saved_rng);
-        g_rng_state = saved_rng;
-        printf("[sweep] resumed from %s at step %ld\n", resume_path, start_step);
-    }
     // ---- Data
     byte_buf train_buf, held_buf, held_c, held_h, manifest_buf;
     load_file(cfg.train_bin, &train_buf);
@@ -1113,8 +1036,7 @@ int main(int argc, char** argv) {
         size_t ent_n = 0;
         for (long ws = start_step; ws < cfg.ent_warmup_steps; ws++) {
             if (g_stop_requested) {
-                ckpt_save(ckpt_path, &walk, ws, g_rng_state);
-                printf("[sweep] signal during warmup; checkpoint at %s\n", ckpt_path);
+                printf("[sweep] signal during warmup; exiting\n");
                 return 130;
             }
             blt_arena_reset(scratch);
@@ -1122,7 +1044,7 @@ int main(int argc, char** argv) {
                 train_buf.data + train_wl.items[ws % (long)train_wl.num].offset;
             size_t bshape[1] = {L};
             blt_tensor bin = blt_tensor_create(scratch, bshape, 1, BLT_DTYPE_UINT8);
-            memcpy(bin.data, wb, L);
+            blt_tensor_copy_from_host(&bin, wb, L);
             size_t lshape[2] = {L, 256};
             blt_tensor elog = blt_tensor_create(scratch, lshape, 2, BLT_DTYPE_FP32);
             size_t sshape[1] = {1};
@@ -1137,26 +1059,28 @@ int main(int argc, char** argv) {
             blt_entropy_config ec = {.vocab_size = 256, .use_log2 = false};
             blt_compute_entropy(&pr, &ev, &ec);
             const float* evd = (const float*)ev.data;
+            float* evd_host = (float*)malloc(L * sizeof(float));
+            blt_tensor_copy_to_host(&ev, evd_host, L * sizeof(float));
             for (size_t i = 0; i < L; i++) {
-                double e = evd[i];
+                double e = evd_host[i];
                 ent_sum += e; ent_sq += e * e;
                 if (e > ent_max) ent_max = e;
                 ent_n++;
             }
+            free(evd_host);
 
-            zero_entropy_scatter(ent_grad);
+            zero_entropy_scatter(ent_grad, ent_lm);
             blt_entropy_lm_backward(ent_lm, &bin, ent_grad, scratch);
             clip_entropy_grads(ent_lm, ent_grad);
             sgd_apply_entropy_lm(ent_lm, ent_grad, (float)cfg.lr);
 
             if ((ws + 1) % 100 == 0) {
+                float loss_val = 0.0f;
+                blt_tensor_copy_to_host(&eloss, &loss_val, sizeof(float));
                 printf("[sweep] warmup %ld/%ld loss=%.4f (%.0fs)\n",
                        ws + 1, cfg.ent_warmup_steps,
-                       ((const float*)eloss.data)[0], now_sec() - w_start);
+                       loss_val, now_sec() - w_start);
                 fflush(stdout);
-            }
-            if (cfg.ckpt_every > 0 && (ws + 1) % cfg.ckpt_every == 0) {
-                ckpt_save(ckpt_path, &walk, ws + 1, g_rng_state);
             }
         }
         double mean = ent_n ? ent_sum / ent_n : 0.0;
@@ -1169,19 +1093,13 @@ int main(int argc, char** argv) {
     long main_loop_start = (start_step > cfg.ent_warmup_steps) ? start_step : cfg.ent_warmup_steps;
     for (long step = main_loop_start; step < total_steps; step++) {
         if (g_stop_requested) {
-            printf("\n[sweep] signal received at step %ld — checkpointing\n", step);
-            ckpt_save(ckpt_path, &walk, step, g_rng_state);
-            printf("[sweep] checkpoint saved to %s; rerun with --resume %s\n",
-                   ckpt_path, ckpt_path);
+            printf("\n[sweep] signal received at step %ld — exiting\n", step);
             return 130;
         }
         double elapsed = now_sec() - t_start;
         if (elapsed > (double)cfg.max_wall_sec) {
             printf("\n[sweep] wall-clock guard hit (%.0fs > %ld s) at step %ld\n",
                    elapsed, cfg.max_wall_sec, step);
-            ckpt_save(ckpt_path, &walk, step, g_rng_state);
-            printf("[sweep] checkpoint saved to %s; rerun with --resume %s\n",
-                   ckpt_path, ckpt_path);
             return 124;
         }
 
@@ -1192,17 +1110,16 @@ int main(int argc, char** argv) {
             train_buf.data + train_wl.items[step % (long)train_wl.num].offset;
         size_t bytes_shape[1] = {L};
         blt_tensor bytes_in = blt_tensor_create(scratch, bytes_shape, 1, BLT_DTYPE_UINT8);
-        memcpy(bytes_in.data, wbytes, L);
+        blt_tensor_copy_from_host(&bytes_in, wbytes, L);
 
-        blt_patch_info* patches = (blt_patch_info*)blt_arena_alloc(
-            scratch, L * sizeof(blt_patch_info), sizeof(void*));
+        blt_patch_info* patches = (blt_patch_info*)malloc(L * sizeof(blt_patch_info));
         size_t num_patches = make_patches(&tc, wbytes, L, &bytes_in, scratch, patches);
 
         blt_tensor logits = blt_tensor_create(scratch, logits_shape, 2, BLT_DTYPE_FP32);
         blt_tensor loss = blt_tensor_create(scratch, scalar_shape, 1, BLT_DTYPE_FP32);
         forward_model(&tc, &bytes_in, patches, num_patches, &logits, &loss, scratch);
 
-        zero_scatter_grads(grad, model->encoder);
+        zero_scatter_grads(grad, model->encoder, &mc);
         size_t doc_boundaries[1] = {0};
         blt_model_backward(model, &bytes_in, patches, num_patches,
                            doc_boundaries, 1, grad, scratch);
@@ -1216,11 +1133,12 @@ int main(int argc, char** argv) {
             blt_tensor ent_loss =
                 blt_tensor_create(scratch, scalar_shape, 1, BLT_DTYPE_FP32);
             blt_entropy_lm_forward(ent_lm, &bytes_in, &ent_logits, &ent_loss, scratch);
-            zero_entropy_scatter(ent_grad);
+            zero_entropy_scatter(ent_grad, ent_lm);
             blt_entropy_lm_backward(ent_lm, &bytes_in, ent_grad, scratch);
             clip_entropy_grads(ent_lm, ent_grad);
             sgd_apply_entropy_lm(ent_lm, ent_grad, (float)cfg.lr);
         }
+        free(patches);
         double dt = now_sec() - t_step;
         step_samples[n_samples++] = dt;
         samples_sum += dt;
@@ -1230,14 +1148,13 @@ int main(int argc, char** argv) {
             blt_arena_reset(scratch);
             eval_out eo;
             eval_stream(&tc, &held_buf, &held_wl, scratch, &eo);
+            float loss_val = 0.0f;
+            blt_tensor_copy_to_host(&loss, &loss_val, sizeof(float));
             printf("[sweep] step %ld/%ld train_loss=%.4f bpb=%.4f avg_patch=%.2f "
                    "step_ms=%.1f elapsed=%.0fs\n",
-                   step + 1, total_steps, ((const float*)loss.data)[0],
+                   step + 1, total_steps, loss_val,
                    eo.bpb, eo.avg_patch_len, dt * 1e3, now_sec() - t_start);
             fflush(stdout);
-        }
-        if (cfg.ckpt_every > 0 && (step + 1) % cfg.ckpt_every == 0) {
-            ckpt_save(ckpt_path, &walk, step + 1, g_rng_state);
         }
     }
 
@@ -1298,12 +1215,10 @@ int main(int argc, char** argv) {
     if (bench_write_json(results_path, &r) != 0) {
         BLT_FATAL("main: failed to append results to %s", results_path);
     }
-    ckpt_save(ckpt_path, &walk, total_steps, g_rng_state);
-    printf("[sweep] wrote %s; checkpoint at %s\n", results_path, ckpt_path);
+    printf("[sweep] wrote %s\n", results_path);
 
     free(step_samples);
     free(train_wl.items); free(held_wl.items);
-    free(walk.tensors);
     free(train_buf.data); free(manifest_buf.data);
     free(held_buf.data); free(held_c.data); free(held_h.data);
     blt_arena_destroy(scratch);

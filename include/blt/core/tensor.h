@@ -40,6 +40,12 @@ void blt_tensor_view_3d(blt_tensor* t, void* data, size_t d0, size_t d1, size_t 
 
 void zero_tensor(blt_tensor* t);
 
+// Copy host data to tensor data, handling backend (H2D for CUDA, memcpy for CPU)
+void blt_tensor_copy_from_host(blt_tensor* t, const void* host_src, size_t bytes);
+
+// Copy tensor data to host, handling backend (D2H for CUDA, memcpy for CPU)
+void blt_tensor_copy_to_host(const blt_tensor* t, void* host_dst, size_t bytes);
+
 #ifdef __cplusplus
 }
 #endif

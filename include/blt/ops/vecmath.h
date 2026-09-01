@@ -37,4 +37,7 @@ void blt_strided_copy(blt_backend backend, float* dst, size_t dst_stride,
                       const float* src, size_t src_stride,
                       size_t rows, size_t cols);
 
+void blt_fill_uniform(blt_backend backend, float* data, size_t n, uint64_t* rng_state);
+void blt_fill_constant(blt_backend backend, float* data, size_t n, float v);
+
 #endif // BLT_OPS_VECMATH_H

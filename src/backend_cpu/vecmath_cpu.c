@@ -61,3 +61,28 @@ void blt_strided_copy_cpu(blt_backend backend, float* dst, size_t dst_stride,
         memcpy(dst + r * dst_stride, src + r * src_stride, cols * sizeof(float));
     }
 }
+
+static float rng_uniform_u64(uint64_t* state, float scale) {
+    uint64_t x = *state;
+    x ^= x >> 12;
+    x ^= x << 25;
+    x ^= x >> 27;
+    *state = x;
+    return (((float)(x >> 40) / 16777216.0f) * 2.0f - 1.0f) * scale;
+}
+
+void blt_fill_uniform_cpu(blt_backend backend, float* data, size_t n, uint64_t* rng_state) {
+    (void)backend;
+    BLT_REQUIRE(backend == BLT_BACKEND_CPU, "blt_fill_uniform: CPU implementation called with non-CPU backend");
+    for (size_t i = 0; i < n; ++i) {
+        data[i] = rng_uniform_u64(rng_state, 1.0f);
+    }
+}
+
+void blt_fill_constant_cpu(blt_backend backend, float* data, size_t n, float v) {
+    (void)backend;
+    BLT_REQUIRE(backend == BLT_BACKEND_CPU, "blt_fill_constant: CPU implementation called with non-CPU backend");
+    for (size_t i = 0; i < n; ++i) {
+        data[i] = v;
+    }
+}
