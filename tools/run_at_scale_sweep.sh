@@ -30,7 +30,7 @@ BASE="$BASE --embed 128 --hidden 256 --layers 2 --window 96 --block-size 4"
 BASE="$BASE --steps 20000 --lr 0.05 --lr-decay 1 --backend $BACKEND"
 
 # Diffusion defaults (arms that use diffusion)
-DIFF="--diffusion 1 --mask-warmup 10000 --mask-scale 0.3 --t-min 0.05"
+DIFF="--diffusion 1 --mask-warmup 10000 --mask-scale 0.3 --t-min 0.1"
 
 # Write arm definitions: name|extra_flags
 ARMS=(
@@ -42,7 +42,7 @@ ARMS=(
     "late|$DIFF --mask-late-step 14000 --mask-late-scale 0.5"
     "hit|$DIFF --t-warmup-hi 0.25 --t-hi-start 0.8"
     "entp|$DIFF --entropy-patches --entropy-lm runs/entlm.bin"
-    "e256|--diffusion 1 --mask-warmup 10000 --mask-scale 0.3 --t-min 0.05 --embed 256 --hidden 512 --window 192 --steps 10000"
+    "e256|--diffusion 1 --mask-warmup 10000 --mask-scale 0.3 --t-min 0.1 --embed 256 --hidden 512 --window 192 --steps 10000"
 )
 
 N_ARMS=${#ARMS[@]}
@@ -68,7 +68,7 @@ for seed in $SEEDS; do
         fi
         # shellcheck disable=SC2086
         $TRAIN_BIN $BASE $extra --seed "$seed" \
-            --save-weights "/dev/null" \
+            --save-weights "runs/s6_${arm}_s${seed}.fblt" \
             > "$log" 2>&1
         rc=$?
 

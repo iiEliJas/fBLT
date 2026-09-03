@@ -218,8 +218,8 @@ static void bench_elementwise_cell(blt_arena* arena, size_t n_floats, size_t ite
 // large enough that device kernels have real work per pass.
 //----------------------------------------------------------------------
 
-#define BENCH_E 256
-#define BENCH_HID (4 * BENCH_E)
+#define BENCH_E 64
+#define BENCH_HID 128
 #define BENCH_L 2
 
 static void build_model_config(blt_model_config* cfg, size_t MS) {
