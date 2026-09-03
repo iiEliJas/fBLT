@@ -7,9 +7,7 @@ obj-cuda/
 *.exe
 *.o
 *.obj
-bench/results.jsonl
-bench/results_old_wrong_scale.jsonl
-bench/dummy_results.jsonl
+bench/*.jsonl
 __pycache__/
 .venv
 .cache/
@@ -20,6 +18,8 @@ docs/fast_bltPAPER.md
 graphify-out/
 
 AGENTS.md
+/.pi
+.pi-lens
 docs/HANDOFF_RESET.md
 compile_commands.json
 .opencode/

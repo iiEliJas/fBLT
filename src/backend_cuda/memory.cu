@@ -11,12 +11,12 @@ static void blt_cuda_check(cudaError_t err, const char* what) {
 }
 
 // Thread-local scratch arena for temporary CUDA allocations.
-// Avoids per-call cudaMalloc/free churn. Initialized on first use with 256MB capacity.
+// Avoids per-call cudaMalloc/free churn. Initialized on first use with 512MB capacity.
 static __thread blt_arena* blt_cuda_scratch_arena = NULL;
 
 extern "C" blt_arena* blt_cuda_get_scratch_arena(void) {
     if (blt_cuda_scratch_arena == NULL) {
-        blt_cuda_scratch_arena = blt_arena_create(256 * 1024 * 1024, BLT_BACKEND_CUDA);
+        blt_cuda_scratch_arena = blt_arena_create(512 * 1024 * 1024, BLT_BACKEND_CUDA);
     }
     return blt_cuda_scratch_arena;
 }

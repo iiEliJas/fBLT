@@ -96,7 +96,9 @@ void* blt_arena_alloc(blt_arena* arena, size_t bytes, size_t alignment) {
     size_t current = arena->offset;
     size_t aligned = (current + (alignment - 1)) & ~(alignment - 1);
     if (aligned + bytes > arena->capacity) {
-        BLT_FATAL("arena allocation exceeded capacity");
+        BLT_FATAL("arena allocation exceeded capacity: need %zu (aligned %zu), "
+                  "offset %zu, capacity %zu",
+                  bytes, aligned, current, arena->capacity);
     }
 
     void* ptr = (char*)arena->buffer + aligned;
