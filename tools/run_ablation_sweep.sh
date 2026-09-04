@@ -1,5 +1,4 @@
-#!/usr/bin/env bash
-# run_ablation_sweep.sh — Run all toy-scale ablation configs × 3 seeds on CUDA.
+# Run all toy-scale ablation configs × 3 seeds on CUDA.
 #
 # Usage (from repo root):
 #   tools/run_ablation_sweep.sh [--backend cpu|cuda]

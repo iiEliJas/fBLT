@@ -1,5 +1,4 @@
-#!/usr/bin/env bash
-# run_at_scale_sweep.sh — Run all 9 at-scale arms × 3 seeds on CUDA.
+# Run all 9 at-scale arms × 3 seeds on CUDA.
 #
 # Usage (from repo root):
 #   tools/run_at_scale_sweep.sh [--backend cpu|cuda]

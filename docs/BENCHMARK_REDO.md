@@ -57,6 +57,22 @@ Training curves smooth — no spikes, no divergence.
 
 Gap: 0.39 → 0.28 BPB. Core finding holds: BLT-D costs ~0.3 BPB for masked-block accuracy.
 
+### Eval BPB convergence (plain model, fixed zeroing)
+
+Periodic held-out eval during the 40k-step plain training run:
+
+| Step | Eval BPB | Δ from prev |
+|------|----------|-------------|
+| 10,000 | 3.1256 | — |
+| 15,000 | 3.0547 | -0.07 |
+| 20,000 | 3.3314 | +0.28 |
+| 25,000 | 2.1959 | -1.14 |
+| 30,000 | 2.4907 | +0.29 |
+| 35,000 | 1.7859 | -0.70 |
+| 40,000 | 1.7571 | -0.03 |
+
+The two large drops (-1.14 at 25k, -0.70 at 35k) align with the LR decay points (x0.3 at 60% = step 24k, x0.3 at 85% = step 34k). The post-final-decay segment (35k→40k) shows only -0.03 BPB. This means the improvement is mostly decay-schedule-driven; 1.74 BPB is essentially converged at these hyperparameters.
+
 ### Section 2.2 — Generalization (held-out at 3 offsets)
 
 | Model | 0 B | 500 KB | 2 MB |
@@ -308,7 +324,19 @@ is essential.
 
 Architecture-wise, decoder depth doesn't matter for training quality at
 3.5M params (1/2/3 layers within 0.1 BPB). Cross-attention placement
-increased variance (xlast BPB range 2.22-2.88). Entropy patching hurts at
+destabilized training: the xlast arm's BPB ranged 2.22–2.88 across seeds
+(seed 7 produced 2.88, the worst single run in the sweep). Tracing the
+corrected seed-7 run reveals the mechanism. The gradient norm was pegged at
+the clip ceiling (5.0) for ~90% of steps — applied norm looked benign. But
+the raw pre-clip norms tell the real story: during loss-spike steps they hit
+200, 353, and 277, indicating transient pathological gradient directions
+from the cross-attention path. Clipping bounded their magnitude but could
+not reverse their direction, so each spike perturbed the weight trajectory
+irreversibly. This is genuine gradient instability, not data-dependent loss
+noise. The extreme seed sensitivity (same hyperparameters, identical code,
+BPB ranging 2.22–2.88) is consistent with chaotic dynamics: small
+differences in random timesteps get amplified by the unstable gradient
+directions into divergent final models. Entropy patching hurts at
 both scales. A gentle late mask-loss ramp (0.3→0.5) made BLT-S verification
 worse, not better — mask_scale=0.3 is the right operating point.
 
