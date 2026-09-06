@@ -97,6 +97,11 @@ typedef struct {
     float max_norm;             // gradient clip threshold
     const char* grad_norm_log;  // write pre-clip grad norm every step
     const char* update_norm_log; // write (step, post_clip_norm, update_norm) at spike steps
+    const char* component_norm_log; // write per-component gradient norms every step
+    const char* activation_dump_log; // log activation stats every report-every steps
+    const char* batch_log;           // log batch properties every step
+    size_t eval_every;               // run causal BPB eval every N steps (0 = disabled)
+    const char* loss_log;            // write per-step loss to FILE
 } args_t;
 
 
@@ -179,6 +184,61 @@ static float clip_all(blt_model* m, blt_model_grad* g, float max_norm) {
     blt_scale(&g->decoder_grad->lm_head_grad, scale);
     blt_scale(&g->decoder_grad->d0_embed_grad, scale);
     return norm;
+}
+
+// Log per-component L2 gradient norms to the component-norm-log file.
+// Encoder split into embedding / ngram / per-layer to pinpoint
+// which sub-tensor is responsible for encoder-dominated gradient spikes.
+// Decoder layers split into self_attn / cross_attn / ffn for the same reason.
+static void log_component_norms(FILE* fp, size_t step,
+                                blt_model* m, blt_model_grad* g) {
+    float enc_embed_sq = grad_sq(&g->encoder_grad->embedding_grad);
+
+    float enc_ngram_sq = 0.0f;
+    for (size_t i = 0; i < m->encoder->ngram_weights.num_tables; i++)
+        enc_ngram_sq += grad_sq(&g->encoder_grad->ngram_grads.tables[i]);
+
+    float enc_layers_sq = 0.0f;
+    blt_tensor* ts[12];
+    for (size_t i = 0; i < m->encoder->config.num_layers; i++) {
+        layer_grads(&g->encoder_grad->layer_grads[i], ts);
+        for (size_t j = 0; j < 12; j++) enc_layers_sq += grad_sq(ts[j]);
+    }
+
+    float glob_sq = 0.0f;
+    for (size_t i = 0; i < m->global->stack.num_layers; i++) {
+        blt_transformer_layer_grad* l = &g->global_grad->stack_grad->layer_grads[i];
+        blt_tensor* tt[7] = {&l->norm1_weight, &l->attn_qkv_w, &l->attn_proj_w,
+            &l->norm2_weight, &l->ffn_up_w, &l->ffn_gate_w, &l->ffn_down_w};
+        for (size_t j = 0; j < 7; j++) glob_sq += grad_sq(tt[j]);
+    }
+    const float glob_norm = sqrtf(glob_sq);
+
+    float dec_self_sq = 0.0f, dec_cross_sq = 0.0f, dec_ffn_sq = 0.0f;
+    for (size_t i = 0; i < m->decoder->config.num_layers; i++) {
+        layer_grads(&g->decoder_grad->layer_grads[i], ts);
+        dec_self_sq  += grad_sq(ts[0]) + grad_sq(ts[1]) + grad_sq(ts[2]);
+        dec_cross_sq += grad_sq(ts[7]) + grad_sq(ts[8]) + grad_sq(ts[9])
+                      + grad_sq(ts[10]) + grad_sq(ts[11]);
+        dec_ffn_sq   += grad_sq(ts[3]) + grad_sq(ts[4]) + grad_sq(ts[5])
+                      + grad_sq(ts[6]);
+    }
+    const float dec_self_norm  = sqrtf(dec_self_sq);
+    const float dec_cross_norm = sqrtf(dec_cross_sq);
+    const float dec_ffn_norm   = sqrtf(dec_ffn_sq);
+
+    float head_sq = grad_sq(&g->decoder_grad->lm_head_grad)
+                  + grad_sq(&g->decoder_grad->d0_embed_grad);
+    const float head_norm = sqrtf(head_sq);
+
+    const float total_norm = sqrtf(enc_embed_sq + enc_ngram_sq + enc_layers_sq
+                                 + glob_sq + dec_self_sq + dec_cross_sq
+                                 + dec_ffn_sq + head_sq);
+
+    fprintf(fp, "%zu %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f\n",
+            step, sqrtf(enc_embed_sq), sqrtf(enc_ngram_sq), sqrtf(enc_layers_sq),
+            glob_norm, dec_self_norm, dec_cross_norm,
+            dec_ffn_norm, head_norm, total_norm);
 }
 
 static void sgd_all(blt_model* m, blt_model_grad* g, float lr) {
@@ -654,6 +714,195 @@ static size_t entropy_segment(blt_arena* arena, blt_entropy_lm* lm,
     return n;
 }
 
+//----------------------------------------------------------------------
+// Activation dump: scan tensors for numerical anomalies (NaN/Inf/saturation)
+// to correlate with gradient-norm spikes.
+
+static void tensor_stats(const blt_tensor* t, float* max_abs,
+                         size_t* nan_count, size_t* inf_count) {
+    *max_abs = 0.0f;
+    *nan_count = 0;
+    *inf_count = 0;
+    if (t->numel == 0) return;
+
+    float* host_buf = NULL;
+    const float* data;
+    if (t->backend == BLT_BACKEND_CPU) {
+        data = (const float*)t->data;
+    } else {
+        host_buf = (float*)malloc(t->numel * sizeof(float));
+        if (!host_buf) { *nan_count = t->numel; return; }
+        blt_tensor_copy_to_host(t, host_buf, t->numel * sizeof(float));
+        data = host_buf;
+    }
+
+    for (size_t i = 0; i < t->numel; i++) {
+        float v = data[i];
+        float a = fabsf(v);
+        if (a > *max_abs) *max_abs = a;
+        if (isnan(v)) (*nan_count)++;
+        else if (isinf(v)) (*inf_count)++;
+    }
+    free(host_buf);
+}
+
+static void scan_log_tensor(FILE* fp, size_t step, const char* name,
+                             const blt_tensor* t) {
+    float max_abs;
+    size_t nan_count, inf_count;
+    tensor_stats(t, &max_abs, &nan_count, &inf_count);
+    fprintf(fp, "%zu %s %.6f %zu %zu\n", step, name, max_abs, nan_count, inf_count);
+}
+
+// Log forward activation stats (before backward). NULL tensors are skipped.
+static void log_forward_activation_dump(FILE* fp, size_t step,
+                                        const blt_tensor* P, const blt_tensor* h,
+                                        const blt_tensor* O, const blt_tensor* logits) {
+    if (P) scan_log_tensor(fp, step, "fwd/P", P);
+    if (h) scan_log_tensor(fp, step, "fwd/h", h);
+    if (O) scan_log_tensor(fp, step, "fwd/O", O);
+    if (logits) scan_log_tensor(fp, step, "fwd/logits", logits);
+}
+
+// Log gradient activation stats (after backward). Scans decoder head,
+// decoder layers, global layers, and encoder gradients.
+static void log_gradient_activation_dump(FILE* fp, size_t step,
+                                         blt_model* m, blt_model_grad* g) {
+    // Decoder head gradients
+    scan_log_tensor(fp, step, "grad/dec_lm_head", &g->decoder_grad->lm_head_grad);
+    scan_log_tensor(fp, step, "grad/dec_d0_embed", &g->decoder_grad->d0_embed_grad);
+
+    // Decoder layer gradients: max across all layers and weight tensors
+    {
+        float layer_max = 0.0f;
+        size_t layer_nan = 0, layer_inf = 0;
+        for (size_t i = 0; i < m->decoder->config.num_layers; i++) {
+            blt_tensor* ts[12];
+            layer_grads(&g->decoder_grad->layer_grads[i], ts);
+            for (size_t j = 0; j < 12; j++) {
+                float mx; size_t nn, ni;
+                tensor_stats(ts[j], &mx, &nn, &ni);
+                if (mx > layer_max) layer_max = mx;
+                layer_nan += nn;
+                layer_inf += ni;
+            }
+        }
+        fprintf(fp, "%zu grad/dec_layers %.6f %zu %zu\n",
+                step, layer_max, layer_nan, layer_inf);
+    }
+
+    // Global transformer gradients
+    {
+        float layer_max = 0.0f;
+        size_t layer_nan = 0, layer_inf = 0;
+        for (size_t i = 0; i < m->global->stack.num_layers; i++) {
+            blt_transformer_layer_grad* l = &g->global_grad->stack_grad->layer_grads[i];
+            blt_tensor* tt[7] = {&l->norm1_weight, &l->attn_qkv_w, &l->attn_proj_w,
+                &l->norm2_weight, &l->ffn_up_w, &l->ffn_gate_w, &l->ffn_down_w};
+            for (size_t j = 0; j < 7; j++) {
+                float mx; size_t nn, ni;
+                tensor_stats(tt[j], &mx, &nn, &ni);
+                if (mx > layer_max) layer_max = mx;
+                layer_nan += nn;
+                layer_inf += ni;
+            }
+        }
+        fprintf(fp, "%zu grad/glob_layers %.6f %zu %zu\n",
+                step, layer_max, layer_nan, layer_inf);
+    }
+
+    // Encoder gradients
+    {
+        float enc_max = 0.0f;
+        size_t enc_nan = 0, enc_inf = 0;
+        float mx; size_t nn, ni;
+
+        tensor_stats(&g->encoder_grad->embedding_grad, &mx, &nn, &ni);
+        if (mx > enc_max) enc_max = mx;
+        enc_nan += nn; enc_inf += ni;
+
+        for (size_t i = 0; i < m->encoder->ngram_weights.num_tables; i++) {
+            tensor_stats(&g->encoder_grad->ngram_grads.tables[i], &mx, &nn, &ni);
+            if (mx > enc_max) enc_max = mx;
+            enc_nan += nn; enc_inf += ni;
+        }
+
+        for (size_t i = 0; i < m->encoder->config.num_layers; i++) {
+            blt_tensor* ts[12];
+            layer_grads(&g->encoder_grad->layer_grads[i], ts);
+            for (size_t j = 0; j < 12; j++) {
+                tensor_stats(ts[j], &mx, &nn, &ni);
+                if (mx > enc_max) enc_max = mx;
+                enc_nan += nn; enc_inf += ni;
+            }
+        }
+        fprintf(fp, "%zu grad/encoder %.6f %zu %zu\n",
+                step, enc_max, enc_nan, enc_inf);
+    }
+}
+
+//----------------------------------------------------------------------
+// Batch property logging: record per-step input characteristics so we
+// can check whether gradient-norm spike steps share unusual inputs.
+
+static uint64_t fnv1a_hash(const uint8_t* data, size_t len) {
+    uint64_t hash = 14695981039346656037ULL;
+    for (size_t i = 0; i < len; i++) {
+        hash ^= data[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+// Log per-step batch properties: window identity, patch stats, diffusion
+// corruption stats, and the effective loss weight. Space-separated, one
+// line per step.
+static void log_batch_properties(FILE* fp, size_t step,
+    size_t window_offset, const uint8_t* text, size_t window_size,
+    const blt_patch_info* patches, size_t num_patches,
+    const blt_block_batch* batch) {
+
+    const uint64_t whash = fnv1a_hash(text, window_size);
+
+    // average patch length
+    float avg_patch_len = 0.0f;
+    if (num_patches > 0) {
+        size_t total = 0;
+        for (size_t i = 0; i < num_patches; i++)
+            total += patches[i].length;
+        avg_patch_len = (float)total / (float)num_patches;
+    }
+
+    // count valid and masked cells in the diffusion batch
+    size_t n_valid = 0, n_masked = 0;
+    if (batch != NULL) {
+        for (size_t r = 0; r < batch->n_block_rows; r++) {
+            if (batch->cell_valid[r]) n_valid++;
+            if (batch->cell_masked[r]) n_masked++;
+        }
+    }
+    const float masked_frac = n_valid > 0
+        ? (float)n_masked / (float)n_valid : 0.0f;
+
+    const float t = batch != NULL ? batch->t : 0.0f;
+    const float loss_scale = batch != NULL ? batch->loss_scale : 0.0f;
+    const float eff_weight = (t > 0.0f) ? loss_scale / t : 0.0f;
+
+    fprintf(fp, "%zu %zu %016llx %zu %.3f %zu %zu %.4f %.6f %.6f %.6f\n",
+        step,
+        window_offset,
+        (unsigned long long)whash,
+        num_patches,
+        avg_patch_len,
+        n_valid,
+        n_masked,
+        masked_frac,
+        t,
+        loss_scale,
+        eff_weight);
+}
+
+
 int main(int argc, char** argv) {
     args_t a = { .corpus_path = NULL, .steps = 2000, .lr = 0.05f,
                  .block_size = 4, .window = 48, .embed = 64, .hidden = 128,
@@ -671,7 +920,9 @@ int main(int argc, char** argv) {
                  .optimizer = 0, .beta1 = 0.9f, .beta2 = 0.999f,
                  .eps = 1e-8f, .weight_decay = 0.01f,
                  .max_norm = 5.0f, .grad_norm_log = NULL,
-                 .update_norm_log = NULL };
+                 .update_norm_log = NULL, .component_norm_log = NULL,
+                 .activation_dump_log = NULL, .batch_log = NULL,
+                 .eval_every = 0 };
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--corpus") && i + 1 < argc) a.corpus_path = argv[++i];
@@ -696,6 +947,8 @@ int main(int argc, char** argv) {
             a.eval_windows = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--eval-skip") && i + 1 < argc)
             a.eval_skip = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--eval-every") && i + 1 < argc)
+            a.eval_every = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--t-min") && i + 1 < argc) a.t_min = atof(argv[++i]);
         else if (!strcmp(argv[i], "--lr-decay") && i + 1 < argc) a.lr_decay = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--mask-warmup") && i + 1 < argc)
@@ -754,6 +1007,14 @@ int main(int argc, char** argv) {
             a.max_norm = atof(argv[++i]);
         else if (!strcmp(argv[i], "--update-norm-log") && i + 1 < argc)
             a.update_norm_log = argv[++i];
+        else if (!strcmp(argv[i], "--component-norm-log") && i + 1 < argc)
+            a.component_norm_log = argv[++i];
+        else if (!strcmp(argv[i], "--activation-dump-log") && i + 1 < argc)
+            a.activation_dump_log = argv[++i];
+        else if (!strcmp(argv[i], "--batch-log") && i + 1 < argc)
+            a.batch_log = argv[++i];
+        else if (!strcmp(argv[i], "--loss-log") && i + 1 < argc)
+            a.loss_log = argv[++i];
         else { usage(); return 1; }
     }
     if (a.corpus_path == NULL) { usage(); return 1; }
@@ -1030,6 +1291,14 @@ int main(int argc, char** argv) {
     if (a.grad_norm_log) gnorm_fp = fopen(a.grad_norm_log, "w");
     FILE* unorm_fp = NULL;
     if (a.update_norm_log) unorm_fp = fopen(a.update_norm_log, "w");
+    FILE* cnorm_fp = NULL;
+    if (a.component_norm_log) cnorm_fp = fopen(a.component_norm_log, "w");
+    FILE* adump_fp = NULL;
+    if (a.activation_dump_log) adump_fp = fopen(a.activation_dump_log, "w");
+    FILE* batch_fp = NULL;
+    if (a.batch_log) batch_fp = fopen(a.batch_log, "w");
+    FILE* loss_fp = NULL;
+    if (a.loss_log) loss_fp = fopen(a.loss_log, "w");
 
     double t_fwd = 0.0, t_bwd = 0.0, t_opt = 0.0, t_step = 0.0;
     struct timespec ts0, tsA, tsB, tsC, tsD;
@@ -1093,6 +1362,10 @@ int main(int argc, char** argv) {
                       (a.mask_late_scale - a.mask_scale) * frac;
             }
             if (batch.loss_scale > cap) batch.loss_scale = cap;
+            // Log batch properties for spike investigation
+            if (batch_fp)
+                log_batch_properties(batch_fp, step, w * a.window,
+                    text, N, patches, M, &batch);
         }
 
         size_t bshape[1] = {N};
@@ -1141,8 +1414,12 @@ int main(int argc, char** argv) {
                 text, &batch,
                 a.d0_learned ? BLT_D0_LEARNED : BLT_D0_ZEROS, &logits, &loss, scratch);
 
+            if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
+                log_forward_activation_dump(adump_fp, step + 1, &P, &h, &O, &logits);
+
             float lv;
             blt_tensor_download(&loss, &lv, sizeof(float));
+            if (loss_fp) fprintf(loss_fp, "%zu %.6f\n", step + 1, (double)lv);
             if (timing) { clock_gettime(CLOCK_MONOTONIC, &tsB);
                 t_fwd += (tsB.tv_sec-tsA.tv_sec)+(tsB.tv_nsec-tsA.tv_nsec)/1e9; }
             running += lv;
@@ -1161,6 +1438,8 @@ int main(int argc, char** argv) {
 
             blt_local_encoder_backward(model->encoder, &bytes_in, patches, M,
                 NULL, 0, &grad_P, &grad_h, grad->encoder_grad, scratch);
+            if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
+                log_gradient_activation_dump(adump_fp, step + 1, model, grad);
             if (timing) { clock_gettime(CLOCK_MONOTONIC, &tsC);
                 t_bwd += (tsC.tv_sec-tsB.tv_sec)+(tsC.tv_nsec-tsB.tv_nsec)/1e9; }
         } else {
@@ -1172,12 +1451,15 @@ int main(int argc, char** argv) {
             blt_model_forward(model, &bytes_in, patches, M, NULL, 0,
                 &logits, &loss, scratch);
 
+            if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
+                log_forward_activation_dump(adump_fp, step + 1, NULL, NULL, NULL, &logits);
+
             float lv;
             blt_tensor_download(&loss, &lv, sizeof(float));
+            if (loss_fp) fprintf(loss_fp, "%zu %.6f\n", step + 1, (double)lv);
             running += lv;
-            running_n++;
-
-            blt_model_backward(model, &bytes_in, patches, M, NULL, 0, grad, scratch);
+            if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
+                log_gradient_activation_dump(adump_fp, step + 1, model, grad);
         }
 
         float lr = a.lr;
@@ -1187,6 +1469,7 @@ int main(int argc, char** argv) {
         }
 
         if (timing) clock_gettime(CLOCK_MONOTONIC, &tsC);
+        if (cnorm_fp) log_component_norms(cnorm_fp, step + 1, model, grad);
         float pre_clip_norm = clip_all(model, grad, a.max_norm);
         if (gnorm_fp) fprintf(gnorm_fp, "%zu %.6f\n", step + 1, pre_clip_norm);
         if (unorm_fp && pre_clip_norm > 100.0f) {
@@ -1227,6 +1510,52 @@ int main(int argc, char** argv) {
             fflush(stdout);
             running = 0.0;
             running_n = 0;
+        }
+
+        // Periodic eval: run causal BPB on the held-out corpus every N steps
+        if (a.eval_every > 0 && (step + 1) % a.eval_every == 0 && a.eval_path != NULL) {
+            FILE* ef = fopen(a.eval_path, "rb");
+            if (ef) {
+                fseek(ef, 0, SEEK_END);
+                long esz = ftell(ef);
+                fseek(ef, 0, SEEK_SET);
+                uint8_t* eval_bytes = (uint8_t*)malloc((size_t)esz);
+                if (eval_bytes && fread(eval_bytes, 1, (size_t)esz, ef) == (size_t)esz) {
+                    size_t avail = (size_t)esz - a.eval_skip;
+                    size_t eval_count = a.eval_windows;
+                    size_t max_windows = avail / a.window;
+                    if (eval_count > max_windows) eval_count = max_windows;
+                    uint8_t* base = eval_bytes + a.eval_skip;
+                    double ce_sum = 0.0;
+                    size_t hits = 0, total = 0;
+                    for (size_t wi = 0; wi < eval_count; wi++) {
+                        blt_arena_reset(scratch);
+                        const uint8_t* text = base + wi * a.window;
+                        blt_patch_info ep[128];
+                        size_t eM = 0;
+                        if (train_lm) {
+                            blt_arena_reset(host_seg_arena);
+                            eM = entropy_segment(host_seg_arena, train_lm, text, a.window, ep, 128);
+                        } else {
+                            eM = fixed_stride(a.window, 4, ep);
+                        }
+                        blt_block_batch ebatch;
+                        if (a.diffusion) {
+                            blt_block_batch_build(&ebatch, scratch, text, a.window, ep, eM, a.block_size, a.seed + 999999);
+                        }
+                        ce_sum += window_causal_ce(scratch, model, text, a.window,
+                            a.diffusion ? &ebatch : NULL, a.diffusion,
+                            a.d0_learned ? BLT_D0_LEARNED : BLT_D0_ZEROS, ep, eM,
+                            &hits, &total);
+                    }
+                    double bpb = (ce_sum / (double)eval_count) / log(2.0);
+                    printf("EVAL step=%zu causal_bpb=%.4f masked_acc=%.3f\n",
+                        step + 1, bpb, total ? (double)hits / (double)total : 0.0);
+                    fflush(stdout);
+                }
+                free(eval_bytes);
+                fclose(ef);
+            }
         }
     }
 
@@ -1312,6 +1641,10 @@ int main(int argc, char** argv) {
     if (aw) { free(aw->ngram); free(aw); }
     if (gnorm_fp) fclose(gnorm_fp);
     if (unorm_fp) fclose(unorm_fp);
+    if (cnorm_fp) fclose(cnorm_fp);
+    if (adump_fp) fclose(adump_fp);
+    if (batch_fp) fclose(batch_fp);
+    if (loss_fp) fclose(loss_fp);
     free(corpus);
     return 0;
 }

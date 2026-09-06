@@ -34,6 +34,13 @@ void blt_indexed_row_accumulate(const blt_tensor* table, const uint32_t* idx_hos
 void blt_indexed_row_scatter_add(const blt_tensor* grad_table, const uint32_t* idx_host,
                                  const blt_tensor* grad_out, float scale);
 
+// Like blt_indexed_row_scatter_add but normalizes each row's contribution by
+// the number of positions sharing the same index, so a bucket receiving N
+// contributions gets the AVERAGE gradient, not the SUM.
+void blt_indexed_row_scatter_add_normalized(blt_backend backend, const blt_tensor* grad_table,
+                                            const uint32_t* idx_host, const blt_tensor* grad_out,
+                                            float scale);
+
 // dst[i, :] = src[pos_host[i], :] (row-wise gather with full-row copies).
 void blt_rows_gather(const blt_tensor* src, const size_t* pos_host, blt_tensor* dst);
 

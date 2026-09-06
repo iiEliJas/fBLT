@@ -11,6 +11,7 @@ bench/*.jsonl
 __pycache__/
 .venv
 .cache/
+investigations/
 
 docs/Plan.md
 docs/bltransformerPAPER.md

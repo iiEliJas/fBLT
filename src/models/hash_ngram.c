@@ -307,7 +307,7 @@ void blt_hash_ngram_backward(
             uint64_t hash = blt_rolling_hash_update(&state, bytes[i]);
             idx[i] = (hash == UINT64_MAX) ? BLT_IDX_SENTINEL : (uint32_t)hash;
         }
-        blt_indexed_row_scatter_add(&grad_tables[n_idx], idx, grad_out, scale);
+        blt_indexed_row_scatter_add_normalized(grad_tables[n_idx].backend, &grad_tables[n_idx], idx, grad_out, scale);
     }
     free(idx);
     free(bytes_stage);

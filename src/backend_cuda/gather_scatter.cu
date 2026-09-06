@@ -159,6 +159,71 @@ extern "C" void blt_indexed_row_scatter_add_cuda(const blt_tensor* grad_table, c
     blt_cuda_launch_check("blt_indexed_row_scatter_add");
 }
 
+__global__ void blt_indexed_row_scatter_add_normalized_count_kernel(
+        unsigned int* counts, const unsigned int* idx, size_t rows) {
+    for (size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x; i < rows;
+         i += (size_t)gridDim.x * blockDim.x) {
+        const unsigned int id = idx[i];
+        if (id == BLT_IDX_SENTINEL) continue;
+        atomicAdd(&counts[id], 1u);
+    }
+}
+
+__global__ void blt_indexed_row_scatter_add_normalized_kernel(
+        float* grad_table, const unsigned int* idx, const unsigned int* counts,
+        const float* grad_out, size_t rows, size_t embed_dim, float scale) {
+    const size_t work = rows * embed_dim;
+    for (size_t pos = (size_t)blockIdx.x * blockDim.x + threadIdx.x; pos < work;
+         pos += (size_t)gridDim.x * blockDim.x) {
+        const size_t i = pos / embed_dim;
+        const unsigned int id = idx[i];
+        if (id == BLT_IDX_SENTINEL) continue;
+        const unsigned int count = counts[id];
+        if (count == 0) continue;
+        const float inv_count = 1.0f / (float)count;
+        atomicAdd(&grad_table[(size_t)id * embed_dim + (pos % embed_dim)],
+                  scale * inv_count * grad_out[pos]);
+    }
+}
+
+extern "C" void blt_indexed_row_scatter_add_normalized_cuda(const blt_tensor* grad_table,
+                                                            const uint32_t* idx_host,
+                                                            const blt_tensor* grad_out,
+                                                            float scale) {
+    const size_t rows = grad_out->shape[0];
+    const size_t embed_dim = grad_out->shape[1];
+    const size_t table_rows = grad_table->shape[0];
+
+    for (size_t i = 0; i < rows; i++) {
+        BLT_REQUIRE(idx_host[i] == BLT_IDX_SENTINEL || idx_host[i] < table_rows,
+                    "blt_indexed_row_scatter_add_normalized: index out of range");
+    }
+
+    unsigned int* d_idx = (unsigned int*)blt_arena_alloc(blt_cuda_get_scratch_arena(),
+                                                         rows > 0 ? rows * sizeof(unsigned int) : 1, 4);
+    cudaError_t err = cudaSuccess;
+    blt_cuda_memcpy_h2d(d_idx, idx_host, rows * sizeof(unsigned int));
+
+    // Allocate and zero-fill a per-table-row count buffer
+    unsigned int* d_counts = (unsigned int*)blt_arena_alloc(blt_cuda_get_scratch_arena(),
+                                                            table_rows > 0 ? table_rows * sizeof(unsigned int) : 1, 4);
+    err = cudaMemset(d_counts, 0, table_rows * sizeof(unsigned int));
+    blt_cuda_launch_check("blt_indexed_row_scatter_add_normalized memset");
+
+    // Pass 1: count occurrences per table index
+    blt_indexed_row_scatter_add_normalized_count_kernel<<<blt_cuda_grid(rows), 256>>>(
+        d_counts, d_idx, rows);
+    err = cudaGetLastError();
+    blt_cuda_launch_check("blt_indexed_row_scatter_add_normalized count");
+
+    // Pass 2: scatter add with 1/count normalization
+    blt_indexed_row_scatter_add_normalized_kernel<<<blt_cuda_grid(rows * embed_dim), 256>>>(
+        (float*)grad_table->data, d_idx, d_counts,
+        (const float*)grad_out->data, rows, embed_dim, scale);
+    err = cudaGetLastError();
+    blt_cuda_launch_check("blt_indexed_row_scatter_add_normalized scatter");
+}
+
 __global__ void blt_rows_gather_kernel(const float* src, const size_t* pos, float* dst,
                                        size_t rows, size_t row_len) {
     const size_t work = rows * row_len;

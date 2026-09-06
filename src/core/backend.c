@@ -81,7 +81,9 @@ void blt_embedding_scatter_add_cpu(const blt_tensor* grad_table, const uint8_t* 
                                    const blt_tensor* grad_out);
 void blt_indexed_row_accumulate_cpu(const blt_tensor* table, const uint32_t* idx_host, blt_tensor* io);
 void blt_indexed_row_scatter_add_cpu(const blt_tensor* grad_table, const uint32_t* idx_host,
-                                     const blt_tensor* grad_out, float scale);
+                                      const blt_tensor* grad_out, float scale);
+void blt_indexed_row_scatter_add_normalized_cpu(const blt_tensor* grad_table, const uint32_t* idx_host,
+                                                const blt_tensor* grad_out, float scale);
 void blt_rows_gather_cpu(const blt_tensor* src, const size_t* pos_host, blt_tensor* dst);
 
 // row statistics
@@ -225,7 +227,9 @@ void blt_embedding_scatter_add_cuda(const blt_tensor* grad_table, const uint8_t*
                                     const blt_tensor* grad_out);
 void blt_indexed_row_accumulate_cuda(const blt_tensor* table, const uint32_t* idx_host, blt_tensor* io);
 void blt_indexed_row_scatter_add_cuda(const blt_tensor* grad_table, const uint32_t* idx_host,
-                                      const blt_tensor* grad_out, float scale);
+                                       const blt_tensor* grad_out, float scale);
+void blt_indexed_row_scatter_add_normalized_cuda(const blt_tensor* grad_table, const uint32_t* idx_host,
+                                                 const blt_tensor* grad_out, float scale);
 void blt_rows_gather_cuda(const blt_tensor* src, const size_t* pos_host, blt_tensor* dst);
 
 // row statistics
@@ -567,6 +571,14 @@ void blt_indexed_row_scatter_add(const blt_tensor* grad_table, const uint32_t* i
     BLT_DISPATCH(grad_table,
         blt_indexed_row_scatter_add_cpu(grad_table, idx_host, grad_out, scale),
         blt_indexed_row_scatter_add_cuda(grad_table, idx_host, grad_out, scale));
+}
+
+void blt_indexed_row_scatter_add_normalized(blt_backend backend, const blt_tensor* grad_table,
+                                            const uint32_t* idx_host, const blt_tensor* grad_out,
+                                            float scale) {
+    BLT_DISPATCH_BACKEND(backend,
+        blt_indexed_row_scatter_add_normalized_cpu(grad_table, idx_host, grad_out, scale),
+        blt_indexed_row_scatter_add_normalized_cuda(grad_table, idx_host, grad_out, scale));
 }
 
 void blt_rows_gather(const blt_tensor* src, const size_t* pos_host, blt_tensor* dst) {

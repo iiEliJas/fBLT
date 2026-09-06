@@ -1,6 +1,7 @@
 #include "blt/ops/gather_scatter.h"
 #include "blt/core/backend.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 // CPU reference implementations: straight indexed copies / accumulations in
@@ -85,6 +86,41 @@ void blt_indexed_row_scatter_add_cpu(const blt_tensor* grad_table, const uint32_
             row[d] += scale * src[d];
         }
     }
+}
+
+void blt_indexed_row_scatter_add_normalized_cpu(const blt_tensor* grad_table, const uint32_t* idx_host,
+                                                const blt_tensor* grad_out, float scale) {
+    BLT_REQUIRE(grad_table->backend == BLT_BACKEND_CPU && grad_out->backend == BLT_BACKEND_CPU,
+                "blt_indexed_row_scatter_add_normalized: CPU implementation called with non-CPU tensors");
+    const size_t rows = grad_out->shape[0];
+    const size_t embed_dim = grad_out->shape[1];
+    BLT_REQUIRE(grad_table->shape[1] == embed_dim, "blt_indexed_row_scatter_add_normalized: embed_dim mismatch");
+
+    float* g = (float*)grad_table->data;
+    const float* go = (const float*)grad_out->data;
+
+    const size_t table_rows = grad_table->shape[0];
+    size_t* counts = (size_t*)calloc(table_rows, sizeof(size_t));
+    BLT_REQUIRE(counts != NULL, "blt_indexed_row_scatter_add_normalized: allocation failed");
+
+    for (size_t i = 0; i < rows; i++) {
+        if (idx_host[i] == BLT_IDX_SENTINEL) continue;
+        BLT_REQUIRE(idx_host[i] < table_rows, "blt_indexed_row_scatter_add_normalized: index out of range");
+        counts[idx_host[i]]++;
+    }
+
+    for (size_t i = 0; i < rows; i++) {
+        if (idx_host[i] == BLT_IDX_SENTINEL) continue;
+        const size_t idx = idx_host[i];
+        const float inv_count = 1.0f / (float)counts[idx];
+        float* row = g + idx * embed_dim;
+        const float* src = go + i * embed_dim;
+        for (size_t d = 0; d < embed_dim; d++) {
+            row[d] += scale * inv_count * src[d];
+        }
+    }
+
+    free(counts);
 }
 
 void blt_rows_gather_cpu(const blt_tensor* src, const size_t* pos_host, blt_tensor* dst) {
