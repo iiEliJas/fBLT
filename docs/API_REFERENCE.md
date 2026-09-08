@@ -54,6 +54,21 @@
   - Input: tensor pointer.
   - Behavior: fills the tensor's storage with zeros. Note: tensors created via `blt_tensor_create` are already zero-initialized.
 
+### Deterministic Mode
+
+```c
+extern int g_blt_deterministic;
+```
+
+Global runtime flag for bit-reproducible CUDA training. When nonzero:
+
+- `blt_embedding_scatter_add`, `blt_indexed_row_scatter_add`, and `blt_indexed_row_scatter_add_normalized` dispatch to single-threaded deterministic kernels (`<<<1,1>>>`) instead of parallel atomicAdd variants.
+- cuBLAS handle is configured with `CUBLAS_PEDANTIC_MATH` for deterministic parallel reduction.
+
+CLI flag: `--deterministic` (no argument, boolean).
+
+CPU backend is always deterministic; this flag is a no-op on CPU. Single-GPU only — not validated for multi-GPU/NCCL.
+
 
 ### blt/core/backend.h
 - `BLT_FATAL(msg)` macro

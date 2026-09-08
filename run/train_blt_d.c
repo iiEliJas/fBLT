@@ -102,6 +102,7 @@ typedef struct {
     const char* batch_log;           // log batch properties every step
     size_t eval_every;               // run causal BPB eval every N steps (0 = disabled)
     const char* loss_log;            // write per-step loss to FILE
+    int deterministic;               // single-GPU bit-reproducible training
 } args_t;
 
 
@@ -922,7 +923,7 @@ int main(int argc, char** argv) {
                  .max_norm = 5.0f, .grad_norm_log = NULL,
                  .update_norm_log = NULL, .component_norm_log = NULL,
                  .activation_dump_log = NULL, .batch_log = NULL,
-                 .eval_every = 0 };
+                 .eval_every = 0, .deterministic = 0 };
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--corpus") && i + 1 < argc) a.corpus_path = argv[++i];
@@ -1015,9 +1016,19 @@ int main(int argc, char** argv) {
             a.batch_log = argv[++i];
         else if (!strcmp(argv[i], "--loss-log") && i + 1 < argc)
             a.loss_log = argv[++i];
+        else if (!strcmp(argv[i], "--deterministic"))
+            a.deterministic = 1;
         else { usage(); return 1; }
     }
     if (a.corpus_path == NULL) { usage(); return 1; }
+
+    // --deterministic guardrails
+    if (a.deterministic) {
+#if defined(BLT_WITH_CUDA)
+        fprintf(stderr, "deterministic mode: single-threaded scatter_add + pedantic cuBLAS, expect ~3-10x slowdown, not for production training\n");
+#endif
+        // CPU backend is always deterministic; flag is a no-op there.
+    }
 
     // Load corpus
     FILE* fp = fopen(a.corpus_path, "rb");
@@ -1052,6 +1063,7 @@ int main(int argc, char** argv) {
         a.use_cuda = 0;
     }
     const blt_backend dev = a.use_cuda ? BLT_BACKEND_CUDA : BLT_BACKEND_CPU;
+    g_blt_deterministic = a.deterministic;
 
     blt_arena* model_arena = blt_arena_create(
         a.use_cuda ? 1024ULL * 1024 * 1024 : 64 * 1024 * 1024, dev);

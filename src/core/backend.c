@@ -18,6 +18,7 @@
 #include "blt/ops/cast.h"
 #include "blt/core/tensor.h"
 #include "blt/core/cuda_shim.h"
+int g_blt_deterministic = 0;
 // ------------------------------------------------------------
 // CPU Implementation Declarations
 

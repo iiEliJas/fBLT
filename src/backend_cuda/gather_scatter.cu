@@ -2,6 +2,7 @@
 #include "blt/core/backend.h"
 #include "blt/core/cuda_shim.h"
 #include "blt/core/allocator.h"
+#include "blt/core/tensor.h"
 
 #include <cuda_runtime.h>
 #include <stdlib.h>
@@ -23,6 +24,60 @@ static unsigned blt_cuda_grid(size_t n) {
     size_t blocks = (n + block - 1) / block;
     if (blocks > 4096) blocks = 4096;
     return (unsigned)(blocks > 0 ? blocks : 1);
+}
+
+// Deterministic (single-threaded) scatter-add kernels, selected at runtime
+// when g_blt_deterministic is set. Same accumulation order as CPU path.
+
+__global__ void blt_embedding_scatter_add_det_kernel(float* grad_table,
+                                                     const unsigned char* ids, const float* grad_out,
+                                                     size_t seq_len, size_t embed_dim) {
+    for (size_t i = 0; i < seq_len; i++) {
+        const size_t row = (size_t)ids[i];
+        float* dst = grad_table + row * embed_dim;
+        const float* src = grad_out + i * embed_dim;
+        for (size_t d = 0; d < embed_dim; d++)
+            dst[d] += src[d];
+    }
+}
+
+__global__ void blt_indexed_row_scatter_add_det_kernel(float* grad_table,
+                                                       const unsigned int* idx, const float* grad_out,
+                                                       size_t rows, size_t embed_dim, float scale) {
+    for (size_t i = 0; i < rows; i++) {
+        const unsigned int id = idx[i];
+        if (id == BLT_IDX_SENTINEL) continue;
+        float* dst = grad_table + (size_t)id * embed_dim;
+        const float* src = grad_out + i * embed_dim;
+        for (size_t d = 0; d < embed_dim; d++)
+            dst[d] += scale * src[d];
+    }
+}
+
+__global__ void blt_indexed_row_scatter_add_normalized_count_det_kernel(
+        unsigned int* counts, const unsigned int* idx, size_t rows) {
+    for (size_t i = 0; i < rows; i++) {
+        const unsigned int id = idx[i];
+        if (id == BLT_IDX_SENTINEL) continue;
+        counts[id]++;
+    }
+}
+
+__global__ void blt_indexed_row_scatter_add_normalized_det_kernel(float* grad_table,
+                                                                  const unsigned int* idx, const unsigned int* counts,
+                                                                  const float* grad_out,
+                                                                  size_t rows, size_t embed_dim, float scale) {
+    for (size_t i = 0; i < rows; i++) {
+        const unsigned int id = idx[i];
+        if (id == BLT_IDX_SENTINEL) continue;
+        const unsigned int count = counts[id];
+        if (count == 0) continue;
+        const float inv_count = 1.0f / (float)count;
+        float* dst = grad_table + (size_t)id * embed_dim;
+        const float* src = grad_out + i * embed_dim;
+        for (size_t d = 0; d < embed_dim; d++)
+            dst[d] += scale * inv_count * src[d];
+    }
 }
 
 __global__ void blt_embedding_lookup_kernel(const float* table, size_t table_rows,
@@ -82,11 +137,15 @@ extern "C" void blt_embedding_scatter_add_cuda(const blt_tensor* grad_table, con
                                                            seq_len > 0 ? seq_len : 1, 1);
     cudaError_t err = cudaSuccess;
     blt_cuda_memcpy_h2d(d_ids, ids_host, seq_len);
-    // Duplicate byte values accumulate via atomics here; the CPU path is
-    // order-deterministic, so results agree within fp32 tolerance.
-    blt_embedding_scatter_add_kernel<<<blt_cuda_grid(seq_len * embed_dim), 256>>>(
-        (float*)grad_table->data, grad_table->shape[0], d_ids,
-        (const float*)grad_out->data, seq_len, embed_dim);
+    if (g_blt_deterministic) {
+        blt_embedding_scatter_add_det_kernel<<<1, 1>>>(
+            (float*)grad_table->data, d_ids,
+            (const float*)grad_out->data, seq_len, embed_dim);
+    } else {
+        blt_embedding_scatter_add_kernel<<<blt_cuda_grid(seq_len * embed_dim), 256>>>(
+            (float*)grad_table->data, grad_table->shape[0], d_ids,
+            (const float*)grad_out->data, seq_len, embed_dim);
+    }
     err = cudaGetLastError();
     blt_cuda_launch_check("blt_embedding_scatter_add");
 }
@@ -152,9 +211,15 @@ extern "C" void blt_indexed_row_scatter_add_cuda(const blt_tensor* grad_table, c
                                                          rows > 0 ? rows * sizeof(unsigned int) : 1, 4);
     cudaError_t err = cudaSuccess;
     blt_cuda_memcpy_h2d(d_idx, idx_host, rows * sizeof(unsigned int));
-    blt_indexed_row_scatter_add_kernel<<<blt_cuda_grid(rows * embed_dim), 256>>>(
-        (float*)grad_table->data, grad_table->shape[0], d_idx,
-        (const float*)grad_out->data, rows, embed_dim, scale);
+    if (g_blt_deterministic) {
+        blt_indexed_row_scatter_add_det_kernel<<<1, 1>>>(
+            (float*)grad_table->data, d_idx,
+            (const float*)grad_out->data, rows, embed_dim, scale);
+    } else {
+        blt_indexed_row_scatter_add_kernel<<<blt_cuda_grid(rows * embed_dim), 256>>>(
+            (float*)grad_table->data, grad_table->shape[0], d_idx,
+            (const float*)grad_out->data, rows, embed_dim, scale);
+    }
     err = cudaGetLastError();
     blt_cuda_launch_check("blt_indexed_row_scatter_add");
 }
@@ -210,18 +275,33 @@ extern "C" void blt_indexed_row_scatter_add_normalized_cuda(const blt_tensor* gr
     err = cudaMemset(d_counts, 0, table_rows * sizeof(unsigned int));
     blt_cuda_launch_check("blt_indexed_row_scatter_add_normalized memset");
 
-    // Pass 1: count occurrences per table index
-    blt_indexed_row_scatter_add_normalized_count_kernel<<<blt_cuda_grid(rows), 256>>>(
-        d_counts, d_idx, rows);
-    err = cudaGetLastError();
-    blt_cuda_launch_check("blt_indexed_row_scatter_add_normalized count");
+    if (g_blt_deterministic) {
+        // Single-threaded count pass
+        blt_indexed_row_scatter_add_normalized_count_det_kernel<<<1, 1>>>(
+            d_counts, d_idx, rows);
+        err = cudaGetLastError();
+        blt_cuda_launch_check("blt_indexed_row_scatter_add_normalized count (det)");
 
-    // Pass 2: scatter add with 1/count normalization
-    blt_indexed_row_scatter_add_normalized_kernel<<<blt_cuda_grid(rows * embed_dim), 256>>>(
-        (float*)grad_table->data, d_idx, d_counts,
-        (const float*)grad_out->data, rows, embed_dim, scale);
-    err = cudaGetLastError();
-    blt_cuda_launch_check("blt_indexed_row_scatter_add_normalized scatter");
+        // Single-threaded scatter pass
+        blt_indexed_row_scatter_add_normalized_det_kernel<<<1, 1>>>(
+            (float*)grad_table->data, d_idx, d_counts,
+            (const float*)grad_out->data, rows, embed_dim, scale);
+        err = cudaGetLastError();
+        blt_cuda_launch_check("blt_indexed_row_scatter_add_normalized scatter (det)");
+    } else {
+        // Pass 1: count occurrences per table index
+        blt_indexed_row_scatter_add_normalized_count_kernel<<<blt_cuda_grid(rows), 256>>>(
+            d_counts, d_idx, rows);
+        err = cudaGetLastError();
+        blt_cuda_launch_check("blt_indexed_row_scatter_add_normalized count");
+
+        // Pass 2: scatter add with 1/count normalization
+        blt_indexed_row_scatter_add_normalized_kernel<<<blt_cuda_grid(rows * embed_dim), 256>>>(
+            (float*)grad_table->data, d_idx, d_counts,
+            (const float*)grad_out->data, rows, embed_dim, scale);
+        err = cudaGetLastError();
+        blt_cuda_launch_check("blt_indexed_row_scatter_add_normalized scatter");
+    }
 }
 
 __global__ void blt_rows_gather_kernel(const float* src, const size_t* pos, float* dst,

@@ -75,4 +75,5 @@ int run_blt_model_overfit(void);
 int run_flops_hand_derived_test(void);
 int run_flops_patch_size_scaling_test(void);
 int run_bf16_cast_tests(void);
+int run_deterministic_regression_test(void);
 #endif // BLT_TEST_SUITE_H

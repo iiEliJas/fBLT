@@ -1,5 +1,6 @@
 #include "blt/core/backend.h"
 #include "blt/ops/matmul.h"
+#include "blt/core/tensor.h"
 
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
@@ -16,6 +17,9 @@ static cublasHandle_t blt_cublas_handle(void) {
     if (!handle) {
         if (cublasCreate(&handle) != CUBLAS_STATUS_SUCCESS) {
             BLT_FATAL("blt_matmul: cublasCreate failed");
+        }
+        if (g_blt_deterministic) {
+            cublasSetMathMode(handle, CUBLAS_PEDANTIC_MATH);
         }
     }
     return handle;

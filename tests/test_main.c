@@ -36,6 +36,7 @@ int main(void) {
         {"optimizer backend", run_optim_backend_tests},
         {"mask builder backend", run_mask_builder_backend_tests},
         {"bf16 cast", run_bf16_cast_tests},  
+        {"deterministic regression", run_deterministic_regression_test},
     };
 
     const test_case model_tests[] = {

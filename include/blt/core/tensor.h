@@ -17,6 +17,12 @@ typedef enum {
     BLT_BACKEND_CUDA = 1
 } blt_backend;
 
+// Runtime flag: when nonzero, CUDA dispatches single-threaded deterministic
+// scatter_add kernels and sets CUBLAS_PEDANTIC_MATH. CPU backend is always
+// deterministic; this flag has no effect there. Single-GPU only -- not
+// validated for multi-GPU/NCCL.
+extern int g_blt_deterministic;
+
 typedef struct {
     void* data;
     size_t shape[BLT_MAX_NDIM];
