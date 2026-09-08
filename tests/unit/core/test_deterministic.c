@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include "test_helpers.h"
 
 // Regression test: run the training binary twice with --deterministic and
@@ -8,6 +9,16 @@
 // nondeterminism reintroduced by future changes.
 
 int run_deterministic_regression_test(void) {
+    // Skip if the training binary or corpus is not available
+    if (access("./bin/train_blt_d", X_OK) != 0) {
+        fprintf(stderr, "  [SKIP] bin/train_blt_d not built; skipping deterministic test\n");
+        return 1;
+    }
+    if (access("data/train.bin", R_OK) != 0) {
+        fprintf(stderr, "  [SKIP] data/train.bin not found; skipping deterministic test\n");
+        return 1;
+    }
+
     // Use a small config: 200 steps, seed=7, deterministic
     const char* cmd1 =
         "./bin/train_blt_d --corpus data/train.bin --steps 200 --lr 0.05 "

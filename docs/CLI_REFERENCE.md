@@ -12,6 +12,7 @@ All commands assume the repo root as working directory. CUDA builds output to `b
 | `make CUDA=1 test` | Same, CUDA backend |
 | `make main` | Build minimal main (linking stub) |
 | `make CUDA=1 main` | Same, CUDA |
+| `make CUDA=1 train-blt-d` | Build `train_blt_d` |
 | `make sandbox` | Build + run scratch playground (`run/sandbox.c`) |
 | `make cuda-smoke` | Device sanity check (H2D → kernel → D2H) |
 | `make cuda-sanitize` | Run tests under `compute-sanitizer` (native Linux) |
@@ -37,6 +38,7 @@ All commands assume the repo root as working directory. CUDA builds output to `b
 | `--d0-mode MODE` | learned | `zeros` \| `learned` for decoder d0 embed |
 | `--seed S` | 7 | RNG seed |
 | `--report-every K` | 25 | Print frequency |
+| `--deterministic` | off | Deterministic training (slower, no cuda atomics) |
 
 ### Optimizer
 

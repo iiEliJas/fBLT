@@ -2,19 +2,11 @@
 
 Fast Byte Latent Transformer in pure C and CUDA. A byte-level language model with no tokenizer, built for code completion and small LLMs.
 
-**Status: CPU + CUDA complete.** Full pipeline on both backends: ops, models, training loop, and all three Fast-BLT inference modes (BLT-S / BLT-D / BLT-DV). 67/67 tests pass on both CPU and CUDA. Training and inference benchmarked at two scales (300k params and 3.5M params).
+**Status: CPU + CUDA complete.** Full pipeline on both backends: ops, models, training loop, and all three Fast-BLT inference modes (BLT-S / BLT-D / BLT-DV).Training and inference benchmarked at two scales (300k params and 3.5M params).
 
 Based on two papers from Meta:
 - [Byte Latent Transformer](https://arxiv.org/abs/2412.09871) - Direct byte modeling with entropy-based dynamic patching. Matches token-based LLM scaling, no vocabulary needed.
 - [Fast Byte Latent Transformer](https://arxiv.org/abs/2605.08044) - Faster inference via diffusion decoding and self-speculation.
-
-## Why no tokenizer?
-
-Tokenizers fix a vocabulary before training, which causes noise sensitivity, poor multilingual/low-resource behavior, and lost character information. The compute/quality tradeoff is baked in at the tokenizer level.
-
-FBLT works directly on bytes. **Entropy-based patching** allocates compute dynamically: predictable bytes get long patches (cheap), hard-to-predict bytes get short patches (more compute).
-
-Result: better scaling, robustness, and no vocabulary constraints.
 
 ## How it works
 
@@ -30,22 +22,15 @@ Five-stage pipeline:
 
 5. **Local Decoder** - tiny transformer that expands patches back to bytes autoregressively, with optional self-speculation
 
-## Design
-
-Pure C + CUDA.
-
-- **One interface, two backends.** Every op lives in a header, implemented once for CPU and once for CUDA. Model code is backend-agnostic.
-- **CPU is the ground truth.** Each op gets a C implementation first. CUDA versions validate against it.
-- **Config-driven.** All architecture options are JSON config values. (hash sizes, cross-attention placement, layer splits)
-
 ## Build
 
 ```bash
-make test       # build + run tests
-make main       # build main executable
-make info       # show build config
-make clean      # remove obj/, bin/
-make help       # show all targets
+make test         # build + run tests
+make train-blt-d  # build train_blt_d executable to train
+make main         # build main executable
+make info         # show build config
+make clean        # remove obj/, bin/
+make help         # show all targets
 ```
 
 Default is `gcc -O2 -std=c99 -Wall -Wextra`. Change it:

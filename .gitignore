@@ -29,6 +29,7 @@ opencode.json
 *.nsys-rep
 *.sqlite
 
+tmp/
 runs/
 data/raw/
 data/train.bin
