@@ -73,7 +73,9 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--t-min F` | 0.1 | Diffusion timestep floor |
-| `--lr-decay 0\|1` | 0 | ×0.3 at 60% and 85% of steps |
+| `--lr-decay 0\|1` | 0 | ×0.3 at 60% and 85% of steps (default schedule) |
+| `--lr-decay-steps LIST` | — | Comma-separated step numbers for custom decay points (overrides `--lr-decay`) |
+| `--lr-decay-factor F` | 0.3 | Multiplicative factor per custom decay point |
 | `--mask-warmup N` | 0 | Ramp L_mask scale 0→1 over N steps |
 | `--mask-scale F` | 1.0 | Ceiling for L_mask weight |
 | `--mask-late-step N` + `--mask-late-scale F` | 0 | Late ramp from mask_scale to mask_late_scale |

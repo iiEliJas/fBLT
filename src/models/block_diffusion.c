@@ -770,7 +770,7 @@ void blt_local_decoder_backward_diffusion(
         // Scatter block-row D0 gradients into the token table (dispatched).
         blt_tensor tailg;
         blt_tensor_view_2d(&tailg, (float*)dh.data + c.N * c.E, c.R, c.E, dh.backend);
-        blt_indexed_row_scatter_add_normalized(dh.backend, &grad->d0_embed_grad, batch->tokens, &tailg, 1.0f);
+        blt_indexed_row_scatter_add(&grad->d0_embed_grad, batch->tokens, &tailg, 1.0f);
     }
 
     // Reinterpret dP_split back as [num_patches, patch_dim]

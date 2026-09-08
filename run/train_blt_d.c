@@ -65,7 +65,10 @@ typedef struct {
                                 // training content; skip deep for honest
                                 // generalization numbers)
     float t_min;                // diffusion timestep floor (stabilizes 1/t)
-    int lr_decay;               // x0.3 at 60% and 85% of steps
+    int lr_decay;               // x0.3 at 60% and 85% of steps (default schedule)
+    size_t lr_decay_steps[16];  // custom decay step positions (0 = unused)
+    int lr_decay_count;         // number of custom decay points
+    float lr_decay_factor;      // factor per custom decay point (default 0.3)
     size_t mask_warmup;         // ramp L_mask scale 0->1 over this many steps
     float mask_scale;           // ceiling for the L_mask weight (1.0 = paper Eq. 7)
     const char* train_entlm;    // train the entropy LM (plain CE) and
@@ -911,7 +914,8 @@ int main(int argc, char** argv) {
                  .diffusion = 1, .eval_path = NULL, .eval_windows = 200,
                  .save_path = NULL, .load_path = NULL,
                  .eval_skip = 0,
-                 .t_min = 0.1f, .lr_decay = 0, .mask_warmup = 0,
+                 .t_min = 0.1f, .lr_decay = 0, .lr_decay_count = 0,
+                 .lr_decay_factor = 0.3f, .mask_warmup = 0,
                  .mask_scale = 1.0f, .mask_late_step = 0,
                  .mask_late_scale = 1.0f, .entropy_patches = 0,
                  .train_entlm = NULL, .entropy_lm = NULL,
@@ -923,7 +927,7 @@ int main(int argc, char** argv) {
                  .max_norm = 5.0f, .grad_norm_log = NULL,
                  .update_norm_log = NULL, .component_norm_log = NULL,
                  .activation_dump_log = NULL, .batch_log = NULL,
-                 .eval_every = 0, .deterministic = 0 };
+                 .eval_every = 0, .loss_log = NULL, .deterministic = 0 };
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--corpus") && i + 1 < argc) a.corpus_path = argv[++i];
@@ -952,6 +956,16 @@ int main(int argc, char** argv) {
             a.eval_every = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--t-min") && i + 1 < argc) a.t_min = atof(argv[++i]);
         else if (!strcmp(argv[i], "--lr-decay") && i + 1 < argc) a.lr_decay = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--lr-decay-steps") && i + 1 < argc) {
+            // comma-separated list of step numbers, e.g. "3000" or "2000,4000,6000"
+            char* tok = strtok(argv[++i], ",");
+            while (tok && a.lr_decay_count < 16) {
+                a.lr_decay_steps[a.lr_decay_count++] = strtoull(tok, NULL, 10);
+                tok = strtok(NULL, ",");
+            }
+        }
+        else if (!strcmp(argv[i], "--lr-decay-factor") && i + 1 < argc)
+            a.lr_decay_factor = atof(argv[++i]);
         else if (!strcmp(argv[i], "--mask-warmup") && i + 1 < argc)
             a.mask_warmup = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--mask-scale") && i + 1 < argc)
@@ -1475,7 +1489,12 @@ int main(int argc, char** argv) {
         }
 
         float lr = a.lr;
-        if (a.lr_decay) {
+        if (a.lr_decay_count > 0) {
+            // custom decay: multiply by factor for each decay step passed
+            for (int d = 0; d < a.lr_decay_count; d++) {
+                if (step >= a.lr_decay_steps[d]) lr *= a.lr_decay_factor;
+            }
+        } else if (a.lr_decay) {
             if (step >= (a.steps * 85) / 100) lr *= 0.09f;
             else if (step >= (a.steps * 60) / 100) lr *= 0.3f;
         }
