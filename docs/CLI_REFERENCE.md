@@ -35,6 +35,7 @@ All commands assume the repo root as working directory. CUDA builds output to `b
 | `--embed E` | 64 | Model width |
 | `--hidden H` | 128 | FFN width |
 | `--layers L` | 2 | Layers per submodule (encoder/global/decoder) |
+| `--max-norm F` | 5.0 | Global gradient clip threshold |
 | `--d0-mode MODE` | learned | `zeros` \| `learned` for decoder d0 embed |
 | `--seed S` | 7 | RNG seed |
 | `--report-every K` | 25 | Print frequency |
@@ -67,6 +68,7 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 | `--eval-corpus FILE` | Held-out corpus for causal BPB eval |
 | `--eval-windows N` | Eval window count (default 200) |
 | `--eval-skip N` | Bytes to skip before first eval window |
+| `--eval-every N` | Run causal BPB eval every N steps (default 0, disabled) |
 
 ### Diffusion Schedule
 
@@ -79,7 +81,7 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 | `--mask-warmup N` | 0 | Ramp L_mask scale 0→1 over N steps |
 | `--mask-scale F` | 1.0 | Ceiling for L_mask weight |
 | `--mask-late-step N` + `--mask-late-scale F` | 0 | Late ramp from mask_scale to mask_late_scale |
-| `--t-warmup-hi F` + `--t-hi-start F` | 0 | High-t curriculum |
+| `--t-warmup-hi F` + `--t-hi-start F` | 0 + 0.8 | High-t curriculum (fraction + start floor) |
 
 ### Patching
 
@@ -103,6 +105,17 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 | `--glob-layers N` | Global transformer layers |
 | `--dec-layers N` | Decoder layers |
 | `--cross-attn all\|last` | Cross-attention placement (default all) |
+
+### Logging (diagnostic, all optional)
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--grad-norm-log FILE` | (none) | Write pre-clip gradient norms per step |
+| `--update-norm-log FILE` | (none) | Write post-clip update norms at spike steps |
+| `--component-norm-log FILE` | (none) | Write per-component gradient norms per step |
+| `--activation-dump-log FILE` | (none) | Log activation stats every report-every steps |
+| `--batch-log FILE` | (none) | Log batch properties per step |
+| `--loss-log FILE` | (none) | Write per-step loss |
 
 ---
 

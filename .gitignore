@@ -21,6 +21,7 @@ AGENTS.md
 docs/HANDOFF_RESET.md
 compile_commands.json
 .opencode/
+.omo/
 opencode.json
 
 *.nsys-rep
@@ -28,6 +29,7 @@ opencode.json
 
 tmp/
 reports/
+scripts/
 runs/
 data/raw/
 data/train.bin
