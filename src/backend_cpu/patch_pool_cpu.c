@@ -1,7 +1,5 @@
 #include "blt/ops/patch_pool.h"
 
-
-
 void blt_patch_pool_forward_cpu(const blt_tensor* byte_hidden, const blt_patch_info* patches, size_t num_patches,
                             blt_patch_pool_type pool_type, blt_tensor* out){
 
@@ -37,8 +35,7 @@ void blt_patch_pool_forward_cpu(const blt_tensor* byte_hidden, const blt_patch_i
             }
             const float inv_len = 1.0f / (float)len;
             for (size_t d = 0; d < embed_dim; d++) dst[d] *= inv_len;
-        } else // BLT_POOL_MAX
-        { 
+        } else { // BLT_POOL_MAX
             memcpy(dst, src0, embed_dim * sizeof(float));
             for (size_t i = 1; i < len; i++) {
                 const float* src = src0 + i * embed_dim;
@@ -48,8 +45,6 @@ void blt_patch_pool_forward_cpu(const blt_tensor* byte_hidden, const blt_patch_i
         }
     }
 }
-
-
 
 void blt_patch_pool_backward_cpu(const blt_tensor* grad_out, const blt_tensor* byte_hidden, const blt_patch_info* patches, size_t num_patches,
                              blt_patch_pool_type pool_type, blt_tensor* grad_byte_hidden){
@@ -88,8 +83,7 @@ void blt_patch_pool_backward_cpu(const blt_tensor* grad_out, const blt_tensor* b
                 for (size_t d = 0; d < embed_dim; d++)
                     dst[d] += gj[d] * inv_len;
             }
-        } else // BLT_POOL_MAX - recompute argmax per channel
-        { 
+        } else { // BLT_POOL_MAX - recompute argmax per channel
             for (size_t d = 0; d < embed_dim; d++) {
                 size_t argmax = start;
                 float best = h[start * embed_dim + d];
@@ -102,8 +96,6 @@ void blt_patch_pool_backward_cpu(const blt_tensor* grad_out, const blt_tensor* b
         }
     }
 }
-
-
 
 void blt_patch_build_group_ids(const blt_patch_info* patches, size_t num_patches, size_t seq_len,
                                size_t* query_group_ids_out, size_t* kv_group_ids_out) {
@@ -126,8 +118,6 @@ void blt_patch_build_group_ids(const blt_patch_info* patches, size_t num_patches
     BLT_REQUIRE(pos == seq_len,
                 "patch_group_ids: patches do not cover [0, seq_len) exactly");
 }
-
-
 
 void blt_patch_expand_group_ids(const size_t* group_ids_in, size_t n, size_t k,
                                 size_t* group_ids_out) {

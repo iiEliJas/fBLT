@@ -10,10 +10,6 @@
 #include "blt/ops/cast.h"
 
 
-
-//----------------------------------------------------------------------
-// Mixed-precision helpers
-
 blt_transformer_weights_bf16 blt_transformer_layer_bf16_view(
     const blt_transformer_layer_storage* s, int use_bf16
 ) {
@@ -34,11 +30,6 @@ void blt_mixed_weight_refresh(blt_tensor* bf16_copy, const blt_tensor* fp32_mast
         "blt_mixed_weight_refresh: bf16_copy and fp32_master must have same numel");
     blt_cast(fp32_master, bf16_copy);
 }
-
-
-
-//----------------------------------------------------------------------
-// Init / grad create
 
 void blt_transformer_stack_init(
     blt_arena* arena, blt_transformer_stack* stack,
@@ -92,7 +83,6 @@ void blt_transformer_stack_init(
     stack->layer_config.use_bf16 = config->use_bf16;
     stack->use_bf16 = config->use_bf16;
 
-    // Per-layer weights.
     stack->layer_storage = (blt_transformer_layer_storage*)blt_container_alloc(arena, config->num_layers * sizeof(blt_transformer_layer_storage));
     stack->layer_weights = (blt_transformer_weights*)blt_container_alloc(arena, config->num_layers * sizeof(blt_transformer_weights));
 
@@ -122,7 +112,6 @@ void blt_transformer_stack_init(
         size_t ffn_down_shape[2] = { hidden_dim, embed_dim };
         s->ffn_down_w = blt_tensor_create(arena, ffn_down_shape, 2, BLT_DTYPE_FP32);
 
-        // bf16 copies (same shapes, bf16 dtype)
         if (config->use_bf16) {
             s->attn_qkv_w_bf16  = blt_tensor_create(arena, qkv_shape, 2, BLT_DTYPE_BF16);
             s->attn_proj_w_bf16 = blt_tensor_create(arena, proj_shape, 2, BLT_DTYPE_BF16);
@@ -188,11 +177,6 @@ blt_transformer_stack_grad* blt_transformer_stack_grad_create(
     return grad;
 }
 
-
-
-//----------------------------------------------------------------------
-// Per-call config helper
-
 blt_transformer_config blt_transformer_stack_call_config(
     const blt_transformer_stack* stack, size_t seq_len,
     blt_tensor* cos_view, blt_tensor* sin_view
@@ -212,13 +196,7 @@ blt_transformer_config blt_transformer_stack_call_config(
     return cfg;
 }
 
-
-
-//----------------------------------------------------------------------
-// forward (no caching)
-
-// Build a weights view that points to bf16 copies for matmul ops,
-// keeping norm weights as fp32 (norms are not bf16-accelerated).
+// norm weights stay fp32 — bf16 only accelerates matmul
 static blt_transformer_weights bf16_weights_view(
     const blt_transformer_weights* w,
     const blt_transformer_weights_bf16* w_bf16
@@ -256,15 +234,8 @@ void blt_transformer_stack_forward(
     *out = cur;
 }
 
-
-
-//----------------------------------------------------------------------
-// Cached forward + backward
-//
-// Mirrors forward call order in reverse, reusing backward for every op.
-// blt_transformer_forward doesnt save intermediates, so every layers
-// forward gets recomputed here
-
+// Forward recomputes every layer's intermediates here since
+// blt_transformer_forward doesn't save them.
 struct blt_transformer_layer_cache {
     blt_tensor x_in;           // layer input
     blt_tensor norm1_out;
@@ -298,9 +269,6 @@ blt_transformer_layer_cache* blt_transformer_layer_forward_cached(
 
     cache->x_in = *x;
 
-
-    // ----------------
-    // pre-norm + attention with residual
     cache->norm1_out = blt_tensor_create(arena, embed_shape, 2, BLT_DTYPE_FP32);
     blt_rmsnorm_forward(x, w->norm1_weight, &cache->norm1_out);
 
@@ -311,9 +279,6 @@ blt_transformer_layer_cache* blt_transformer_layer_forward_cached(
     cache->attn_residual = blt_tensor_create(arena, embed_shape, 2, BLT_DTYPE_FP32);
     blt_add(x, &cache->attn_out, &cache->attn_residual);
 
-
-    // ----------------
-    // pre-norm + FFN with residual
     cache->norm2_out = blt_tensor_create(arena, embed_shape, 2, BLT_DTYPE_FP32);
     blt_rmsnorm_forward(&cache->attn_residual, w->norm2_weight, &cache->norm2_out);
 
@@ -349,9 +314,6 @@ void blt_transformer_layer_backward(
     size_t embed_shape[2] = { seq_len, embed_dim };
     size_t hidden_shape[2] = { seq_len, hidden_dim };
 
-
-    // ----------------
-    // layer_out = attn_residual + ffn_out -> backward through matmul
     blt_tensor grad_ffn_activated = blt_tensor_create(arena, hidden_shape, 2, BLT_DTYPE_FP32);
     blt_matmul_backward(&cache->ffn_activated, w->ffn_down_w, grad_out,
                          &grad_ffn_activated, &lg->ffn_down_w);
@@ -373,16 +335,9 @@ void blt_transformer_layer_backward(
     blt_rmsnorm_backward(&grad_norm2_out, &cache->attn_residual, w->norm2_weight,
                           &grad_attn_residual_from_norm2, &lg->norm2_weight);
 
-
-    // ----------------
-    // attn_residual = x_in + attn_out
-    // received grad_out directly and grad_attn_residual_from_norm2 -> sum both
     blt_tensor grad_attn_residual = blt_tensor_create(arena, embed_shape, 2, BLT_DTYPE_FP32);
     blt_add(grad_out, &grad_attn_residual_from_norm2, &grad_attn_residual);
 
-
-    // ----------------
-    // both x_in and attn_out receive grad_attn_residual directly
     blt_tensor grad_norm1_out = blt_tensor_create(arena, embed_shape, 2, BLT_DTYPE_FP32);
     blt_multihead_attention_backward(&cache->norm1_out, w->attn_qkv_w, w->attn_proj_w,
                                       &grad_attn_residual, &grad_norm1_out,
@@ -395,8 +350,6 @@ void blt_transformer_layer_backward(
     *grad_x = blt_tensor_create(arena, embed_shape, 2, BLT_DTYPE_FP32);
     blt_add(&grad_attn_residual, &grad_x_from_norm1, grad_x);
 }
-
-
 
 blt_transformer_stack_cache* blt_transformer_stack_forward_cached(
     const blt_transformer_stack* stack, const blt_tensor* x,
@@ -428,8 +381,6 @@ blt_transformer_stack_cache* blt_transformer_stack_forward_cached(
     *out = cur;
     return cache;
 }
-
-
 
 void blt_transformer_stack_backward(
     const blt_transformer_stack* stack, const blt_transformer_stack_cache* cache,

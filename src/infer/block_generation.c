@@ -7,7 +7,7 @@
 #include "blt/core/backend.h"
 #include "blt/infer/self_speculation.h"
 
-// splitmix64 stream shared by top-p sampling (deterministic per seed).
+// splitmix64 — deterministic PRNG for top-p sampling.
 static uint64_t rng_next(uint64_t* state) {
     *state += 0x9E3779B97F4A7C15ULL;
     uint64_t z = *state;
@@ -15,10 +15,6 @@ static uint64_t rng_next(uint64_t* state) {
     z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
     return z ^ (z >> 31);
 }
-
-//----------------------------------------------------------------------
-// Selection kernels (section 3.1.2)
-//----------------------------------------------------------------------
 
 uint32_t blt_unmask_select_confidence(const float* scores,
                                       const uint8_t* masked, size_t B,
@@ -37,7 +33,6 @@ uint32_t blt_unmask_select_confidence(const float* scores,
 uint32_t blt_unmask_select_eb(const float* scores,
                               const uint8_t* masked, size_t B,
                               float gamma) {
-    // Ascending-entropy order via insertion sort over masked indices.
     size_t order[32];
     size_t n = 0;
     for (size_t b = 0; b < B; b++) {
@@ -51,7 +46,7 @@ uint32_t blt_unmask_select_eb(const float* scores,
     }
     if (n == 0) return 0;
 
-    // Largest prefix with cumulative entropy <= gamma; fallback to the
+    // Largest prefix with cumulative entropy <= gamma; falls back to the
     // single lowest-entropy cell when even that exceeds the budget.
     uint32_t sel = 0;
     float cum = 0.0f;
@@ -65,10 +60,6 @@ uint32_t blt_unmask_select_eb(const float* scores,
     if (sel == 0) sel = (uint32_t)1u << order[0];
     return sel;
 }
-
-//----------------------------------------------------------------------
-// Row statistics + prediction sampling over one logits row
-//----------------------------------------------------------------------
 
 typedef struct {
     float p_max;
@@ -92,7 +83,6 @@ static void row_analyze(const float* row, size_t V, float temperature_scale_unus
     out->entropy = (float)H;
 }
 
-// Greedy argmax over a logits row.
 static uint8_t row_argmax(const float* row, size_t V) {
     size_t best = 0;
     float bv = row[0];
@@ -102,10 +92,9 @@ static uint8_t row_argmax(const float* row, size_t V) {
     return (uint8_t)best;
 }
 
-// Sample from the top-p nucleus of a softmaxed logits row.
 static uint8_t row_sample_top_p(const float* row, size_t V, float top_p,
                                 uint64_t* rng) {
-    // Sort indices by descending probability (insertion sort, V <= 512).
+    // Insertion sort by descending probability — fine for V <= 512.
     size_t idx[512];
     double p[512];
     float mx = row[0];
@@ -136,10 +125,6 @@ static uint8_t row_sample_top_p(const float* row, size_t V, float top_p,
     return (uint8_t)idx[nucleus];
 }
 
-//----------------------------------------------------------------------
-// Adaptive-B rule (rolling acceptance -> next block size)
-//----------------------------------------------------------------------
-
 size_t blt_block_adapt_b(size_t cur_b, double rolling_acceptance,
                          size_t b_min, size_t b_max, float target) {
     if (b_max == 0 || b_max < b_min) return cur_b;
@@ -155,10 +140,6 @@ size_t blt_block_adapt_b(size_t cur_b, double rolling_acceptance,
     }
     return b;
 }
-
-//----------------------------------------------------------------------
-// blt_draft_block: Algorithm 1 inner loop
-//----------------------------------------------------------------------
 
 #define BLT_BLOCKGEN_MAX_B 32
 
@@ -183,9 +164,7 @@ size_t blt_draft_block(
     const blt_local_decoder* dec = model->decoder;
     const size_t V = model->config.decoder_config.vocab_size;
 
-    // Inference batch: one live block after the clean prefix. All block rows
-    // cross-attend the last latent o_M (paper section 3.1.1); t = 0 keeps
-    // every loss path inert.
+    // t=0 keeps every loss path inert; all block rows cross-attend o_M.
     blt_block_batch batch;
     memset(&batch, 0, sizeof(batch));
     batch.num_clean = prefix_len;
@@ -202,15 +181,13 @@ size_t blt_draft_block(
         masked[b] = 1;
     }
 
-    // NOTE: scratch is NOT reset here -- enc->byte_hidden_out/global_out
-    // typically live in this arena and must survive every pass. Callers
-    // bound memory with their own round-level arena markers.
+    // NOTE: scratch is NOT reset here — enc->byte_hidden_out/global_out
+    // live in this arena and must survive every pass.
     uint64_t rng = config->opts.seed ? config->opts.seed : 1;
     size_t nfes = 0;
     size_t remaining_passes = B; // hard bound: at least one cell per pass
 
     while (remaining_passes-- > 0) {
-        // Refresh batch views from the current block state.
         uint32_t tok32[BLT_BLOCKGEN_MAX_B];
         size_t pos[BLT_BLOCKGEN_MAX_B];
         uint8_t targets[BLT_BLOCKGEN_MAX_B];
@@ -240,8 +217,7 @@ size_t blt_draft_block(
             patches, num_patches, &batch, config->d0_mode, &logits, scratch);
         nfes++;
 
-        // Per-cell statistics and predictions from this pass. Row analysis
-        // and sampling run on a host copy of the logits.
+        // Stage logits to host for row analysis + sampling.
         float* rows_host = (float*)malloc(logits.numel * sizeof(float));
         BLT_REQUIRE(rows_host != NULL, "blockgen: logits staging alloc failed");
         blt_tensor_download(&logits, rows_host, logits.numel * sizeof(float));
@@ -286,17 +262,12 @@ size_t blt_draft_block(
     return nfes;
 }
 
-//----------------------------------------------------------------------
-// Outer loops (Algorithm 1)
-//----------------------------------------------------------------------
-
 static void segment_prefix(blt_arena* arena, const blt_entropy_lm* entropy_model,
                            const blt_patcher_config* patcher_config,
                            const uint8_t* bytes, size_t len,
                            blt_patch_info* patches, size_t max_patches,
                            size_t* num_patches_out) {
-    // Mirrors compute_entropy_vals in self_speculation.c bit-for-bit so
-    // drafting and verification always agree on patch boundaries.
+    // Must mirror compute_entropy_vals in self_speculation.c bit-for-bit.
     size_t shape1[1] = {len};
     blt_tensor bytes_in = blt_tensor_create(arena, shape1, 1, BLT_DTYPE_UINT8);
     blt_tensor_upload(&bytes_in, bytes, len);
@@ -353,8 +324,7 @@ static void generate_common(
     const size_t target_len = prompt_len + max_new_bytes;
     BLT_REQUIRE(target_len <= model->config.decoder_config.max_seq_len,
         "blockdiff generation: total length exceeds decoder max_seq_len");
-    // The verification model may differ from the drafting model, but both
-    // must cover the same sequence budget.
+    // Both models must cover the same sequence budget.
     const blt_model* verifier = config->verifier_model ? config->verifier_model : model;
     BLT_REQUIRE(target_len <= verifier->config.decoder_config.max_seq_len,
         "blockdiff generation: target length exceeds verifier max_seq_len");
@@ -362,7 +332,6 @@ static void generate_common(
     memcpy(output_bytes, prompt_bytes, prompt_len);
     size_t l = prompt_len;
 
-    // Adaptive-B rolling state.
     const int adaptive = (do_verify && config->B_max > 0 &&
                           config->adapt_window > 0);
     size_t cur_B = config->block_size;
@@ -372,8 +341,6 @@ static void generate_common(
         BLT_FATAL("blockdiff generation: adapt_window must be <= 64");
     }
 
-    // Per-round view of the config carrying the current block size into
-    // the Algorithm 1 inner loop.
     blt_block_gen_config rcfg = *config;
 
     while (l < target_len) {
@@ -383,7 +350,7 @@ static void generate_common(
         if (l + B > target_len) B = target_len - l;
         rcfg.block_size = B;
 
-        // Segment + encode the committed prefix once (Algorithm 1 lines 3-4).
+        // Segment + encode prefix (Alg. 1 lines 3-4).
         enum { MAX_PATCHES = 256 };
         blt_patch_info patches[MAX_PATCHES];
         size_t num_patches = 0;
@@ -425,7 +392,6 @@ static void generate_common(
             BLT_REQUIRE(committed > l, "blockdiff DV: verify made no progress");
 
             if (adaptive) {
-                // Fraction of this round's drafts that survived commitment.
                 const double acc = (double)(committed - l) / (double)B;
                 acc_hist[hist_pos] = acc > 1.0 ? 1.0 : (acc < 0.0 ? 0.0 : acc);
                 hist_pos = (hist_pos + 1) % config->adapt_window;

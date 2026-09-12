@@ -6,10 +6,8 @@ extern "C" {
 #endif
 #include "blt/core/tensor.h"
 
-// Row-wise LayerNorm over the last dimension of a 2D [seq_len, embed_dim]
-// tensor: normalizes each row to zero mean / unit variance, then applies a
-// learned per-channel weight and bias. Use blt_rmsnorm_forward instead when
-// the block config selects BLT_NORM_RMSNORM (no bias term, no mean subtraction).
+// Row-wise LayerNorm: zero mean / unit variance per row, then learned scale+bias.
+// Use blt_rmsnorm_forward when the block config selects BLT_NORM_RMSNORM.
 void blt_layernorm_forward(const blt_tensor* x, const blt_tensor* weight, const blt_tensor* bias,
                             blt_tensor* out, float eps);
 void blt_layernorm_backward(const blt_tensor* grad_out, const blt_tensor* x,
@@ -20,4 +18,4 @@ void blt_layernorm_backward(const blt_tensor* grad_out, const blt_tensor* x,
 }
 #endif
 
-#endif // BLT_OPS_LAYERNORM_H
+#endif

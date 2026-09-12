@@ -5,25 +5,20 @@
 #include "blt/ops/elementwise.h"
 
 #include <stdint.h>
-
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
 
 
-
-// -------------------------------------------------------------------
 // Rolling polynomial hash
 //
-// Initializes the rolling hash state.
 // We precompute prime^n (mod modulus) to allow O(1) rolling updates later.
-// We validate that prime * modulus does not overflow uint64, ensuring all 
+// We validate that prime * modulus does not overflow uint64, ensuring all
 // subsequent multiplications remain safe.
 void blt_rolling_hash_init(blt_rolling_hash_state* state, size_t n, uint64_t prime, uint64_t modulus) {
     BLT_REQUIRE(state != NULL, "blt_rolling_hash_init: state is NULL");
     BLT_REQUIRE(n > 0 && n <= 8, "blt_rolling_hash_init: n must be in [1, 8]");
     BLT_REQUIRE(modulus > 1, "blt_rolling_hash_init: modulus must be > 1");
-    
+
     // Reserve headroom for the +byte term in the rolling update:
     // max intermediate is (modulus-1)*prime + 255, which must stay in uint64.
     BLT_REQUIRE(prime > 0 && prime <= ((UINT64_MAX - 255) / modulus),
@@ -34,8 +29,7 @@ void blt_rolling_hash_init(blt_rolling_hash_state* state, size_t n, uint64_t pri
     state->n = n;
 
     // Compute prime^n mod modulus.
-    // Initialize pow_val to 1 mod modulus
-    // This correctly handles modulus = 1 and serves as mult identity
+    // Initialize pow_val to 1 mod modulus -- correctly handles modulus = 1
     uint64_t pow_val = 1ULL % modulus;
     for (size_t i = 0; i < n; i++) {
         pow_val = (pow_val * prime) % modulus;
@@ -49,27 +43,22 @@ void blt_rolling_hash_init(blt_rolling_hash_state* state, size_t n, uint64_t pri
 }
 
 
-//-------------------------------------------------------------------
-// Feeds a new byte to the rolling hash
-
 uint64_t blt_rolling_hash_update(blt_rolling_hash_state* state, uint8_t new_byte) {
     BLT_REQUIRE(state != NULL, "blt_rolling_hash_update: state is NULL");
 
     // Capture the byte about to be evicted before overwriting.
     uint8_t outgoing = state->window[state->window_start];
 
-    // Write new byte into the circular buffer and advance.
     state->window[state->window_start] = new_byte;
     state->window_start = (state->window_start + 1) % state->n;
     state->positions_seen++;
 
-    // Not enough bytes yet for a full n-gram.
     if (state->positions_seen < state->n) {
         return UINT64_MAX;
     }
 
     // First valid hash: compute directly from window contents.
-    // Math: H = (b_0 * p^(n-1) + b_1 * p^(n-2) + ... + b_(n-1) * p^0) mod m
+    // H = (b_0 * p^(n-1) + b_1 * p^(n-2) + ... + b_(n-1) * p^0) mod m
     if (state->positions_seen == state->n) {
         uint64_t hash = 0;
         size_t idx = state->window_start;
@@ -81,17 +70,16 @@ uint64_t blt_rolling_hash_update(blt_rolling_hash_state* state, uint8_t new_byte
         return state->current_hash;
     }
 
-    // Rolling update.
+    // Rolling update: shift left, add new byte, subtract outgoing contribution.
     uint64_t updated = (state->current_hash * state->prime + new_byte) % state->modulus;
     uint64_t outgoing_contrib = ((uint64_t)outgoing * state->prime_pow_n) % state->modulus;
-    
+
     // Add modulus to prevent negative underflow before final modulo.
     updated = (updated + state->modulus - outgoing_contrib) % state->modulus;
     state->current_hash = updated;
 
     return state->current_hash;
 }
-
 
 
 // Byte-id tensors may live on either backend; hashing consumes the ids on
@@ -108,11 +96,8 @@ static const uint8_t* bytes_host(const blt_tensor* bytes_in, uint8_t** staging) 
 }
 
 
-// -------------------------------------------------------------------
-// Weight creation
-//
-// Allocates embedding tables and initializes them with small uniform random values
-// Uses Uniform(-0.02, 0.02) instead of zero
+// Allocates embedding tables and initializes them with small uniform random values.
+// Uses Uniform(-0.02, 0.02) instead of zero.
 blt_hash_ngram_weights blt_hash_ngram_create(blt_arena* arena, const blt_hash_ngram_config* config) {
     BLT_REQUIRE(arena != NULL, "blt_hash_ngram_create: arena is NULL");
     BLT_REQUIRE(config != NULL, "blt_hash_ngram_create: config is NULL");
@@ -125,7 +110,6 @@ blt_hash_ngram_weights blt_hash_ngram_create(blt_arena* arena, const blt_hash_ng
 
     // num_ngram_sizes == 0 is valid: the module is disabled and contributes
     // nothing (forward/backward loop over zero tables).
-
     for (size_t i = 0; i < config->num_ngram_sizes; i++) {
         BLT_REQUIRE(config->ngram_sizes[i] > 0 &&
                     config->ngram_sizes[i] <= 8,
@@ -159,14 +143,9 @@ blt_hash_ngram_weights blt_hash_ngram_create(blt_arena* arena, const blt_hash_ng
 }
 
 
-
-// -------------------------------------------------------------------
-// Forward
-//
-// Forward pass for the hash n-gram module
-// For each position i, the output is:
-//   out_i = byte_emb_i + sum_{n} Table_n[hash(b_{i-n+1...i})]
-// If normalize is true, the entire sum is divided by (K + 1), where K is num_ngram_sizes.
+// Forward: out_i = byte_emb_i + sum_{n} Table_n[hash(b_{i-n+1...i})]
+// If normalize is true, the entire sum is divided by (K + 1), where K is
+// num_ngram_sizes:
 //   out_i = (1 / (K + 1)) * (byte_emb_i + sum_{n} Table_n[hash(...)])
 // Positions i < n-1 receive no contribution from the size-n table.
 void blt_hash_ngram_forward(
@@ -199,13 +178,13 @@ void blt_hash_ngram_forward(
     uint8_t* bytes_stage = NULL;
     const uint8_t* bytes = bytes_host(bytes_in, &bytes_stage);
 
-    // Step 1: Copy base byte embeddings into out.
+    // Copy base byte embeddings into out.
     const size_t total = seq_len * embed_dim;
     blt_strided_copy(byte_emb->backend,
                      (float*)out->data, total,
                      (const float*)byte_emb->data, total, 1, total);
 
-    // Step 2: Add n-gram contributions. Hashing is integer-only host work;
+    // Add n-gram contributions. Hashing is integer-only host work;
     // bucket indices feed a dispatched accumulate op so tables may live on
     // either backend.
     uint32_t* idx = NULL;
@@ -233,9 +212,8 @@ void blt_hash_ngram_forward(
     }
     free(idx);
     free(bytes_stage);
-    idx = NULL;
 
-    // Step 3: Apply normalization scale.
+    // Apply normalization scale.
     if (config->normalize) {
         float scale = 1.0f / (float)(config->num_ngram_sizes + 1);
         blt_scale(out, scale);
@@ -243,15 +221,9 @@ void blt_hash_ngram_forward(
 }
 
 
-
-// -------------------------------------------------------------------
-// Backward
-//
-// Backward pass for gradients
-// Given dL/d_out, we compute gradients
-// 1. dL/d_byte_emb = (1 / (K + 1)) * dL/d_out
-// 2. dL/d_Table_n[hash] += (1 / (K + 1)) * dL/d_out_i
-// Because the same hash bucket can be hit by multiple positions, we must scatter add the gradients
+// Backward: dL/d_byte_emb = (1 / (K + 1)) * dL/d_out
+//            dL/d_Table_n[hash] += (1 / (K + 1)) * dL/d_out_i
+// Same hash bucket can be hit by multiple positions, so scatter-add gradients.
 void blt_hash_ngram_backward(
     const blt_hash_ngram_config* config,
     const blt_tensor* bytes_in,
@@ -311,8 +283,6 @@ void blt_hash_ngram_backward(
     }
     free(idx);
     free(bytes_stage);
-    idx = NULL;
 
-    // grad_byte_emb = scale * grad_out
     blt_scaled_copy(grad_byte_emb, grad_out, scale);
 }

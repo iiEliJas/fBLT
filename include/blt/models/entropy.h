@@ -8,15 +8,13 @@ extern "C" {
 #include "blt/core/tensor.h"
 #include "blt/models/patcher.h"
 
-// Config for entropy calculation
 typedef struct {
     size_t vocab_size;
-    bool use_log2;        // calculate entropy in bits (log2) or nats (ln)
+    bool use_log2;        // log2 for bits, ln for nats
 } blt_entropy_config;
 
-// Calculates the entropy of a probability distribution tensor
-// Input: 2D tensor of shape [batch_size * seq_len, vocab_size] containing probabilities (after softmax)
-// Output: 1D tensor of shape [batch_size * seq_len] containing entropy values
+// probs: [batch_size * seq_len, vocab_size] after softmax.
+// entropy_out: [batch_size * seq_len].
 void blt_compute_entropy(const blt_tensor* probs, blt_tensor* entropy_out, const blt_entropy_config* config);
 
 

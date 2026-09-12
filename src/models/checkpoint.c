@@ -54,7 +54,6 @@ static void emit_name(char* buf, size_t cap, const char* prefix, size_t layer,
 }
 
 
-
 void blt_model_tensor_at(const blt_model* model, size_t index,
                          const char** name, blt_tensor** tensor) {
     static char name_buf[64];
@@ -148,8 +147,6 @@ void blt_model_tensor_at(const blt_model* model, size_t index,
 static uint32_t tensor_ndim(const blt_tensor* t) {
     return (uint32_t)t->ndim;
 }
-
-
 
 // Host staging for tensor payload I/O: device-resident models cannot fread/
 // fwrite their storage directly. CPU tensors take the memcpy paths inside

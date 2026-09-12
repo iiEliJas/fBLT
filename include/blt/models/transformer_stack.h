@@ -9,9 +9,8 @@ extern "C" {
 #include "blt/core/allocator.h"
 #include "blt/models/transformer.h"
 
-// A stack of N identical RMSNorm/SwiGLU transformer blocks sharing one
-// RoPE cache, with support for both plain forward and cached
-// forward+backward.
+// N identical transformer blocks sharing one RoPE cache, with plain
+// and cached forward+backward paths.
 
 typedef struct {
     blt_transformer_config layer_config;
@@ -53,8 +52,8 @@ typedef struct {
 
 
 
-// Allocates layer weights and precomputes the shared RoPE cache. Caller
-// fills weight data afterward (same contract as blt_tensor_create).
+// Precomputes the shared RoPE cache. Caller fills weight data afterward
+// (same contract as blt_tensor_create).
 void blt_transformer_stack_init(
     blt_arena* arena, blt_transformer_stack* stack,
     const blt_transformer_stack_config* config
@@ -65,12 +64,10 @@ blt_transformer_stack_grad* blt_transformer_stack_grad_create(
     blt_arena* arena, const blt_transformer_stack* stack
 );
 
-// Builds the per-call config: copies stack->layer_config and overlays a
-// seq_len-sized view over the shared RoPE cache (blt_multihead_attention
-// validates the cache shape as exactly [seq_len, head_dim/2]). cos_view
-// and sin_view must outlive the returned config. Callers needing a custom
-// mask (block-causal, sliding window, etc.) build it separately and
-// assign it onto the returned config's attn_config.mask_config.
+// Copies stack->layer_config and overlays a seq_len-sized view over the
+// shared RoPE cache. cos_view/sin_view must outlive the returned config.
+// Callers needing a custom mask build it separately and assign it onto
+// the returned config's attn_config.mask_config.
 blt_transformer_config blt_transformer_stack_call_config(
     const blt_transformer_stack* stack, size_t seq_len,
     blt_tensor* cos_view, blt_tensor* sin_view
@@ -102,26 +99,20 @@ void blt_transformer_stack_backward(
 );
 
 
-// Single transformer block (e.g. cross-attention in the local encoder/decoder) 
-// rather than running a whole blt_transformer_stack in one shot
-// Same block math and caching blt_transformer_stack uses
-// internally - blt_transformer_stack_forward_cached/backward are now
-// just a loop over these two calls.
+// Single-block interface (e.g. cross-attention in encoder/decoder).
+// The stack's forward_cached/backward are a loop over these two calls.
 typedef struct blt_transformer_layer_cache blt_transformer_layer_cache;
 
-// Recomputes one transformer blocks forward pass (pre-norm attention +
-// residual, pre-norm SwiGLU FFN + residual), caching intermediates needed
-// by blt_transformer_layer_backward. The returned cache — including a
-// copy of x, so the caller doesn't need to keep its own copy around for
-// backward — lives in arena.
+// Single-block forward with intermediate caching for backward. The returned
+// cache (including a copy of x) lives in arena.
 blt_transformer_layer_cache* blt_transformer_layer_forward_cached(
     const blt_tensor* x, const blt_transformer_weights* w, const blt_transformer_config* cfg,
     blt_arena* arena, size_t seq_len, size_t embed_dim, size_t hidden_dim,
     blt_tensor* out
 );
 
-// Backward through one transformer block. grad_out is dL/d(the forward
-// call's out); writes dL/d(x) into grad_x and weight gradients into lg.
+// Single-block backward. Writes dL/d(x) into grad_x and weight gradients
+// into lg.
 void blt_transformer_layer_backward(
     const blt_transformer_layer_cache* cache, const blt_transformer_weights* w, const blt_transformer_config* cfg,
     blt_arena* arena, size_t seq_len, size_t embed_dim, size_t hidden_dim,

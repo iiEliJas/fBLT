@@ -8,9 +8,8 @@
 #include <time.h>
 #include <math.h>
 
-//---------------------------------------------------------------------------
+
 // Timer
-//
 
 static struct timespec bench_ts_start;
 
@@ -31,10 +30,7 @@ double bench_timer_stop_sec(void) {
 }
 
 
-
-//---------------------------------------------------------------------------
 // Statistics
-//
 
 static int bench_cmp_double(const void* a, const void* b) {
     double da = *(const double*)a;
@@ -92,9 +88,7 @@ void bench_stats_compute(bench_stats* out, const double* samples, size_t n) {
 
 
 
-//---------------------------------------------------------------------------
 // Result
-//
 
 static void bench_copy_str(char* dst, size_t cap, const char* src) {
     if (src == NULL) src = "";
@@ -126,9 +120,7 @@ void bench_result_add_metric(bench_result* r, const char* key, double value) {
 
 
 
-//---------------------------------------------------------------------------
 // Collection
-//
 
 void bench_collect_samples(bench_fn fn, void* arg,
                            size_t warmup, size_t iterations,
@@ -149,10 +141,7 @@ void bench_collect_samples(bench_fn fn, void* arg,
 }
 
 
-
-//---------------------------------------------------------------------------
 // JSONL output
-//
 
 int bench_write_json(const char* path, const bench_result* r) {
     FILE* f = fopen(path, "a");

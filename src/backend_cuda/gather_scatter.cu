@@ -8,8 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-// CUDA implementations. The small host-side id/index arrays are mirrored
-// into temporary device buffers from the scratch arena for the duration of each call.
+// Host-side id/index arrays are mirrored into device scratch buffers per call.
 
 static int blt_cuda_launch_check(const char* what) {
     cudaError_t err = cudaGetLastError();
@@ -26,8 +25,7 @@ static unsigned blt_cuda_grid(size_t n) {
     return (unsigned)(blocks > 0 ? blocks : 1);
 }
 
-// Deterministic (single-threaded) scatter-add kernels, selected at runtime
-// when g_blt_deterministic is set. Same accumulation order as CPU path.
+// Deterministic single-threaded scatter-add, selected when g_blt_deterministic is set.
 
 __global__ void blt_embedding_scatter_add_det_kernel(float* grad_table,
                                                      const unsigned char* ids, const float* grad_out,
@@ -103,12 +101,10 @@ extern "C" void blt_embedding_lookup_cuda(const blt_tensor* table, const uint8_t
 
     unsigned char* d_ids = (unsigned char*)blt_arena_alloc(blt_cuda_get_scratch_arena(),
                                                            seq_len > 0 ? seq_len : 1, 1);
-    cudaError_t err = cudaSuccess;
     blt_cuda_memcpy_h2d(d_ids, ids_host, seq_len);
     blt_embedding_lookup_kernel<<<blt_cuda_grid(seq_len * embed_dim), 256>>>(
         (const float*)table->data, table->shape[0], d_ids, (float*)out->data,
         seq_len, embed_dim);
-    err = cudaGetLastError();
     blt_cuda_launch_check("blt_embedding_lookup");
 }
 
@@ -135,7 +131,6 @@ extern "C" void blt_embedding_scatter_add_cuda(const blt_tensor* grad_table, con
 
     unsigned char* d_ids = (unsigned char*)blt_arena_alloc(blt_cuda_get_scratch_arena(),
                                                            seq_len > 0 ? seq_len : 1, 1);
-    cudaError_t err = cudaSuccess;
     blt_cuda_memcpy_h2d(d_ids, ids_host, seq_len);
     if (g_blt_deterministic) {
         blt_embedding_scatter_add_det_kernel<<<1, 1>>>(
@@ -146,7 +141,6 @@ extern "C" void blt_embedding_scatter_add_cuda(const blt_tensor* grad_table, con
             (float*)grad_table->data, grad_table->shape[0], d_ids,
             (const float*)grad_out->data, seq_len, embed_dim);
     }
-    err = cudaGetLastError();
     blt_cuda_launch_check("blt_embedding_scatter_add");
 }
 
@@ -175,12 +169,10 @@ extern "C" void blt_indexed_row_accumulate_cuda(const blt_tensor* table, const u
 
     unsigned int* d_idx = (unsigned int*)blt_arena_alloc(blt_cuda_get_scratch_arena(),
                                                          rows > 0 ? rows * sizeof(unsigned int) : 1, 4);
-    cudaError_t err = cudaSuccess;
     blt_cuda_memcpy_h2d(d_idx, idx_host, rows * sizeof(unsigned int));
     blt_indexed_row_accumulate_kernel<<<blt_cuda_grid(rows * embed_dim), 256>>>(
         (const float*)table->data, table->shape[0], d_idx, (float*)io->data,
         rows, embed_dim);
-    err = cudaGetLastError();
     blt_cuda_launch_check("blt_indexed_row_accumulate");
 }
 
@@ -209,7 +201,6 @@ extern "C" void blt_indexed_row_scatter_add_cuda(const blt_tensor* grad_table, c
 
     unsigned int* d_idx = (unsigned int*)blt_arena_alloc(blt_cuda_get_scratch_arena(),
                                                          rows > 0 ? rows * sizeof(unsigned int) : 1, 4);
-    cudaError_t err = cudaSuccess;
     blt_cuda_memcpy_h2d(d_idx, idx_host, rows * sizeof(unsigned int));
     if (g_blt_deterministic) {
         blt_indexed_row_scatter_add_det_kernel<<<1, 1>>>(
@@ -220,7 +211,6 @@ extern "C" void blt_indexed_row_scatter_add_cuda(const blt_tensor* grad_table, c
             (float*)grad_table->data, grad_table->shape[0], d_idx,
             (const float*)grad_out->data, rows, embed_dim, scale);
     }
-    err = cudaGetLastError();
     blt_cuda_launch_check("blt_indexed_row_scatter_add");
 }
 
@@ -266,40 +256,30 @@ extern "C" void blt_indexed_row_scatter_add_normalized_cuda(const blt_tensor* gr
 
     unsigned int* d_idx = (unsigned int*)blt_arena_alloc(blt_cuda_get_scratch_arena(),
                                                          rows > 0 ? rows * sizeof(unsigned int) : 1, 4);
-    cudaError_t err = cudaSuccess;
     blt_cuda_memcpy_h2d(d_idx, idx_host, rows * sizeof(unsigned int));
 
-    // Allocate and zero-fill a per-table-row count buffer
     unsigned int* d_counts = (unsigned int*)blt_arena_alloc(blt_cuda_get_scratch_arena(),
-                                                            table_rows > 0 ? table_rows * sizeof(unsigned int) : 1, 4);
-    err = cudaMemset(d_counts, 0, table_rows * sizeof(unsigned int));
+                                                             table_rows > 0 ? table_rows * sizeof(unsigned int) : 1, 4);
+    cudaMemset(d_counts, 0, table_rows * sizeof(unsigned int));
     blt_cuda_launch_check("blt_indexed_row_scatter_add_normalized memset");
 
     if (g_blt_deterministic) {
-        // Single-threaded count pass
         blt_indexed_row_scatter_add_normalized_count_det_kernel<<<1, 1>>>(
             d_counts, d_idx, rows);
-        err = cudaGetLastError();
         blt_cuda_launch_check("blt_indexed_row_scatter_add_normalized count (det)");
 
-        // Single-threaded scatter pass
         blt_indexed_row_scatter_add_normalized_det_kernel<<<1, 1>>>(
             (float*)grad_table->data, d_idx, d_counts,
             (const float*)grad_out->data, rows, embed_dim, scale);
-        err = cudaGetLastError();
         blt_cuda_launch_check("blt_indexed_row_scatter_add_normalized scatter (det)");
     } else {
-        // Pass 1: count occurrences per table index
         blt_indexed_row_scatter_add_normalized_count_kernel<<<blt_cuda_grid(rows), 256>>>(
             d_counts, d_idx, rows);
-        err = cudaGetLastError();
         blt_cuda_launch_check("blt_indexed_row_scatter_add_normalized count");
 
-        // Pass 2: scatter add with 1/count normalization
         blt_indexed_row_scatter_add_normalized_kernel<<<blt_cuda_grid(rows * embed_dim), 256>>>(
             (float*)grad_table->data, d_idx, d_counts,
             (const float*)grad_out->data, rows, embed_dim, scale);
-        err = cudaGetLastError();
         blt_cuda_launch_check("blt_indexed_row_scatter_add_normalized scatter");
     }
 }

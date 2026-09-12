@@ -1,19 +1,9 @@
-// Two-tier KV cache + cache-aware incremental decoder
+// Two-tier KV cache + cache-aware incremental decoder.
 // See kv_cache.h for the design contract. Every computation here mirrors
-// the dense composition in src/models/local_decoder.c / attention.c /
-// cross_attention.c op-for-op so results are bit-identical:
-//   - matmul/rmsnorm/swiglu are row-wise, so batch size never changes
-//     per-row numerics;
-//   - attention runs through blt_attention_head_core with dense additive
-//     masks built by blt_build_attention_mask (causal + sliding window by
-//     absolute position == causal + window over relative indices, since both
-//     sides shift by the same base);
-//   - cache writes go through blt_strided_copy so they work in either
-//     memory space.
-//
-// Host/device split: the container struct, its handle arrays, and the patch
-// table live on the HEAP (host); all tensor PAYLOADS come from the caller's
-// arena, which may be a CUDA device arena.
+// the dense composition in local_decoder.c / attention.c / cross_attention.c
+// op-for-op so results are bit-identical. Host/device split: the container
+// struct and handle arrays live on the heap (host); tensor payloads come
+// from the caller's arena, which may be CUDA device memory.
 #include "blt/infer/kv_cache.h"
 
 #include "blt/core/backend.h"
@@ -33,12 +23,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-
-
-
-
-//----------------------------------------------------------------------
-// Create / reset / truncate / destroy
 
 blt_kv_cache* blt_kv_cache_create(blt_arena* arena, const blt_local_decoder* decoder,
                                   size_t max_seq_len) {
@@ -123,20 +107,12 @@ size_t blt_kv_cache_common_patches(const blt_kv_cache* cache,
     return common;
 }
 
-
-//----------------------------------------------------------------------
-// Tier-2 refresh: cross-attn K/V for patches [from_patch, num_patches)
-//
-// Mirrors the dense kv-side projection (patch_in_split @ W_k / W_v).
-// Row-wise matmuls make partial rewrites bit-exact.
-
 static void refresh_cross_layer(blt_kv_cache* cache, size_t layer,
                                 const blt_cross_attention_weights* xw,
                                 const blt_tensor* patch_in_split,
                                 size_t from_subtoken, size_t num_new_subtokens) {
-    // The sub-token block is contiguous inside patch_in_split: view it as
-    // its own [num_new_subtokens, E] matrix and write straight into the
-    // cache at the matching offset.
+    // Contiguous sub-token block — view as [num_new_subtokens, E] and write
+    // straight into cache at the matching offset.
     const blt_backend backend = patch_in_split->backend;
 
     blt_tensor block;
@@ -191,15 +167,11 @@ void blt_kv_cache_refresh_cross(blt_kv_cache* cache,
             from_patch * cache->k, (num_patches - from_patch) * cache->k);
     }
 
-    // Snapshot boundaries and extend validity (host-side table).
+    // Snapshot patched regions.
     memcpy(&cache->cached_patches[from_patch], &patches[from_patch],
         (num_patches - from_patch) * sizeof(blt_patch_info));
     cache->cross_num_patches = num_patches;
 }
-
-
-//----------------------------------------------------------------------
-// Unified write-through incremental decode step
 
 void blt_kv_decode_step(blt_kv_cache* cache,
                         const blt_tensor* patch_in,
@@ -238,10 +210,8 @@ void blt_kv_decode_step(blt_kv_cache* cache,
     const blt_backend backend = d0_rows->backend;
     const size_t total_sub = num_patches * cache->k;
 
-    // Group bookkeeping (host tables): a new row takes the group of the byte
-    // position it sits at (rows past the last patch end resolve to the LAST
-    // patch -- the Fast-BLT draft-conditioning rule); the kv side is the
-    // standard per-sub-token expansion.
+    // Group bookkeeping: each new row takes the group of the byte position
+    // it sits at (rows past the last patch end resolve to the last patch).
     size_t* q_group_ids = (size_t*)malloc(n * sizeof(size_t));
     size_t* kv_group_ids = (size_t*)malloc(total_sub * sizeof(size_t));
     BLT_REQUIRE(q_group_ids != NULL && kv_group_ids != NULL,
@@ -264,9 +234,7 @@ void blt_kv_decode_step(blt_kv_cache* cache,
         }
     }
 
-    // Dense additive masks. Entries are computed on the host (the rules
-    // are row-index arithmetic) and uploaded, because the arena may be
-    // device memory; the attention core consumes the uploaded tensors.
+    // Dense additive masks — host-computed, uploaded (arena may be device memory).
     blt_mask_config mcfg;
     memset(&mcfg, 0, sizeof(mcfg));
 
@@ -308,7 +276,7 @@ void blt_kv_decode_step(blt_kv_cache* cache,
     const float self_scale = 1.0f / sqrtf((float)hd);
     const float cross_scale = 1.0f / sqrtf((float)xhd);
 
-    // RoPE tables for the new rows' absolute positions (host index array).
+    // RoPE gather for new rows' positions.
     size_t* positions = (size_t*)malloc(n * sizeof(size_t));
     BLT_REQUIRE(positions != NULL, "blt_kv_decode_step: failed to allocate position buffer");
     for (size_t r = 0; r < n; r++) {
@@ -324,7 +292,6 @@ void blt_kv_decode_step(blt_kv_cache* cache,
     blt_tensor_view_2d(&patch_in_split, patch_in->data,
         total_sub, E, backend);
 
-    // Workspaces
     float* q_full = (float*)blt_arena_alloc(arena, n * E * sizeof(float), sizeof(float));
     blt_tensor combined = blt_tensor_create(arena, (size_t[2]){n, E}, 2, BLT_DTYPE_FP32);
 
@@ -333,7 +300,6 @@ void blt_kv_decode_step(blt_kv_cache* cache,
     float* q_rot  = (float*)blt_arena_alloc(arena, n * hd * sizeof(float), sizeof(float));
     float* k_rot  = (float*)blt_arena_alloc(arena, n * hd * sizeof(float), sizeof(float));
 
-    // Running decoder states for the new rows; reassigned per layer.
     blt_tensor cur = *d0_rows;
 
     const size_t L = cfg->num_layers;
@@ -343,10 +309,6 @@ void blt_kv_decode_step(blt_kv_cache* cache,
         size_t shape2[2] = {n, E};
         blt_tensor b;
 
-        // -------------------------------------------------------------
-        // Cross-attention block (fires per placement): RMSNorm -> Q ->
-        // masked attention against tier 2 -> output proj -> residual
-        //
         if (blt_local_cross_attn_fires(cfg->cross_attn_placement, cfg->cross_attn_all_layers, L, l)) {
             blt_cross_attention_weights xw = blt_local_cross_weights_view(s);
 
@@ -389,11 +351,6 @@ void blt_kv_decode_step(blt_kv_cache* cache,
             b = cur;
         }
 
-        // -------------------------------------------------------------
-        // Byte transformer block (RMSNorm -> causal RoPE'd self-attn with
-        // tier-1 write-through -> proj -> residual -> RMSNorm -> SwiGLU FFN
-        // -> residual), mirroring blt_transformer_forward exactly.
-        //
         blt_tensor normed1 = blt_tensor_create(arena, shape2, 2, BLT_DTYPE_FP32);
         blt_rmsnorm_forward(&b, w.norm1_weight, &normed1);
 
@@ -401,8 +358,7 @@ void blt_kv_decode_step(blt_kv_cache* cache,
         blt_tensor qkv = blt_tensor_create(arena, qkv_shape, 2, BLT_DTYPE_FP32);
         blt_matmul(&normed1, w.attn_qkv_w, &qkv);
 
-        // Rotate Q/K per head, write rotated K and raw V through to tier 1,
-        // collect rotated Q. All moves via dispatched strided copies.
+        // Rotate Q/K, write K/V through to tier 1, collect rotated Q.
         float* kd = (float*)cache->self_k[l].data;
         float* vd = (float*)cache->self_v[l].data;
         const size_t stride3 = 3 * E;
@@ -459,7 +415,7 @@ void blt_kv_decode_step(blt_kv_cache* cache,
         blt_tensor resid1 = blt_tensor_create(arena, shape2, 2, BLT_DTYPE_FP32);
         blt_add(&b, &attn_out, &resid1);
 
-        // FFN sub-layer: up/gate projections -> SwiGLU -> down projection
+        // FFN: up/gate -> SwiGLU -> down.
         blt_tensor normed2 = blt_tensor_create(arena, shape2, 2, BLT_DTYPE_FP32);
         blt_rmsnorm_forward(&resid1, w.norm2_weight, &normed2);
 
@@ -479,7 +435,6 @@ void blt_kv_decode_step(blt_kv_cache* cache,
         cur = next;
     }
 
-    // LM head over the new rows' final states
     blt_matmul(&cur, &dec->lm_head_weight, logits_out);
 
     cache->self_len = total;

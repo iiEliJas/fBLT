@@ -4,13 +4,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
-//---------------------------------------------------------------------------
 // Benchmark harness — shared, backend-agnostic measurement infrastructure.
 //
 // Used by ablation sweeps (BPB tables), patcher performance, and other benchmarks.
 // Latency samples are collected in seconds (double); the raw timer works in
-// nanoseconds via clock_gettime(CLOCK_MONOTONIC).
-//---------------------------------------------------------------------------
+// nanoseconds via clock_gettime(CLOCK_MONOTONIC)
 
 
 // ---- Timer ----------------------------------------------------------------
@@ -24,14 +22,14 @@ double bench_timer_stop_sec(void);
 // ---- Statistics ------------------------------------------------------------
 typedef struct {
     size_t n;      // number of samples used
-    double mean;   // seconds
+    double mean;
     double stddev; // population stddev, seconds
-    double min;    // seconds
-    double max;    // seconds
-    double p50;    // seconds, nearest-rank percentile
-    double p90;    // seconds
-    double p99;    // seconds
-} bench_stats;
+    double min;
+    double max;
+    double p50;    // nearest-rank percentile
+    double p90;
+    double p99;
+} bench_stats;  // all in seconds
 
 // Compute stats from a raw sample array. Samples must be >= 1 in count.
 // Callers are expected to discard cold-cache/warmup samples before passing

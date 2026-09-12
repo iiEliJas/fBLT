@@ -7,7 +7,7 @@ extern "C" {
 
 #include "blt/core/tensor.h"
 
-// In-place SGD parameter update: param -= lr * grad.
+// In-place SGD: param -= lr * grad.
 void blt_sgd_step(blt_tensor* param, const blt_tensor* grad, float lr);
 
 // Single-tensor AdamW (decoupled weight decay), PyTorch-compatible math.
@@ -31,4 +31,4 @@ void blt_adamw_step(blt_tensor* param, const blt_tensor* grad,
 }
 #endif
 
-#endif // BLT_OPS_OPTIM_H
+#endif

@@ -2,11 +2,8 @@
 #include "blt/core/backend.h"
 #include "blt/ops/gather_scatter.h"
 
-
-//--------------------------------------------------------------
-// Allocates the [vocab_size, embed_dim] FP32 embedding table via the arena.
-// Caller is responsible for filling the weight->data (random init, or loads pretrained) separately
-
+// Allocates [vocab_size, embed_dim] FP32 table via arena.
+// Caller fills weight->data separately (random init or pretrained).
 blt_byte_embedding blt_byte_embedding_create(blt_arena* arena, size_t vocab_size, size_t embed_dim) {
     blt_byte_embedding emb;
     const size_t shape[2] = {vocab_size, embed_dim};
@@ -16,22 +13,8 @@ blt_byte_embedding blt_byte_embedding_create(blt_arena* arena, size_t vocab_size
     return emb;
 }
 
-
-//----------------------------------------------------------------
-// Forward Pass for Byte Embedding
-//
-// For position i in [0, seq_len-1]:
-//     out[i, :] = weight[bytes_in[i], :]
-//
-// Shape mapping:
-//   bytes_in:    [seq_len]                 (UINT8)
-//   emb->weight: [vocab_size, embed_dim]   (FP32)
-//   out:         [seq_len, embed_dim]      (FP32)
-
 void blt_byte_embedding_forward(const blt_byte_embedding* emb, const blt_tensor* bytes_in,
                                  blt_tensor* out) {
-    // ----------------
-    // Validation
     BLT_REQUIRE(bytes_in->dtype == BLT_DTYPE_UINT8, "bytes_in must be a UINT8 tensor");
     BLT_REQUIRE(bytes_in->ndim == 1, "bytes_in must be a 1D tensor of shape [seq_len]");
 
@@ -59,24 +42,10 @@ void blt_byte_embedding_forward(const blt_byte_embedding* emb, const blt_tensor*
     free(stage);
 }
 
-
-
-//----------------------------------------------------------------
-// Backward Pass for Byte Embedding
-//
-// Scatter-Add
-// For position i in [0, seq_len-1]:
-//     grad_weight[bytes_in[i], :] += grad_out[i, :]
-//
-// Shape mapping:
-//   bytes_in:    [seq_len]                 (UINT8)
-//   grad_out:    [seq_len, embed_dim]      (FP32)
-//   grad_weight: [256, embed_dim]          (FP32, pre-zeroed)
-
+// Scatter-add: grad_weight[bytes_in[i], :] += grad_out[i, :]
+// grad_weight must be pre-zeroed by caller.
 void blt_byte_embedding_backward(const blt_byte_embedding* emb, const blt_tensor* bytes_in,
                                   const blt_tensor* grad_out, blt_tensor* grad_weight) {
-    // ----------------
-    // Validation
     BLT_REQUIRE(bytes_in->dtype == BLT_DTYPE_UINT8, "bytes_in must be a UINT8 tensor");
     BLT_REQUIRE(bytes_in->ndim == 1, "bytes_in must be a 1D tensor of shape [seq_len]");
 
@@ -91,7 +60,6 @@ void blt_byte_embedding_backward(const blt_byte_embedding* emb, const blt_tensor
     BLT_REQUIRE(grad_weight->shape[1] == emb->embed_dim, "grad_weight.shape[1] must match emb->embed_dim");
 
     const size_t seq_len = bytes_in->shape[0];
-
     (void)seq_len;
 
     uint8_t* stage = NULL;

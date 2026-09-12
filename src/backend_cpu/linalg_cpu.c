@@ -5,8 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-
-// Internal fp32 matmul (all inputs must be fp32, 2D).
 static void matmul_fp32(const float* a_data, const float* b_data, float* out_data,
                         size_t m, size_t k, size_t n) {
     for (size_t row = 0; row < m; ++row) {
@@ -37,15 +35,12 @@ void blt_matmul_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
     size_t n = b->shape[1];
     if (m == 0 || k == 0 || n == 0) return;
 
-    // fp32 path — no conversion needed
     if (a->dtype == BLT_DTYPE_FP32 && b->dtype == BLT_DTYPE_FP32) {
         matmul_fp32((const float*)a->data, (const float*)b->data, (float*)out->data, m, k, n);
         return;
     }
 
-    // bf16 inputs: cast to fp32, compute in fp32 (CPU reference path).
-    // This is not faster — it exists so the CPU output matches what the
-    // CUDA tensor-core path should produce after its own rounding.
+    // Not faster — exists so CPU output matches CUDA tensor-core rounding.
     float* a_fp32 = (float*)malloc(m * k * sizeof(float));
     float* b_fp32 = (float*)malloc(k * n * sizeof(float));
     BLT_REQUIRE(a_fp32 && b_fp32, "matmul: failed to allocate bf16->fp32 temporaries");
@@ -64,7 +59,6 @@ void blt_matmul_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
     free(a_fp32);
     free(b_fp32);
 }
-
 
 
 // a: [M,K], b: [K,N], grad_out: [M,N]
@@ -88,7 +82,7 @@ void blt_matmul_backward_cpu(const blt_tensor* a, const blt_tensor* b, const blt
  
     const float* a_data = (const float*)a->data;
     const float* b_data = (const float*)b->data;
-    const float* go_data = (const float*)grad_out->data;    // go_data ;D really cool name right?
+    const float* go_data = (const float*)grad_out->data;
  
     if (grad_a != NULL) {
         BLT_REQUIRE(grad_a->dtype == BLT_DTYPE_FP32 && grad_a->ndim == 2 &&

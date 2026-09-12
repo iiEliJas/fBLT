@@ -6,15 +6,8 @@
 #include "blt/ops/elementwise.h"
 #include "blt/ops/mask_builder.h"
 
-
-//----------------------------------------------------------------------
-// Config helper
-//
-// Builds the per-call layer config: the seq_len-sized RoPE view (shared
-// logic lives in blt_transformer_stack_call_config) plus the block-causal
-// patch mask for this call, since the mask depends on num_patches /
-// doc_boundaries which vary per call.
-
+// Builds per-call config: RoPE view + block-causal patch mask
+// (mask depends on num_patches/doc_boundaries which vary per call)
 static blt_transformer_config make_patch_layer_config(
     const blt_global_transformer* model, size_t num_patches,
     blt_tensor* cos_view, blt_tensor* sin_view, blt_tensor* mask_out,
@@ -41,11 +34,6 @@ static blt_transformer_config make_patch_layer_config(
     return cfg;
 }
 
-
-
-//----------------------------------------------------------------------
-// Create
-
 blt_global_transformer* blt_global_transformer_create(blt_arena* arena, const blt_global_transformer_config* config) {
     BLT_REQUIRE(arena != NULL && config != NULL,
         "blt_global_transformer_create: arena and config cannot be NULL");
@@ -53,8 +41,7 @@ blt_global_transformer* blt_global_transformer_create(blt_arena* arena, const bl
     blt_global_transformer* model = (blt_global_transformer*)blt_container_alloc(arena, sizeof(blt_global_transformer));
     model->config = *config;
 
-    // No embedding table and no LM head here 
-    // patches are already vectors (P_final from the local encoder)
+    // patches arrive as vectors from the local encoder, no embedding table needed
     blt_transformer_stack_config stack_cfg = {
         .num_layers  = config->num_layers,
         .embed_dim   = config->embed_dim,
@@ -82,19 +69,8 @@ blt_global_transformer_grad* blt_global_transformer_grad_create(blt_arena* arena
     return grad;
 }
 
-
-
-//----------------------------------------------------------------------
-// Forward path
-//
-// Pipeline:
-// 1. patch_in is already P_final (patch vectors from the local encoder)
-// 2. Block-causal patch transformer context:
-//        O = Stack(P_final)   [num_patches, embed_dim]
-//    Patch j attends to all patches <= j in the same document, via the
-//    mask built from doc_boundaries (patch-indexed).
-// 3. patch_out = O directly so no output projection and loss here
-
+// Block-causal patch transformer: patch j attends to patches <= j in its document.
+// No output projection — stack output goes directly to patch_out.
 void blt_global_transformer_forward(
     const blt_global_transformer* model,
     const blt_tensor* patch_in,
@@ -125,26 +101,12 @@ void blt_global_transformer_forward(
     blt_transformer_config layer_cfg = make_patch_layer_config(
         model, num_patches, &rope_cos_view, &rope_sin_view, &mask, doc_boundaries, num_docs, arena);
 
-    // -----------------------------------------------------------------
-    // Block-causal patch transformer: patch j attends to all patches <= j
-    // in the same document.
-    //     o_j = Transformer(p_1, ..., p_j)
-    // Output tensor shape remains: [num_patches, embed_dim]
-    // -----------------------------------------------------------------
     blt_tensor x;
     blt_transformer_stack_forward(&model->stack, patch_in, &layer_cfg, num_patches, &x, arena);
 
-    // Final layers output is patch_out directly — no output projection
     blt_strided_copy(x.backend, (float*)patch_out->data, x.numel,
                     (const float*)x.data, x.numel, 1, x.numel);
 }
-
-
-
-//----------------------------------------------------------------------
-// Backward path
-//
-// Mirrors forward call order in reverse
 
 void blt_global_transformer_backward(
     const blt_global_transformer* model,
@@ -184,17 +146,11 @@ void blt_global_transformer_backward(
         model, num_patches, &rope_cos_view, &rope_sin_view, &mask, doc_boundaries, num_docs, arena);
 
 
-    // ----------------
-    // Recompute forward with caching
+    // no downstream head — grad_patch_out is the incoming gradient directly
     blt_tensor final_x;
     blt_transformer_stack_cache* stack_cache = blt_transformer_stack_forward_cached(
         &model->stack, patch_in, &layer_cfg, num_patches, arena, &final_x);
-    // final_x is the final patch_out — no downstream head to differentiate
-    // the incoming gradient dL/dO is grad_patch_out directly.
 
-
-    // ----------------
-    // Backward: grad_patch_out -> transformer stack -> grad_patch_in
     blt_tensor grad_x;
     blt_transformer_stack_backward(&model->stack, stack_cache, &layer_cfg, num_patches,
                                     grad_patch_out, grad->stack_grad, &grad_x, arena);

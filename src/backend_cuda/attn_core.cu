@@ -108,7 +108,6 @@ __global__ void blt_attn_core_fwd_kernel(const float* q, size_t q_stride,
                 max_val = val;
             }
         }
-        // Warp reduction for max
         for (int offset = 16; offset > 0; offset >>= 1) {
             float tmp = __shfl_down_sync(0xFFFFFFFF, max_val, offset);
             if (tmp > max_val) max_val = tmp;
@@ -124,7 +123,6 @@ __global__ void blt_attn_core_fwd_kernel(const float* q, size_t q_stride,
                 sc_i[col] = 0.0f;
             }
         }
-        // Warp reduction for sum
         for (int offset = 16; offset > 0; offset >>= 1) {
             sum += __shfl_down_sync(0xFFFFFFFF, sum, offset);
         }
@@ -298,7 +296,6 @@ __global__ void blt_attn_core_bwd_kv_kernel(
     const bool v_lane = (grad_v != NULL && lane_id < head_dim);
     const size_t d = lane_id;
 
-    // Split queries among chunks; each thread processes its chunk sequentially
     size_t queries_per_chunk = (nq + num_chunks - 1) / num_chunks;
     size_t i_start = chunk_id * queries_per_chunk;
     size_t i_end = min(i_start + queries_per_chunk, nq);
@@ -322,12 +319,11 @@ __global__ void blt_attn_core_bwd_kv_kernel(
     // using shared memory and sequential reduction by thread 0 of each lane group
     __shared__ float shared_acc_k[ATTN_BLOCK];
     __shared__ float shared_acc_v[ATTN_BLOCK];
-    
+
     if (k_lane) shared_acc_k[tid] = acc_k;
     if (v_lane) shared_acc_v[tid] = acc_v;
     __syncthreads();
 
-    // First thread of each lane group (chunk_id=0) reduces across chunks
     if (chunk_id == 0 && (k_lane || v_lane)) {
         for (size_t c = 1; c < num_chunks; ++c) {
             size_t other_tid = c * num_lanes + lane_id;
@@ -364,7 +360,6 @@ extern "C" void blt_attention_head_core_backward_cuda(blt_backend backend,
 
     if (a->grad_k != NULL || a->grad_v != NULL) {
         if (a->head_dim <= ATTN_BLOCK) {
-            // Fast path: one block per kv row.
             blt_attn_core_bwd_kv_kernel<<<(unsigned)a->nk, ATTN_BLOCK>>>(
                 a->q, a->q_stride,
                 a->weights, a->grad_combined, a->gc_stride, a->gc_col_offset,

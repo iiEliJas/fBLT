@@ -27,11 +27,8 @@ typedef enum {
     BLT_ACTIVATION_SWIGLU = 1,   // out = down(silu(gate(x)) * up(x))
 } blt_activation_type;
  
-// Everything a config can sweep for a single block: which
-// norm, which activation, attention shape, FFN width. Nothing about the
-// block's behavior is hardcoded — a classic transformer block and a BLT
-// local-encoder/decoder/patch-transformer block are the same function
-// with a different config.
+// A classic transformer block and BLT's local encoder/decoder/patch-transformer
+// blocks are the same function with a different config.
 typedef struct {
     blt_attention_config attn_config;
     size_t hidden_dim;        // FFN hidden width
@@ -56,9 +53,8 @@ typedef struct {
 } blt_transformer_weights;
 
 
-// Optional bf16 weight copies for mixed-precision matmul.
-// NULL when use_bf16 is disabled. Only the matmul-participating
-// weights have bf16 copies; norm weights stay fp32.
+// NULL when use_bf16 is disabled. Only matmul-participating
+// weights get bf16 copies; norm weights stay fp32.
 typedef struct {
     const blt_tensor* attn_qkv_w;
     const blt_tensor* attn_proj_w;
@@ -79,7 +75,6 @@ typedef struct {
     blt_tensor ffn_up_w;
     blt_tensor ffn_gate_w;
     blt_tensor ffn_down_w;
-    // bf16 copies for mixed-precision matmul (allocated only when use_bf16=1)
     blt_tensor attn_qkv_w_bf16;
     blt_tensor attn_proj_w_bf16;
     blt_tensor ffn_up_w_bf16;
@@ -88,7 +83,6 @@ typedef struct {
 } blt_transformer_layer_storage;
 
 
-// Gradient part of blt_transformer_layer_storage
 typedef struct {
     blt_tensor norm1_weight;
     blt_tensor attn_qkv_w;
@@ -100,13 +94,9 @@ typedef struct {
 } blt_transformer_layer_grad;
 
  
-// Executes a single Transformer block forward pass: pre-norm attention with
-// residual, then pre-norm FFN with residual. Norm and activation are chosen
-// via config, so this one function serves the classic transformer block and
-// BLT's local encoder/decoder/patch-transformer blocks alike.
-// `arena` provides scratch storage for intermediates; it is not reset by
-// this function, so the caller controls intermediate lifetime.
-// `w_bf16` may be NULL (fp32-only path) or non-NULL (mixed-precision path).
+// Pre-norm attention + residual, pre-norm FFN + residual. Norm and activation
+// are chosen via config. `arena` is not reset by this function — caller
+// controls intermediate lifetime. `w_bf16` may be NULL (fp32-only path).
 void blt_transformer_forward(
     const blt_tensor* input,
     const blt_transformer_weights* weights,
@@ -115,7 +105,6 @@ void blt_transformer_forward(
     blt_arena* arena
 );
 
-// Builds a blt_transformer_weights_bf16 view from a layer storage.
 // Returns a zeroed struct when use_bf16 is disabled.
 blt_transformer_weights_bf16 blt_transformer_layer_bf16_view(
     const blt_transformer_layer_storage* s, int use_bf16);

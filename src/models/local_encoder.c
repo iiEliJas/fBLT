@@ -20,13 +20,6 @@
 #include <string.h>
 
 
-
-//----------------------------------------------------------------------
-// Config helpers
-//
-
-
-
 static blt_byte_embedding byte_embedding_view(const blt_local_encoder* model) {
     blt_byte_embedding emb;
     emb.vocab_size = 256;
@@ -34,7 +27,6 @@ static blt_byte_embedding byte_embedding_view(const blt_local_encoder* model) {
     emb.embed_dim = model->config.embed_dim;
     return emb;
 }
-
 
 
 static void validate_call(const blt_local_encoder* model, const blt_tensor* bytes_in,
@@ -53,19 +45,13 @@ static void validate_call(const blt_local_encoder* model, const blt_tensor* byte
 }
 
 
-
-//----------------------------------------------------------------------
-// Setup: group ids, mask configs, RoPE views
-//
 // Forward and backward both need these things, so build them once here
-
 typedef struct {
     blt_mask_config local_mask;   // byte self-attention: block-causal, window w_E
     blt_mask_config cross_mask;   // patch byte cross-attention: block-diagonal
     blt_tensor rope_cos_view;
     blt_tensor rope_sin_view;
 } le_context;
-
 
 
 static le_context make_context(const blt_local_encoder* model, size_t seq_len,
@@ -81,7 +67,6 @@ static le_context make_context(const blt_local_encoder* model, size_t seq_len,
 
     le_context ctx = {0};
 
-    // Local byte mask
     // sliding window w_E (0 == full causal), causal
     ctx.local_mask.seq_len_q = seq_len;
     ctx.local_mask.seq_len_kv = seq_len;
@@ -90,7 +75,6 @@ static le_context make_context(const blt_local_encoder* model, size_t seq_len,
     ctx.local_mask.num_docs = num_docs;
     ctx.local_mask.is_causal = true;
 
-    // Cross mask
     ctx.cross_mask.seq_len_q = num_patches;
     ctx.cross_mask.seq_len_kv = seq_len;
     ctx.cross_mask.query_group_ids = query_group_ids;
@@ -106,15 +90,13 @@ static le_context make_context(const blt_local_encoder* model, size_t seq_len,
 }
 
 
-
 static blt_cross_attention_config make_cross_attn_config(const blt_local_encoder_config* config, const le_context* ctx) {
     blt_cross_attention_config c = {0};
     c.embed_dim = config->embed_dim;
-    c.num_heads = config->cross_attn_heads;   // head_dim inferred (0)
+    c.num_heads = config->cross_attn_heads;
     c.mask_config = &ctx->cross_mask;
     return c;
 }
-
 
 
 // K-split (SPLIT_QUERY): expands each patch's query group id to its k
@@ -131,16 +113,12 @@ static void setup_query_split_mask(blt_cross_attention_config* cross_config,
     size_t* expanded_query_group_ids = blt_arena_alloc(arena, num_patches * k * sizeof(size_t), 64);
     blt_patch_expand_group_ids(ctx->cross_mask.query_group_ids, num_patches, k, expanded_query_group_ids);
 
-    *split_mask_cfg = *cross_config->mask_config; // copy base block-diagonal cfg
+    *split_mask_cfg = *cross_config->mask_config;
     split_mask_cfg->seq_len_q = num_patches * k;
     split_mask_cfg->query_group_ids = expanded_query_group_ids;
     cross_config->mask_config = split_mask_cfg;
 }
 
-
-
-//----------------------------------------------------------------------
-// Create / grad-create
 
 blt_local_encoder* blt_local_encoder_create(blt_arena* arena, const blt_local_encoder_config* config) {
     BLT_REQUIRE(arena != NULL && config != NULL,
@@ -162,18 +140,14 @@ blt_local_encoder* blt_local_encoder_create(blt_arena* arena, const blt_local_en
 
     BLT_REQUIRE(config->patch_dim % config->embed_dim == 0, "blt_local_encoder_create: patch_dim must be divisible by embed_dim");
 
-
     blt_local_encoder* m = (blt_local_encoder*)blt_container_alloc(arena, sizeof(blt_local_encoder));
     m->config = *config;
 
-    // Byte embedding table [256, embed_dim]
     size_t emb_shape[2] = { 256, E };
     m->byte_embedding_weight = blt_tensor_create(arena, emb_shape, 2, BLT_DTYPE_FP32);
 
-    // Hash n-gram tables
     m->ngram_weights = blt_hash_ngram_create(arena, &config->ngram_config);
 
-    // RoPE cache - precomputed once
     size_t half = head_dim / 2;
     size_t rope_shape[2] = { config->max_seq_len, half };
     m->rope_cos_cache = blt_tensor_create(arena, rope_shape, 2, BLT_DTYPE_FP32);
@@ -181,7 +155,6 @@ blt_local_encoder* blt_local_encoder_create(blt_arena* arena, const blt_local_en
     blt_rope_config rope_cfg = { .theta = config->rope_theta, .head_dim = head_dim };
     blt_rope_precompute(config->max_seq_len, &rope_cfg, &m->rope_cos_cache, &m->rope_sin_cache);
 
-    // Per-layer weights
     m->layers = (blt_local_encoder_layer_storage*)blt_container_alloc(arena, config->num_layers * sizeof(blt_local_encoder_layer_storage));
 
     for (size_t l = 0; l < config->num_layers; ++l) {
@@ -189,7 +162,6 @@ blt_local_encoder* blt_local_encoder_create(blt_arena* arena, const blt_local_en
     }
     return m;
 }
-
 
 
 blt_local_encoder_grad* blt_local_encoder_grad_create(blt_arena* arena, const blt_local_encoder* model) {
@@ -221,13 +193,9 @@ blt_local_encoder_grad* blt_local_encoder_grad_create(blt_arena* arena, const bl
 }
 
 
-
-//----------------------------------------------------------------------
-// Forward path
-//
-// Pipeline steps (BLT 3.2):
+// Forward path (BLT 3.2):
 // 1. e_0     = byte_embedding(bytes) + hash_ngram_embeddings(bytes)
-// 2. P_0     = pool(e_0, patches) 
+// 2. P_0     = pool(e_0, patches)
 // 3. for l in 1..num_layers:
 //      h_l = byte_transformer_layer_l(h_{l-1})     (local block-causal, window w_E)
 //      if cross_attn_fires(l): P_l = P_{l-1} + cross_attn_l(RMSNorm(P_{l-1}), h_l)
@@ -252,8 +220,6 @@ void blt_local_encoder_forward(const blt_local_encoder* model,
     const blt_local_encoder_config* config = &model->config;
     size_t E = config->embed_dim;
 
-    // ---- K-split setup -------------------------------------------------
-    // patch_dim == 0 is no split, patch_dim > 0 is split into k = patch_dim / embed_dim
     size_t patch_dim = (config->patch_dim == 0) ? E : config->patch_dim;
     BLT_REQUIRE(patch_dim % E == 0,
         "blt_local_encoder_forward: patch_dim must be a multiple of embed_dim");
@@ -273,16 +239,13 @@ void blt_local_encoder_forward(const blt_local_encoder* model,
     cross_config.patch_dim = patch_dim;
     cross_config.split_mode = (k == 1) ? BLT_CROSS_ATTN_NO_SPLIT : BLT_CROSS_ATTN_SPLIT_QUERY;
 
-    // patch structure is fixed across all layers so build once
     blt_mask_config split_mask_cfg;
     setup_query_split_mask(&cross_config, &split_mask_cfg, num_patches, k, &ctx, arena);
 
     size_t byte_shape[2] = {seq_len, E};
     size_t patch_shape[2] = {num_patches, patch_dim};
 
-    // -----------------------------------------------------------------
-    // STEP 1: e_0 = byte_embedding + hash_ngram_embeddings
-    //
+    // e_0 = byte_embedding + hash_ngram_embeddings
     blt_byte_embedding emb = byte_embedding_view(model);
     blt_tensor byte_emb = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
     blt_byte_embedding_forward(&emb, bytes_in, &byte_emb);
@@ -290,9 +253,7 @@ void blt_local_encoder_forward(const blt_local_encoder* model,
     blt_tensor h = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
     blt_hash_ngram_forward(&model->ngram_weights, &config->ngram_config, bytes_in, &byte_emb, &h);
 
-    // -----------------------------------------------------------------
-    // STEP 2: P_0 = pool(e_0, patches)
-    //
+    // P_0 = pool(e_0, patches)
     blt_tensor pooled = blt_tensor_create(arena, (size_t[]){num_patches, E}, 2, BLT_DTYPE_FP32);
     blt_patch_pool_forward(&h, patches, num_patches, config->pool_type, &pooled);
 
@@ -303,23 +264,17 @@ void blt_local_encoder_forward(const blt_local_encoder* model,
             (float*)p.data + sj * E, patch_dim,
             (const float*)pooled.data, E, num_patches, E);
     }
-    if (k == 1) {
-        // single strided_copy above already performed the full copy
-    }
 
-    // -----------------------------------------------------------------
-    // STEP 3: layer loop
-    //
+    // layer loop
     for (size_t l = 0; l < config->num_layers; ++l) {
         const blt_local_encoder_layer_storage* s = &model->layers[l];
 
         blt_transformer_weights w = blt_local_byte_weights_view(s);
         blt_tensor h_next = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
         blt_transformer_forward(&h, &w, &h_next, &layer_config, arena);
-        h = h_next;   // byte states after transformer
+        h = h_next;
 
         if (blt_local_cross_attn_fires(config->cross_attn_placement, config->cross_attn_all_layers, config->num_layers, l)) {
-            // Reinterpret [num_patches, patch_dim] as [num_patches*k, E] BEFORE the norm
             blt_tensor p_view;
             blt_tensor_view_2d(&p_view, p.data, num_patches * k, E, p.backend);
 
@@ -330,7 +285,6 @@ void blt_local_encoder_forward(const blt_local_encoder* model,
             blt_tensor cross_out_split = blt_tensor_create(arena, (size_t[]){num_patches * k, E}, 2, BLT_DTYPE_FP32);
             blt_cross_attention_forward(&query_view, &h, &xw, &cross_out_split, &cross_config, arena);
 
-            // Reinterpret [num_patches*k, E] back as [num_patches, patch_dim] for the residual connection
             blt_tensor cross_out_concat;
             blt_tensor_view_2d(&cross_out_concat, cross_out_split.data, num_patches, patch_dim, cross_out_split.backend);
 
@@ -340,31 +294,22 @@ void blt_local_encoder_forward(const blt_local_encoder* model,
         }
     }
 
-    // -----------------------------------------------------------------
-    // STEP 4: results into output
-    //
     blt_strided_copy(p.backend, (float*)patch_out->data, num_patches * patch_dim,
                      (const float*)p.data, num_patches * patch_dim, 1, num_patches * patch_dim);
     blt_strided_copy(h.backend, (float*)byte_hidden_out->data, seq_len * E,
                      (const float*)h.data, seq_len * E, 1, seq_len * E);
-
-    // Arena cleanup is callers responsibility
 }
 
 
-//----------------------------------------------------------------------
-// Backward path
-//
-// Mirrors forwards call order in reverse
-// forward doesnt save intermediates -> so each layers forward is recomputed here with caching
-
+// Backward path -- mirrors forwards call order in reverse.
+// Forward doesn't save intermediates, so each layer's forward is
+// recomputed here with caching.
 typedef struct {
     bool has_cross;
-    blt_tensor p_in;         // P_l before this layer's cross-attn   [num_patches, E]
-    blt_tensor normed_p;     // rmsnorm(p_in, cross_norm_weight)     [num_patches, E]
-    blt_transformer_layer_cache* byte_cache;  // recomputed byte transformer block, from blt_transformer_layer_forward_cached
+    blt_tensor p_in;
+    blt_tensor normed_p;
+    blt_transformer_layer_cache* byte_cache;
 } layer_cache;
-
 
 
 void blt_local_encoder_backward(const blt_local_encoder* model,
@@ -386,7 +331,6 @@ void blt_local_encoder_backward(const blt_local_encoder* model,
     const size_t E = config->embed_dim;
     const size_t L = config->num_layers;
 
-    // K split setup
     size_t patch_dim = (config->patch_dim == 0) ? E : config->patch_dim;
     BLT_REQUIRE(patch_dim % E == 0,
         "blt_local_encoder_backward: patch_dim must be a multiple of embed_dim");
@@ -416,11 +360,9 @@ void blt_local_encoder_backward(const blt_local_encoder* model,
     size_t byte_shape[2] = {seq_len, E};
     size_t patch_shape[2] = {num_patches, patch_dim};
 
-    // -----------------------------------------------------------------
-    // STEP 1: recompute forward, caching layer intermediates
+    // Recompute forward, caching layer intermediates
     //   h[0..L] - byte states entering each layer (h[0] = e_0)
     //   caches[] - per-layer FFN/norm intermediates + cross-attn inputs
-    // 
     blt_byte_embedding emb = byte_embedding_view(model);
     blt_tensor byte_emb = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
     blt_byte_embedding_forward(&emb, bytes_in, &byte_emb);
@@ -452,7 +394,7 @@ void blt_local_encoder_backward(const blt_local_encoder* model,
 
         if (blt_local_cross_attn_fires(config->cross_attn_placement, config->cross_attn_all_layers, config->num_layers, l)) {
             c->has_cross = true;
-            c->p_in = p;   // P_l before cross-attn
+            c->p_in = p;
 
             blt_tensor p_in_view;
             blt_tensor_view_2d(&p_in_view, c->p_in.data, num_patches * k, E, c->p_in.backend);
@@ -474,24 +416,20 @@ void blt_local_encoder_backward(const blt_local_encoder* model,
         }
     }
 
-    // -----------------------------------------------------------------
-    // STEP 2: terminal gradients
+    // Terminal gradients
     //   dh — running dL/d(h_{l+1}), starts at dL/d(h_final)
     //   dP — running dL/d(P_{l+1}), starts at dL/d(P_final)
-    //
     blt_tensor dh = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
     if (grad_byte_hidden_out != NULL) {
         blt_tensor_upload(&dh, grad_byte_hidden_out->data,
                           seq_len * E * sizeof(float));
-    } // else stays zero
+    }
 
     blt_tensor dP = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
     blt_tensor_upload(&dP, grad_patch_out->data,
                       num_patches * patch_dim * sizeof(float));
 
-    // -----------------------------------------------------------------
-    // STEP 3: reverse layer loop
-    // 
+    // Reverse layer loop
     for (size_t li = L; li-- > 0;) {
         const blt_local_encoder_layer_storage* s = &model->layers[li];
         blt_local_encoder_layer_grad* lg = &grad->layer_grads[li];
@@ -511,22 +449,19 @@ void blt_local_encoder_backward(const blt_local_encoder* model,
             blt_tensor grad_normed_p_split = blt_tensor_create(arena, (size_t[]){num_patches * k, E}, 2, BLT_DTYPE_FP32);
             blt_tensor grad_kv = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
 
-            // c->normed_p is already [num_patches * k, E]
             blt_cross_attention_backward(&c->normed_p, &h[li + 1], &xw, &grad_out_split,
                                         &grad_normed_p_split, &grad_kv, &xg, &cross_config, arena);
-            
+
             blt_tensor dh_new = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
             blt_add(&dh, &grad_kv, &dh_new);
             dh = dh_new;
 
-            // View p_in as split for rmsnorm backward
             blt_tensor p_in_view;
             blt_tensor_view_2d(&p_in_view, c->p_in.data, num_patches * k, E, c->p_in.backend);
 
             blt_tensor grad_p_norm_split = blt_tensor_create(arena, (size_t[]){num_patches * k, E}, 2, BLT_DTYPE_FP32);
             blt_rmsnorm_backward(&grad_normed_p_split, &p_in_view, &s->cross_norm_weight, &grad_p_norm_split, &lg->cross_norm_weight);
 
-            // Reinterpret grad back to [num_patches, patch_dim] to add to dP
             blt_tensor grad_p_norm;
             blt_tensor_view_2d(&grad_p_norm, grad_p_norm_split.data, num_patches, patch_dim, grad_p_norm_split.backend);
 
@@ -544,13 +479,10 @@ void blt_local_encoder_backward(const blt_local_encoder* model,
         dh = dh_next;
     }
 
-    // -----------------------------------------------------------------
-    // STEP 4: P_0 = pool(h_0) scatter pool gradient into h_0 grad
-    //
+    // P_0 = pool(h_0) -- scatter pool gradient into h_0 grad
     blt_tensor dP_pooled = blt_tensor_create(arena, (size_t[]){num_patches, E}, 2, BLT_DTYPE_FP32);
     // Sum the k column blocks of each grad row into the pooled gradient.
     for (size_t sj = 0; sj < k; sj++) {
-        // io-style accumulate: dP_pooled += column block sj of dP
         blt_tensor block_view, acc_view;
         blt_tensor_view_2d(&block_view, (float*)dP.data + sj * E, num_patches, E, dP.backend);
         if (sj == 0) {
@@ -571,14 +503,10 @@ void blt_local_encoder_backward(const blt_local_encoder* model,
     blt_tensor grad_e0 = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
     blt_add(&dh, &grad_h0_pool, &grad_e0);
 
-    // -----------------------------------------------------------------
-    // STEP 5: e_0 = byte_embedding + hash n-grams
-    //
+    // e_0 = byte_embedding + hash n-grams
     blt_tensor grad_byte_emb = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
     blt_hash_ngram_backward(&config->ngram_config, bytes_in, &grad_e0, &grad_byte_emb, grad->ngram_grads.tables);
 
     // scatter-adds into grad->embedding_grad (zeroed by grad_create)
     blt_byte_embedding_backward(&emb, bytes_in, &grad_byte_emb, &grad->embedding_grad);
-
-    // Arena cleanup is callers responsibility
 }

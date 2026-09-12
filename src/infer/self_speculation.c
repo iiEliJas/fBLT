@@ -1,22 +1,7 @@
 // BLT-S: self-speculative greedy generation (Fast-BLT 5.1, Algorithm 2).
-//
-// Round structure:
-//   1. entropy LM + patcher segment the committed prefix
-//   2. one encoder+global call freezes the latents          [1 enc/global NFE]
-//      (tier-3 global/encoder caching is deferred; see kv_cache.h)
-//   3. tier maintenance: LCP vs the cached patch boundaries ->
-//      truncate both tiers to the last completed patch, refresh the
-//      trailing patch's cross-attn K/V
-//   4. prefill chunk through the incremental decoder for the open patch's
-//      rows -> argmax of row l-1 drafts the first byte     [1 decoder NFE]
-//   5. single-row decoder steps draft up to window_k bytes [1 NFE each]
-//   6. Algorithm 2 verification (dense full forward): accept until first
-//      mismatch, replace it                                [1 enc/global NFE,
-//                                                            1 decoder NFE]
-//
-// Completed patches are immutable across rounds (prefix-stable patcher +
-// causal models), so tier entries below the truncation point stay valid and
-// per-round decoder work shrinks to the open patch + drafts.
+// Round structure: segment prefix -> freeze latents -> cache maintenance ->
+// prefill chunk -> draft -> verify. Completed patches are immutable across
+// rounds (prefix-stable patcher + causal models).
 #include "blt/infer/self_speculation.h"
 
 #include "blt/infer/kv_cache.h"
@@ -30,7 +15,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-
 
 #define BLT_SELFSPEC_MAX_PATCHES 4096
 
@@ -51,9 +35,8 @@ static uint8_t argmax_byte_host(const uint32_t ids[1]) {
     return (uint8_t)ids[0];
 }
 
-// The patcher runs on the host by design (it consumes raw byte/entropy
-// arrays), so a device-resident entropy tensor is staged through host
-// memory here. Returns a malloc'd buffer the caller must free.
+// The patcher runs on the host, so device entropy tensors get staged through
+// host memory. Returns a malloc'd buffer the caller must free.
 static const blt_tensor* stage_entropy_host(const blt_tensor* vals, blt_tensor* host_view_out,
                                             float** buf_out) {
     if (vals->backend == BLT_BACKEND_CPU) {
@@ -68,10 +51,6 @@ static const blt_tensor* stage_entropy_host(const blt_tensor* vals, blt_tensor* 
     return host_view_out;
 }
 
-
-// Runs the entropy model over bytes[0..len) and writes per-byte entropies
-// into *entropy_vals_out ([len] FP32). Same numerics as the plain greedy
-// loop in tools/generate_greedy.c.
 static void compute_entropy_vals(blt_arena* arena, const blt_entropy_lm* entropy_model,
                                  const uint8_t* bytes, size_t len,
                                  blt_tensor* entropy_vals_out) {
@@ -95,10 +74,7 @@ static void compute_entropy_vals(blt_arena* arena, const blt_entropy_lm* entropy
     blt_compute_entropy(&probs, entropy_vals_out, &entropy_cfg);
 }
 
-
-// Largest natural patch end e with lo < e <= hi; 0 when none exists.
-// Public (declared in the header) so the commit-selection rule stays
-// unit-testable without a model.
+// Public so the commit-selection rule stays unit-testable without a model.
 size_t blt_aligned_commit_select(const blt_patch_info* patches, size_t num_patches,
                                  size_t lo, size_t hi) {
     size_t best = 0;
@@ -130,9 +106,7 @@ size_t blt_verify_draft(
 
     const size_t vocab_size = model->config.decoder_config.vocab_size;
 
-    // -------------------------------------------------------------
-    // Algorithm 2 line 1: segment the candidate x' into M' patches
-    // -------------------------------------------------------------
+    // Segment candidate into M' patches (Algorithm 2 line 1).
     blt_tensor entropy_vals;
     compute_entropy_vals(arena, entropy_model, x, cand_len, &entropy_vals);
 
@@ -147,12 +121,8 @@ size_t blt_verify_draft(
     free(entropy_host_buf);
     entropy_host_buf = NULL;
 
-    // Force a patch boundary at the commit point l. Without this, the
-    // final prefix patch can absorb draft bytes; its latent o then changes
-    // and verification predictions diverge from what greedy decoding would
-    // produce at the same committed prefix (breaking the DV == greedy
-    // guarantee whenever l lands mid-patch). Splitting at l makes the
-    // prefix-side segmentation identical to greedy's own re-segmentation.
+    // Force patch boundary at commit point l — without this, the prefix
+    // patch absorbs draft bytes and verification diverges from greedy.
     {
         blt_patch_info forced[BLT_SELFSPEC_MAX_PATCHES];
         size_t n2 = 0;
@@ -179,9 +149,7 @@ size_t blt_verify_draft(
         memcpy(patches, forced, n2 * sizeof(blt_patch_info));
     }
 
-    // -------------------------------------------------------------
-    // Algorithm 2 line 2: T' = E(x'); O' = G(T'); y = D(x'; O')
-    // -------------------------------------------------------------
+    // Full forward: E(x'), O'=G(T'), y=D(x'; O') — Algorithm 2 line 2.
     size_t bytes_shape[1] = {cand_len};
     blt_tensor cand_bytes = blt_tensor_create(arena, bytes_shape, 1, BLT_DTYPE_UINT8);
     blt_tensor_upload(&cand_bytes, x, cand_len);
@@ -194,7 +162,7 @@ size_t blt_verify_draft(
 
     size_t logits_shape[2] = {cand_len, vocab_size};
     blt_tensor logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
-    // logits-only decode: loss/bytes unused by verification
+    // logits-only: loss/bytes unused by verification
     blt_local_decoder_forward_ext(model->decoder, &enc.byte_hidden_out, &enc.global_out,
         patches, num_patches, NULL, NULL, 0, NULL, &logits, NULL, arena);
     if (stats != NULL) {
@@ -207,18 +175,11 @@ size_t blt_verify_draft(
     blt_tensor_download(&logits, logits_host, logits.numel * sizeof(float));
     const float* rows = logits_host;
 
-    // -------------------------------------------------------------
-    // Algorithm 2 lines 3-9: accept until first mismatch, else free byte.
-    //
-    // Prediction for position p is argmax(logits row p-1). Drafted byte at
-    // position p is x[p]. On mismatch, position p is REPLACED with the
-    // prediction and committed length becomes p+1. On full match, the free
-    // byte y_{l+r-1} extends the sequence by one more (budget permitting).
-    // -------------------------------------------------------------
+    // Algorithm 2 lines 3-9: accept until first mismatch.
     for (size_t p = l; p < cand_len; p++) {
         uint8_t pred = argmax_byte_host_check(rows + (p - 1) * vocab_size, vocab_size);
         if (x[p] != pred) {
-            x[p] = pred;                     // reject drafted byte; replace first mismatch
+            x[p] = pred;
             if (stats != NULL) {
                 stats->bytes_accepted += p - l;
             }
@@ -227,12 +188,11 @@ size_t blt_verify_draft(
         }
     }
 
-    // full match: all r drafted bytes accepted
     if (stats != NULL) {
         stats->bytes_accepted += r;
     }
     if (cand_len < target_len) {
-        x[cand_len] = argmax_byte_host_check(rows + (cand_len - 1) * vocab_size, vocab_size);   // free byte
+        x[cand_len] = argmax_byte_host_check(rows + (cand_len - 1) * vocab_size, vocab_size);
         free(logits_host);
         return cand_len + 1;
     }
@@ -261,9 +221,7 @@ size_t blt_verify_draft_aligned(
 
     const size_t vocab_size = model->config.decoder_config.vocab_size;
 
-    // Natural segmentation of the candidate; no forced split at l. Every
-    // commit chosen below is one of these patch ends, which a streaming
-    // patcher reproduces in all longer contexts.
+    // Natural segmentation — no forced split at l.
     blt_tensor entropy_vals;
     compute_entropy_vals(arena, entropy_model, x, cand_len, &entropy_vals);
 
@@ -301,9 +259,7 @@ size_t blt_verify_draft_aligned(
     blt_tensor_download(&logits, logits_host, logits.numel * sizeof(float));
     const float* rows = logits_host;
 
-    // Accept until the first mismatch. Commit only at natural patch ends:
-    // on mismatch at p the verified-good range is [l, p), so the commit is
-    // the largest boundary in (l, p]; everything past it is re-drafted.
+    // Accept until mismatch; commit only at natural patch ends.
     for (size_t p = l; p < cand_len; p++) {
         const uint8_t pred = argmax_byte_host_check(rows + (p - 1) * vocab_size, vocab_size);
         if (x[p] != pred) {
@@ -315,8 +271,6 @@ size_t blt_verify_draft_aligned(
                 free(logits_host);
                 return b;
             }
-            // Progress rule: no boundary inside the verified range -- take
-            // the corrected byte itself (the only unaligned commitment).
             x[p] = pred;
             if (stats != NULL) {
                 stats->bytes_accepted += 1;
@@ -326,9 +280,6 @@ size_t blt_verify_draft_aligned(
         }
     }
 
-    // Full match: every draft byte survived. cand_len closes the tiling and
-    // is therefore always a valid aligned commit; the free byte rides along
-    // because its prediction comes from this exact forward pass.
     if (stats != NULL) {
         stats->bytes_accepted += r;
     }
@@ -341,22 +292,13 @@ size_t blt_verify_draft_aligned(
     return cand_len;
 }
 
-
-//----------------------------------------------------------------------
-// Cache-aware drafting helpers
-
 typedef struct {
     blt_kv_cache* cache;
     const blt_model* model;
 } draft_ctx;
 
-
-// Processes decoder rows [from_row .. l) through the incremental decoder
-// (prefill chunk), returning argmax of row l-1 -- i.e. the model's greedy
-// prediction for position l given the committed prefix.
-//
-// D_0 rows come from the encoder h_final states (prefill rows are always
-// real committed bytes).
+// Process rows [from_row..l) through incremental decoder; returns argmax
+// of row l-1 (greedy prediction for position l).
 static uint8_t prefill_argmax(draft_ctx* d, const blt_model_enc_out* enc,
                               const blt_patch_info* patches, size_t num_patches,
                               size_t from_row, size_t l, blt_infer_stats* stats,
@@ -385,10 +327,8 @@ static uint8_t prefill_argmax(draft_ctx* d, const blt_model_enc_out* enc,
     return argmax_byte_host(ids);
 }
 
-// One single-row drafting step: processes the row at absolute position
-// `pos` (= cache->self_len) whose D_0 follows `mode` -- ZEROS leaves it
-// zero, LEARNED reads d0_embed_weight[token = previously drafted byte].
-// Its logits predict position pos+1, i.e. the next draft byte.
+// Single-row draft step. D_0 mode: ZEROS leaves it zero, LEARNED reads
+// d0_embed_weight[token]. Logits predict position pos+1.
 static uint8_t draft_step(draft_ctx* d, const blt_model_enc_out* enc,
                           const blt_patch_info* patches, size_t num_patches,
                           const uint8_t* draft, size_t m, size_t pos,
@@ -447,8 +387,8 @@ void blt_generate_greedy_selfspec(
     size_t l = prompt_len;
     const size_t target_len = prompt_len + max_new_bytes;
 
-    // Cache buffers are allocated once, BEFORE the per-round arena markers,
-    // so the round resets below never invalidate them.
+    // Cache buffers allocated before per-round arena markers so resets
+    // never invalidate them.
     blt_kv_cache* cache = blt_kv_cache_create(arena, model->decoder,
         model->config.decoder_config.max_seq_len);
 
@@ -457,16 +397,13 @@ void blt_generate_greedy_selfspec(
     while (l < target_len) {
         const size_t round_marker = arena->offset;
 
-        // Cap the window so a fully accepted draft plus its free byte can
-        // never exceed the output budget: l + k + 1 <= target_len.
+        // Cap the window: l + k + 1 <= target_len.
         size_t r_eff = config->window_k;
         if (l + r_eff + 1 > target_len) {
             r_eff = target_len - l - 1;
         }
 
-        // -------------------------------------------------------------
         // 1. Segment the committed prefix
-        // -------------------------------------------------------------
         blt_tensor entropy_vals;
         compute_entropy_vals(arena, entropy_model, output_bytes, l, &entropy_vals);
 
@@ -481,9 +418,7 @@ void blt_generate_greedy_selfspec(
         free(entropy_host_buf);
         entropy_host_buf = NULL;
 
-        // -------------------------------------------------------------
-        // 2. Freeze the latents (one encoder+global pass)
-        // -------------------------------------------------------------
+        // 2. Freeze latents (one encoder+global pass)
         size_t bytes_shape[1] = {l};
         blt_tensor prefix_bytes = blt_tensor_create(arena, bytes_shape, 1, BLT_DTYPE_UINT8);
         blt_tensor_upload(&prefix_bytes, output_bytes, l);
@@ -494,15 +429,7 @@ void blt_generate_greedy_selfspec(
             stats->nfe_encoder_global++;
         }
 
-        // -------------------------------------------------------------
-        // 3. Cache tier maintenance: roll back to the longest common patch
-        //    prefix with what is cached, then refresh the trailing
-        //    patches' cross-attn K/V against the frozen latents.
-        //
-        //    common < num_patches always holds (a tiling of [0,l) cannot
-        //    equal a shorter cached tiling), so at least one row remains
-        //    for the prefill chunk.
-        // -------------------------------------------------------------
+        // 3. Cache tier maintenance: LCP with cache, refresh trailing K/V.
         size_t common = blt_kv_cache_common_patches(cache, patches, num_patches);
         size_t self_valid = 0;
         if (common > 0) {
@@ -511,26 +438,19 @@ void blt_generate_greedy_selfspec(
         blt_kv_cache_truncate(cache, self_valid, common);
         blt_kv_cache_refresh_cross(cache, &enc.global_out, patches, num_patches, common, arena);
 
-        // -------------------------------------------------------------
-        // 4. Prefill chunk -> first draft byte (argmax of row l-1)
-        // -------------------------------------------------------------
+        // 4. Prefill chunk -> first draft byte
         uint8_t next = prefill_argmax(&d, &enc, patches, num_patches,
             self_valid, l, stats, arena);
 
         if (r_eff == 0) {
-            // Only one byte left in the budget: the prefill argmax IS the
-            // final byte (plain AR step, no speculation).
+            // One byte left — plain AR step, no speculation.
             output_bytes[l] = next;
             l++;
             arena->offset = round_marker;
             break;
         }
 
-        // -------------------------------------------------------------
-        // 5. Draft: single-row decoder steps past the boundary. Byte
-        //    draft[m] is the prediction for position l+m and comes from
-        //    processing row l+m-1, whose D_0 encodes draft[m-1].
-        // -------------------------------------------------------------
+        // 5. Draft past the boundary.
         uint8_t draft[BLT_SELFSPEC_MAX_PATCHES];
         draft[0] = next;
         if (stats != NULL) {
@@ -545,9 +465,7 @@ void blt_generate_greedy_selfspec(
         }
         memcpy(output_bytes + l, draft, r_eff);
 
-        // -------------------------------------------------------------
         // 6. Verify (Algorithm 2): re-segment, full forward, accept/replace
-        // -------------------------------------------------------------
         l = blt_verify_draft(model, entropy_model, patcher_config,
             output_bytes, l, r_eff, target_len, stats, arena);
 

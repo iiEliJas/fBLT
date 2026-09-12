@@ -1,4 +1,3 @@
-// blt/infer/rope_gather.h
 #ifndef BLT_INFER_ROPE_GATHER_H
 #define BLT_INFER_ROPE_GATHER_H
 

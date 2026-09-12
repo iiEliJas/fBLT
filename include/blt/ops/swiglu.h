@@ -6,9 +6,8 @@ extern "C" {
 #endif
 #include "blt/core/tensor.h"
 
-// Elementwise SwiGLU gate: out = silu(gate) * up, where silu(z) = z * sigmoid(z).
-// gate, up, and out must all have the same element count (typically
-// [seq_len, hidden_dim], already produced by separate gate/up projections).
+// out = silu(gate) * up, where silu(z) = z * sigmoid(z).
+// gate, up, and out must have the same element count.
 void blt_swiglu_forward(const blt_tensor* gate, const blt_tensor* up, blt_tensor* out);
 void blt_swiglu_backward(const blt_tensor* grad_out, const blt_tensor* gate, const blt_tensor* up,
                           blt_tensor* grad_gate, blt_tensor* grad_up);

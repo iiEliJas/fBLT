@@ -1,4 +1,3 @@
-// blt/infer/stats.c
 #include "blt/infer/stats.h"
 #include <stdio.h>
 

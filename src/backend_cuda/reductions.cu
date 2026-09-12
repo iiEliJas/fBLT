@@ -35,7 +35,6 @@ static unsigned blt_cuda_grid(size_t n) {
     return (unsigned)(blocks > 0 ? blocks : 1);
 }
 
-//----------------------------------------------------------------
 // Softmax
 
 __global__ void blt_softmax_kernel(const float* in, float* out, size_t rows, size_t last_dim) {
@@ -99,7 +98,6 @@ extern "C" void blt_softmax_backward_cuda(const blt_tensor* grad_out, const blt_
     blt_cuda_launch_check("blt_softmax_backward");
 }
 
-//----------------------------------------------------------------
 // Cross Entropy
 
 // Per-row: loss_i = log(sum_v exp(logits[v] - max)) + max - logits[target].
@@ -217,7 +215,6 @@ extern "C" void blt_cross_entropy_backward_cuda(const blt_tensor* logits, const 
     blt_cuda_launch_check("blt_cross_entropy_backward");
 }
 
-//----------------------------------------------------------------
 // RoPE
 
 __global__ void blt_rope_precompute_kernel(float* cos_out, float* sin_out, size_t max_seq_len,
@@ -275,7 +272,7 @@ extern "C" void blt_rope_apply_cuda(const blt_tensor* x, const blt_tensor* cos, 
     blt_cuda_launch_check("blt_rope_apply");
 }
 
-// Inverse rotation: forward applied with sin negated.
+// Backward rotation: forward applied with sin negated.
 __global__ void blt_rope_apply_backward_kernel(const float* grad_out, const float* cos, const float* sin,
                                                float* grad_in, size_t seq_len, size_t num_heads,
                                                size_t head_dim, size_t half) {
@@ -313,22 +310,22 @@ extern "C" void blt_rope_apply_backward_cuda(const blt_tensor* grad_out, const b
 // Eliminates 3 kernel launches per head (strided_copy -> rope -> strided_copy).
 __global__ void blt_rope_apply_packed_kernel(float* qkv_data, size_t qkv_stride,
                                              size_t head_offset, size_t seq_len,
-                                             size_t head_dim, const float* cos, const float* sin) {
+                                              size_t head_dim, const float* cos, const float* sin) {
     const size_t half = head_dim / 2;
     const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     const size_t total = seq_len * half;
-    
+
     if (tid >= total) return;
-    
+
     const size_t t = tid / half;
     const size_t i = tid % half;
-    
+
     const size_t base = t * qkv_stride + head_offset;
     float x0 = qkv_data[base + 2 * i];
     float x1 = qkv_data[base + 2 * i + 1];
     float c = cos[t * half + i];
     float s = sin[t * half + i];
-    
+
     qkv_data[base + 2 * i]     = x0 * c - x1 * s;
     qkv_data[base + 2 * i + 1] = x1 * c + x0 * s;
 }
@@ -342,32 +339,31 @@ extern "C" void blt_rope_apply_packed_cuda(float* qkv_data, size_t qkv_stride,
     unsigned blocks = (unsigned)((total + block - 1) / block);
     if (blocks > 4096) blocks = 4096;
     if (blocks == 0) blocks = 1;
-    
+
     blt_rope_apply_packed_kernel<<<blocks, block>>>(qkv_data, qkv_stride,
                                                     head_offset, seq_len,
                                                     head_dim, cos, sin);
     blt_cuda_launch_check("blt_rope_apply_packed");
 }
 
-// Inverse rotation for backward pass on packed layout.
 __global__ void blt_rope_apply_packed_backward_kernel(float* qkv_data, size_t qkv_stride,
                                                       size_t head_offset, size_t seq_len,
                                                       size_t head_dim, const float* cos, const float* sin) {
     const size_t half = head_dim / 2;
     const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
     const size_t total = seq_len * half;
-    
+
     if (tid >= total) return;
-    
+
     const size_t t = tid / half;
     const size_t i = tid % half;
-    
+
     const size_t base = t * qkv_stride + head_offset;
     float g0 = qkv_data[base + 2 * i];
     float g1 = qkv_data[base + 2 * i + 1];
     float c = cos[t * half + i];
     float s = sin[t * half + i];
-    
+
     qkv_data[base + 2 * i]     = g0 * c + g1 * s;
     qkv_data[base + 2 * i + 1] = g1 * c - g0 * s;
 }
@@ -388,7 +384,6 @@ extern "C" void blt_rope_apply_packed_backward_cuda(float* qkv_data, size_t qkv_
     blt_cuda_launch_check("blt_rope_apply_packed_backward");
 }
 
-//----------------------------------------------------------------
 // RMSNorm
 
 __global__ void blt_rmsnorm_forward_kernel(const float* x, const float* w, float* out,
@@ -428,7 +423,6 @@ __global__ void blt_rmsnorm_backward_fused_kernel(const float* grad_out, const f
     const size_t tid = threadIdx.x;
     const size_t num_threads = blockDim.x;
     
-    // Phase 1: Compute inv_rms per row (parallel over rows)
     for (size_t i = tid; i < seq_len; i += num_threads) {
         const float* row = x + i * embed_dim;
         float sumsq = 0.0f;
@@ -438,7 +432,6 @@ __global__ void blt_rmsnorm_backward_fused_kernel(const float* grad_out, const f
     }
     __syncthreads();
     
-    // Phase 2: Compute grad_x (parallel over rows)
     for (size_t i = tid; i < seq_len; i += num_threads) {
         const float* row = x + i * embed_dim;
         const float* go_row = grad_out + i * embed_dim;
@@ -456,7 +449,6 @@ __global__ void blt_rmsnorm_backward_fused_kernel(const float* grad_out, const f
     }
     __syncthreads();
     
-    // Phase 3: Compute grad_weight (parallel over columns)
     for (size_t j = tid; j < embed_dim; j += num_threads) {
         float acc = grad_weight[j];
         for (size_t i = 0; i < seq_len; i++) {
@@ -472,7 +464,6 @@ extern "C" void blt_rmsnorm_backward_cuda(const blt_tensor* grad_out, const blt_
     const size_t seq_len = x->shape[0];
     const size_t embed_dim = x->shape[1];
 
-    // Use fused kernel with one block; requires shared memory = seq_len * 4 bytes
     size_t shared_mem = seq_len * sizeof(float);
     size_t threads = (seq_len > embed_dim ? seq_len : embed_dim);
     if (threads > 256) threads = 256;
@@ -482,7 +473,6 @@ extern "C" void blt_rmsnorm_backward_cuda(const blt_tensor* grad_out, const blt_
     blt_cuda_launch_check("blt_rmsnorm_backward");
 }
 
-//----------------------------------------------------------------
 // LayerNorm (forward only; backward is unimplemented on CPU as well)
 
 __global__ void blt_layernorm_forward_kernel(const float* x, const float* w, const float* b, float* out,

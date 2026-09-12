@@ -31,8 +31,6 @@ size_t blt_tensor_bytes(const blt_tensor* t) {
     return t->numel * blt_dtype_sizeof(t->dtype);
 }
 
-
-
 void view_1d(blt_tensor* view, void* data, size_t len, blt_dtype dtype, blt_backend backend) {
     view->data = data;
     for (size_t d = 0; d < BLT_MAX_NDIM; ++d) {
@@ -66,7 +64,7 @@ void blt_tensor_view_2d(blt_tensor* t, void* data, size_t rows, size_t cols, blt
     t->is_view = true;
     blt_tensor_compute_row_major_strides(t->shape, 2, t->strides);
 }
- 
+
 void blt_tensor_view_3d(blt_tensor* t, void* data, size_t d0, size_t d1, size_t d2, blt_backend backend) {
     t->data = data;
     t->shape[0] = d0;
@@ -80,7 +78,6 @@ void blt_tensor_view_3d(blt_tensor* t, void* data, size_t d0, size_t d1, size_t 
     t->is_view = true;
     blt_tensor_compute_row_major_strides(t->shape, 3, t->strides);
 }
-
 
 void zero_tensor(blt_tensor* t) {
     if (t->backend == BLT_BACKEND_CUDA) {
@@ -174,7 +171,7 @@ void* blt_container_alloc_cuda(blt_arena* arena, size_t bytes) {
 void blt_tensor_copy_from_host(blt_tensor* t, const void* host_src, size_t bytes) {
     BLT_REQUIRE(t != NULL && host_src != NULL, "blt_tensor_copy_from_host: arguments cannot be NULL");
     BLT_REQUIRE(bytes <= blt_tensor_bytes(t), "blt_tensor_copy_from_host: copy size exceeds tensor size");
-    
+
     if (t->backend == BLT_BACKEND_CUDA) {
 #ifdef BLT_WITH_CUDA
         blt_cuda_memcpy_h2d(t->data, host_src, bytes);
@@ -189,7 +186,7 @@ void blt_tensor_copy_from_host(blt_tensor* t, const void* host_src, size_t bytes
 void blt_tensor_copy_to_host(const blt_tensor* t, void* host_dst, size_t bytes) {
     BLT_REQUIRE(t != NULL && host_dst != NULL, "blt_tensor_copy_to_host: arguments cannot be NULL");
     BLT_REQUIRE(bytes <= blt_tensor_bytes(t), "blt_tensor_copy_to_host: copy size exceeds tensor size");
-    
+
     if (t->backend == BLT_BACKEND_CUDA) {
 #ifdef BLT_WITH_CUDA
         blt_cuda_memcpy_d2h(host_dst, t->data, bytes);

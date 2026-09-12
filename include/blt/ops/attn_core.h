@@ -9,18 +9,19 @@
 extern "C" {
 #endif
 
-// Single-head scaled dot-product attention core, expressed over raw buffers
-// so packed QKV layouts and cache slices both fit without copies. All
-// pointers live in `backend` space; every buffer access happens inside the
-// backend implementation (model code never dereferences these pointers).
+// Single-head scaled dot-product attention over raw buffers, so packed QKV
+// layouts and cache slices both fit without copies. All pointers live in
+// `backend` space; buffer access happens entirely inside the backend
+// implementation.
 //
 // Forward, per query row i:
 //   scores_ij = dot(q_i, k_j)                      (head_dim terms)
 //   w_ij      = softmax(scale * scores_ij [+ mask_ij])
 //   combined_i[col_offset + d] = sum_j w_ij * v_j[d]
+//
 // Masking: additive `mask` ([nq * nk], 0 / -INFINITY) wins over is_causal;
 // with mask == NULL and is_causal, columns j > i are masked. Rows whose
-// entries are all non-finite produce zeros, matching the dense paths.
+// entries are all non-finite produce zeros (matches dense paths).
 typedef struct {
     const float* q;             // [nq, q_stride]
     size_t q_stride;
@@ -43,14 +44,12 @@ typedef struct {
 
 void blt_attention_head_core(blt_backend backend, const blt_attention_head_args* args);
 
-// Backward counterpart. Given the saved post-softmax weights and the
-// gradient of the combined output slice, accumulates:
+// Backward pass. Given saved post-softmax weights and grad_combined, accumulates:
 //   grad_q   (scale * sum_j gs_ij * k_j)        gs = w * (gw - sum_j gw*w)
 //   grad_k   (scale * sum_i gs_ij * q_i)
 //   grad_v   (sum_i w_ij * grad_combined_i)
-// grad_q/grad_k/grad_v may be NULL to skip that output. Accumulates INTO the
-// provided buffers (caller zeroes them once per layer, matching the dense
-// paths' multi-head fan-in).
+// Any of grad_q / grad_k / grad_v may be NULL to skip. Accumulates INTO the
+// provided buffers (caller zeroes once per layer, matching multi-head fan-in).
 typedef struct {
     const float* q;             // [nq, q_stride]
     size_t q_stride;

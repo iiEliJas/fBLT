@@ -1,7 +1,6 @@
 #ifndef BLT_MODEL_BYTE_EMBEDDING_H
 #define BLT_MODEL_BYTE_EMBEDDING_H
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -13,8 +12,6 @@ typedef struct {
     blt_tensor weight; // [vocab_size, embed_dim] FP32
     size_t embed_dim;
 } blt_byte_embedding;
-
-
 
 // Allocates and zero-initializes the embedding table. Caller fills weight->data
 blt_byte_embedding blt_byte_embedding_create(blt_arena* arena, size_t vocab_size, size_t embed_dim);

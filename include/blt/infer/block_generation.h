@@ -77,10 +77,6 @@ typedef struct {
 size_t blt_block_adapt_b(size_t cur_b, double rolling_acceptance,
                          size_t b_min, size_t b_max, float target);
 
-// Largest natural patch end in (l, verified_len] for boundary-aligned
-// commitment; exposed by src/infer/self_speculation.c as
-// blt_aligned_commit_select.
-
 // Selection kernels over the currently masked cells of one block row set.
 // masked[b] != 0 marks a still-masked cell; scores[b] holds p_max
 // (confidence strategy) or marginal entropy in nats (EB strategy).

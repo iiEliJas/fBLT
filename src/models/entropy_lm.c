@@ -8,10 +8,6 @@
 #include "blt/ops/elementwise.h"
 #include "blt/ops/cross_entropy.h"
 
-
-//----------------------------------------------------------------------
-// LM Create
-
 blt_entropy_lm* blt_entropy_lm_create(blt_arena* arena, const blt_entropy_lm_config* config) {
     BLT_REQUIRE(arena != NULL && config != NULL,
         "blt_entropy_lm_create: arena and config cannot be NULL");
@@ -31,18 +27,14 @@ blt_entropy_lm* blt_entropy_lm_create(blt_arena* arena, const blt_entropy_lm_con
     };
     blt_transformer_stack_init(arena, &model->stack, &stack_cfg);
 
-    // Byte embedding table [256, embed_dim].
     size_t emb_shape[2] = { 256, embed_dim };
     model->embedding_weight = blt_tensor_create(arena, emb_shape, 2, BLT_DTYPE_FP32);
 
-    // LM head [embed_dim, 256].
     size_t head_shape[2] = { embed_dim, 256 };
     model->lm_head_weight = blt_tensor_create(arena, head_shape, 2, BLT_DTYPE_FP32);
 
     return model;
 }
-
-
 
 blt_entropy_lm_grad* blt_entropy_lm_grad_create(blt_arena* arena, const blt_entropy_lm* model) {
     BLT_REQUIRE(arena != NULL && model != NULL,
@@ -63,21 +55,8 @@ blt_entropy_lm_grad* blt_entropy_lm_grad_create(blt_arena* arena, const blt_entr
     return grad;
 }
 
-
-
-//----------------------------------------------------------------------
-// LM forward path
-//
-// Pipeline steps:
-// 1. Embedding Lookup:     x = Embedding(bytes_in) [seq_len, embed_dim]
-// 2. Transformer Stack:    h = Stack(x)             [seq_len, embed_dim]
-// 3. LM Projection:        Z = h * W_head           [seq_len, 256]
-// 4. Shifted Loss:         L = CrossEntropy(Z[0..N-2], bytes_in[1..N-1])
-//
-// Shifted target handling: target[t] = bytes[t+1]
-// -> the prediction distribution at index t predicts the byte at position t+1
-// the loss operates over (seq_len - 1) positions
-
+// Forward: embed bytes → transformer stack → LM head → shifted cross-entropy loss.
+// Shifted target: target[t] = bytes[t+1], so loss operates over (seq_len - 1) positions.
 void blt_entropy_lm_forward(
     const blt_entropy_lm* model,
     const blt_tensor* bytes_in,
@@ -100,40 +79,17 @@ void blt_entropy_lm_forward(
     blt_transformer_config layer_cfg = blt_transformer_stack_call_config(
         &model->stack, seq_len, &rope_cos_view, &rope_sin_view);
 
-
-    // -----------------------------------------------------------------
-    // STEP 1: Byte Embedding Lookup
-    // Maps discrete byte values x_t in range [0, 255] to continuous vector
-    // representations e_t of dimension (embed_dim) using embedding matrix 
-    // W_emb of size (256 x embed_dim):
-    //     e_t = W_emb[x_t]
-    // Output tensor shape: [seq_len, embed_dim]
-    // -----------------------------------------------------------------
+    // Byte embedding lookup.
     blt_byte_embedding emb = { .vocab_size = model->embedding_weight.shape[0], .weight = model->embedding_weight, .embed_dim = embed_dim };
     size_t x_shape[2] = { seq_len, embed_dim };
     blt_tensor x = blt_tensor_create(arena, x_shape, 2, BLT_DTYPE_FP32);
     blt_byte_embedding_forward(&emb, bytes_in, &x);
 
-
-    // -----------------------------------------------------------------
-    // STEP 2: Transformer Stack
-    // Updates byte representations through N Transformer layers.
-    // At step t, the output vector h_t encodes the history of past bytes
-    // (x_1, ..., x_t) with causal self-attention:
-    //     h_t = Transformer(e_1, ..., e_t)
-    // Output tensor shape remains: [seq_len, embed_dim]
-    // -----------------------------------------------------------------
+    // Transformer stack — causal self-attention over byte representations.
     blt_tensor h;
     blt_transformer_stack_forward(&model->stack, &x, &layer_cfg, seq_len, &h, arena);
 
-
-    // -----------------------------------------------------------------
-    // STEP 3: Linear projection to unnormalized logits
-    // Projects hidden context vectors h_t to raw prediction scores (logits)
-    // z_t across the 256 possible bytes in vocabulary V:
-    //     z_t = h_t * W_head  where W_head is size (embed_dim x 256)
-    // Output tensor shape: [seq_len, 256]
-    // -----------------------------------------------------------------
+    // LM head projection to 256-way logits.
     size_t logits_shape[2] = { seq_len, 256 };
     blt_tensor logits_full = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
     blt_matmul(&h, &model->lm_head_weight, &logits_full);
@@ -144,41 +100,17 @@ void blt_entropy_lm_forward(
     blt_strided_copy(logits_full.backend, (float*)logits_out->data, logits_full.numel,
                     (const float*)logits_full.data, logits_full.numel, 1, logits_full.numel);
 
-
-    // -----------------------------------------------------------------
-    // STEP 4: Shifted Target Cross-Entropy Loss
-    // Evaluates auto-regressive prediction quality.
-    //
-    // For position t in range [0, seq_len - 2]:
-    //   - Inputs:  logits z_t predicting byte at position (t + 1)
-    //   - Target:  true byte value y_t = bytes_in[t + 1]
-    //
-    // Converts logits to probabilities with Softmax:
-    //     p(v | past bytes) = exp(z_t,v) / SUM_k(exp(z_t,k))
-    //
-    // Computes negative log-likelyhood loss (Cross-Entropy):
-    //     Loss = - (1 / (N - 1)) * SUM_t(log(p(x_(t+1) | past bytes)))
-    // -----------------------------------------------------------------
-
-    // Slice logits for positions 0 to (seq_len - 2)
+    // Shifted cross-entropy: position t predicts byte at t+1.
     blt_tensor shifted_logits;
     blt_tensor_view_2d(&shifted_logits, logits_full.data, seq_len - 1, 256, h.backend);
 
-    // Slice target byte IDs for positions 1 to (seq_len - 1)
     blt_tensor shifted_targets;
     view_1d_offset(&shifted_targets, bytes_in, 1, seq_len - 1);
 
-    // Compute cross-entropy loss over shifted sequence
     blt_cross_entropy_forward(&shifted_logits, &shifted_targets, loss_out);
 }
 
-
-
-//----------------------------------------------------------------------
-// LM backward path
-//
-// Mirrors forward call order in reverse
-
+// Backward mirrors forward in reverse order.
 void blt_entropy_lm_backward(
     const blt_entropy_lm* model,
     const blt_tensor* bytes_in,
@@ -201,9 +133,7 @@ void blt_entropy_lm_backward(
     blt_transformer_config layer_cfg = blt_transformer_stack_call_config(
         &model->stack, seq_len, &rope_cos_view, &rope_sin_view);
 
-
-    // ----------------
-    // Recompute forward with caching
+    // Recompute forward pass with caching for backward.
     blt_byte_embedding emb = { .vocab_size = model->embedding_weight.shape[0], .weight = model->embedding_weight, .embed_dim = embed_dim };
     size_t x_shape[2] = { seq_len, embed_dim };
     blt_tensor x0 = blt_tensor_create(arena, x_shape, 2, BLT_DTYPE_FP32);
@@ -223,16 +153,13 @@ void blt_entropy_lm_backward(
     blt_tensor shifted_targets;
     view_1d_offset(&shifted_targets, bytes_in, 1, seq_len - 1);
 
-
-    // ----------------
-    // Backward: loss -> LM head -> transformer stack -> embedding
+    // Backward: loss → LM head → transformer stack → embedding.
     size_t shifted_logits_shape[2] = { seq_len - 1, 256 };
     blt_tensor grad_shifted_logits = blt_tensor_create(arena, shifted_logits_shape, 2, BLT_DTYPE_FP32);
     blt_cross_entropy_backward(&shifted_logits, &shifted_targets, &grad_shifted_logits);
 
-    // grad_logits_full is zero-initialized by blt_tensor_create; only rows
-    // [0, seq_len-1) receive gradient below -- the final row stays zero
-    // (it predicts one byte past the sequence and never contributed to the loss).
+    // Zero-init is from blt_tensor_create; only rows [0, seq_len-1) get gradient.
+    // The final row stays zero — it predicts past the sequence end.
     blt_tensor grad_logits_full = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
     blt_strided_copy(grad_shifted_logits.backend, (float*)grad_logits_full.data, grad_shifted_logits.numel,
                     (const float*)grad_shifted_logits.data, grad_shifted_logits.numel, 1, grad_shifted_logits.numel);
@@ -245,7 +172,6 @@ void blt_entropy_lm_backward(
     blt_transformer_stack_backward(&model->stack, stack_cache, &layer_cfg, seq_len,
                                     &grad_final_x, grad_out->stack_grad, &grad_x0, arena);
 
-    // grad_x0 is now dL/d(embedding output)
-    // scatter add into the embedding tables gradient
+    // grad_x0 is dL/d(embedding output) — scatter into embedding table gradient.
     blt_byte_embedding_backward(&emb, bytes_in, &grad_x0, &grad_out->embedding_grad);
 }

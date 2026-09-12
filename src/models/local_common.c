@@ -1,9 +1,6 @@
 #include "blt/models/local_common.h"
 
 
-//----------------------------------------------------------------------
-// Allocation
-
 void blt_local_layer_storage_alloc(blt_arena* arena, blt_local_layer_storage* s,
                                    size_t embed_dim, size_t hidden_dim) {
     size_t norm_shape[1]     = { embed_dim };
@@ -54,9 +51,6 @@ void blt_local_layer_grad_alloc(blt_arena* arena, blt_local_layer_grad* g,
 }
 
 
-//----------------------------------------------------------------------
-// Config / view helpers
-
 bool blt_local_cross_attn_fires(blt_xattn_placement placement,
                                 bool cross_attn_all_layers, size_t num_layers, size_t layer) {
     switch (placement) {
@@ -73,7 +67,7 @@ bool blt_local_cross_attn_fires(blt_xattn_placement placement,
 
 blt_transformer_weights blt_local_byte_weights_view(const blt_local_layer_storage* s) {
     blt_transformer_weights w = {0};
-    w.norm1_weight = &s->norm1_weight;      // RMSNorm has no bias so no bias weight
+    w.norm1_weight = &s->norm1_weight;
     w.attn_qkv_w   = &s->attn_qkv_w;
     w.attn_proj_w  = &s->attn_proj_w;
     w.norm2_weight = &s->norm2_weight;
@@ -113,7 +107,7 @@ blt_transformer_config blt_local_byte_layer_config(
     const blt_tensor* rope_cos_view, const blt_tensor* rope_sin_view) {
     blt_transformer_config t = {0};
     t.attn_config.embed_dim = embed_dim;
-    t.attn_config.num_heads = num_heads;   // head_dim inferred (0)
+    t.attn_config.num_heads = num_heads;
     t.attn_config.is_causal = true;
     t.attn_config.use_rope = true;
     t.attn_config.rope_theta = rope_theta;

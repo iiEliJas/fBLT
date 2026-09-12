@@ -1,4 +1,3 @@
-// blt/models/blt_model.h
 #ifndef BLT_MODELS_BLT_MODEL_H
 #define BLT_MODELS_BLT_MODEL_H
 
@@ -36,16 +35,15 @@ blt_model* blt_model_create(blt_arena* arena, const blt_model_config* config);
 blt_model_grad* blt_model_grad_create(blt_arena* arena, const blt_model* model);
 
 typedef struct {
-    blt_tensor patch_out;         // P_final [num_patches, patch_dim] — local encoder output
-    blt_tensor global_out;        // O       [num_patches, embed_dim] — global transformer output
-    blt_tensor byte_hidden_out;   // h_final [seq_len, embed_dim] — per-byte encoder states
-    size_t* patch_doc_boundaries; // [num_docs] patch-indexed remap of doc_boundaries; NULL when num_docs == 0
+    blt_tensor patch_out;         // P_final [num_patches, patch_dim]
+    blt_tensor global_out;        // O       [num_patches, embed_dim]
+    blt_tensor byte_hidden_out;   // h_final [seq_len, embed_dim]
+    size_t* patch_doc_boundaries; // [num_docs] patch-indexed remap; NULL when num_docs == 0
 } blt_model_enc_out;
 
-// Stage 1: entropy-free encoding pass. Runs local encoder + global
-// transformer once and freezes the latents in *out. Inference controllers
-// (BLT-S drafting) call this once per round and then invoke
-// blt_model_decode repeatedly against the frozen latents.
+// Stage 1: entropy-free encoding. Runs local encoder + global transformer
+// once, freezes the latents in *out. Inference controllers (BLT-S drafting)
+// call this once per round then invoke blt_model_decode repeatedly.
 void blt_model_encode(
     const blt_model* model,
     const blt_tensor* bytes_in,          // [seq_len] UINT8
@@ -59,10 +57,9 @@ void blt_model_encode(
 
 // Stage 2: decoder-only pass over frozen encoder/global latents.
 // bytes_in may be NULL iff loss_out is NULL (logits-only inference).
-// d0_opts may be NULL for legacy behavior (D_0 = h_final everywhere);
-// see blt_local_decoder_d0_opts for draft/MASK row policies.
+// d0_opts may be NULL for legacy behavior (D_0 = h_final everywhere).
 // patches must describe the same segmentation the encode stage used,
-// tiling [0, num_hfinal_rows) of d0_opts when extra rows are present.
+// tiling [0, num_hfinal_rows) when extra rows are present.
 void blt_model_decode(
     const blt_model* model,
     const blt_model_enc_out* enc,

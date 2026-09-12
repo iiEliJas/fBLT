@@ -5,10 +5,6 @@
 #include <math.h>
 
 
-//------------------------------------------------------------
-// Simple SGD step
-
-// param -= lr * grad elementwise.
 void blt_sgd_step_cpu(blt_tensor* param, const blt_tensor* grad, float lr) {
     blt_check_elementwise_fp32(param, grad,
         "blt_sgd_step: param and grad must be FP32 and elementwise-compatible");
@@ -21,9 +17,6 @@ void blt_sgd_step_cpu(blt_tensor* param, const blt_tensor* grad, float lr) {
     }
 }
 
-
-//------------------------------------------------------------
-// AdamW (single tensor, decoupled weight decay)
 
 void blt_adamw_step_cpu(blt_tensor* param, const blt_tensor* grad,
                         blt_tensor* exp_avg, blt_tensor* exp_avg_sq,

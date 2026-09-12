@@ -10,12 +10,10 @@ extern "C" {
 #include "blt/models/transformer.h"
 #include "blt/models/transformer_stack.h"
 
-//----------------------------------------------------------------------
 // Entropy LM
 //
-// byte embedding -> N transformer layers (RMSNorm + SwiGLU + RoPE) -> LM head -> 
+// byte embedding -> N transformer layers (RMSNorm + SwiGLU + RoPE) -> LM head ->
 // next-byte cross-entropy loss
-// -----------------------------------------------------------------------
 
 typedef struct {
     size_t embed_dim;      // transformer hidden width
@@ -36,7 +34,6 @@ typedef struct {
     blt_transformer_stack stack;    // N transformer layers with RoPE
 } blt_entropy_lm;
 
-
 // Gradient part of blt_entropy_lm, one tensor per weight
 typedef struct {
     blt_tensor embedding_grad;                    // [256, embed_dim]
@@ -44,23 +41,19 @@ typedef struct {
     blt_tensor lm_head_grad;                       // [embed_dim, 256]
 } blt_entropy_lm_grad;
 
-
-
-// Allocates and zero init every weight tensor in model
-// Caller fills in weight data afterward
+// Allocates and zero-inits every weight tensor. Caller fills in data.
 blt_entropy_lm* blt_entropy_lm_create(blt_arena* arena, const blt_entropy_lm_config* config);
 
-// Allocates and zero init a matching gradient struct for model
+// Allocates a matching gradient struct for model.
 blt_entropy_lm_grad* blt_entropy_lm_grad_create(blt_arena* arena, const blt_entropy_lm* model);
 
 
-// Forward pass: embedding -> N transformer layers -> LM head -> shifted
-// next-byte cross-entropy loss
-// targets[t] = bytes_in[t+1] so loss and logits_out are computed/considered over seq_len-1 positions internally
-// logits_out itself is the full [seq_len, 256] logits tensor
-//      bytes_in:   [seq_len] UINT8, seq_len >= 2, seq_len <= config.max_seq_len
-//      logits_out: [seq_len, 256] FP32, caller-allocated
-//      loss_out:   scalar FP32, caller-allocated
+// Forward: embedding -> N transformer layers -> LM head -> shifted next-byte CE loss.
+// targets[t] = bytes_in[t+1], so loss is over seq_len-1 positions internally.
+// logits_out is the full [seq_len, 256] logits tensor.
+//   bytes_in:   [seq_len] UINT8, seq_len >= 2, seq_len <= config.max_seq_len
+//   logits_out: [seq_len, 256] FP32, caller-allocated
+//   loss_out:   scalar FP32, caller-allocated
 void blt_entropy_lm_forward(
     const blt_entropy_lm* model,
     const blt_tensor* bytes_in,
@@ -69,7 +62,7 @@ void blt_entropy_lm_forward(
     blt_arena* arena
 );
 
-// Backward pass for the same forward computation above. Recomputes forward internally
+// Backward pass for the forward above. Recomputes forward internally.
 void blt_entropy_lm_backward(
     const blt_entropy_lm* model,
     const blt_tensor* bytes_in,

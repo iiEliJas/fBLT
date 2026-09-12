@@ -18,11 +18,10 @@
 #include "blt/ops/cast.h"
 #include "blt/core/tensor.h"
 #include "blt/core/cuda_shim.h"
-int g_blt_deterministic = 0;
-// ------------------------------------------------------------
-// CPU Implementation Declarations
 
-// elementwise ops
+int g_blt_deterministic = 0;
+
+// CPU forward declarations
 void blt_add_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out);
 void blt_mul_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out);
 void blt_gelu_forward_cpu(const blt_tensor* x, blt_tensor* out);
@@ -31,12 +30,10 @@ void blt_swiglu_forward_cpu(const blt_tensor* gate, const blt_tensor* up, blt_te
 void blt_swiglu_backward_cpu(const blt_tensor* grad_out, const blt_tensor* gate, 
                             const blt_tensor* up, blt_tensor* grad_gate, blt_tensor* grad_up);
 
-// linear algebra ops
 void blt_matmul_cpu(const blt_tensor* a, const blt_tensor* b, blt_tensor* out);
 void blt_matmul_backward_cpu(const blt_tensor* a, const blt_tensor* b, const blt_tensor* grad_out,
                           blt_tensor* grad_a, blt_tensor* grad_b);
 
-// vecmath ops (backend-keyed raw-pointer utilities)
 float blt_vec_dot_cpu(blt_backend backend, const float* a, const float* b, size_t n);
 void blt_softmax_masked_row_inplace_cpu(blt_backend backend, float* row, size_t row_len,
                                         size_t row_idx, bool is_causal,
@@ -46,37 +43,30 @@ void blt_strided_copy_cpu(blt_backend backend, float* dst, size_t dst_stride,
 void blt_fill_uniform_cpu(blt_backend backend, float* data, size_t n, uint64_t* rng_state);
 void blt_fill_constant_cpu(blt_backend backend, float* data, size_t n, float v);
 
-// container allocation helper
 void* blt_container_alloc_cpu(blt_arena* arena, size_t bytes);
 void* blt_container_alloc_cuda(blt_arena* arena, size_t bytes);
 
-// in-place scalar scale (elementwise)
 void blt_scale_cpu(blt_tensor* t, float scalar);
 void blt_scaled_copy_cpu(blt_tensor* dst, const blt_tensor* src, float scalar);
 
-// optimizers
 void blt_sgd_step_cpu(blt_tensor* param, const blt_tensor* grad, float lr);
 void blt_adamw_step_cpu(blt_tensor* param, const blt_tensor* grad,
                         blt_tensor* exp_avg, blt_tensor* exp_avg_sq,
                         const blt_adamw_config* config);
 
-// mask builder
 void blt_build_attention_mask_cpu(const blt_mask_config* config, blt_tensor* out_mask, blt_arena* arena);
 void blt_build_block_diffusion_mask_cpu(const blt_block_diffusion_config* config,
                                         blt_tensor* out_mask, blt_arena* arena);
 
-// patch pool (group-id builders are host-array utilities, not dispatched)
 void blt_patch_pool_forward_cpu(const blt_tensor* byte_hidden, const blt_patch_info* patches,
                                 size_t num_patches, blt_patch_pool_type pool_type, blt_tensor* out);
 void blt_patch_pool_backward_cpu(const blt_tensor* grad_out, const blt_tensor* byte_hidden,
                                  const blt_patch_info* patches, size_t num_patches,
                                  blt_patch_pool_type pool_type, blt_tensor* grad_byte_hidden);
 
-// attention core
 void blt_attention_head_core_cpu(blt_backend backend, const blt_attention_head_args* args);
 void blt_attention_head_core_backward_cpu(blt_backend backend, const blt_attention_head_bwd_args* args);
 
-// gather/scatter
 void blt_embedding_lookup_cpu(const blt_tensor* table, const uint8_t* ids_host, blt_tensor* out);
 void blt_embedding_scatter_add_cpu(const blt_tensor* grad_table, const uint8_t* ids_host,
                                    const blt_tensor* grad_out);
@@ -87,14 +77,11 @@ void blt_indexed_row_scatter_add_normalized_cpu(const blt_tensor* grad_table, co
                                                 const blt_tensor* grad_out, float scale);
 void blt_rows_gather_cpu(const blt_tensor* src, const size_t* pos_host, blt_tensor* dst);
 
-// row statistics
 void blt_entropy_rows_cpu(const blt_tensor* probs, blt_tensor* entropy_out, int use_log2);
 void blt_argmax_rows_cpu(const blt_tensor* logits, uint32_t* out_ids_host);
 
-// cast
 void blt_cast_cpu(const blt_tensor* in, blt_tensor* out);
 
-// reduction ops
 void blt_softmax_cpu(const blt_tensor* in, blt_tensor* out);
 void blt_softmax_backward_cpu(const blt_tensor* grad_out, const blt_tensor* softmax_out, blt_tensor* grad_in);
 void blt_cross_entropy_forward_cpu(const blt_tensor* logits, const blt_tensor* targets, blt_tensor* loss_out);
@@ -110,13 +97,9 @@ void blt_rmsnorm_backward_cpu(const blt_tensor* grad_out, const blt_tensor* x,
                            const blt_tensor* weight, blt_tensor* grad_x, blt_tensor* grad_weight);
 
 
-// ------------------------------------------------------------
-// Placeholder helper for unwritten CUDA ops
-
 #define BLT_CUDA_NOT_IMPLEMENTED(op_name) \
     BLT_FATAL(op_name " is not yet implemented for CUDA")
 
-/* Dispatch Macros */
 #ifdef BLT_WITH_CUDA
 #define BLT_DISPATCH(tensor, cpu_call, cuda_call)               \
     do {                                                         \
@@ -162,7 +145,6 @@ void blt_strided_copy_cuda(blt_backend backend, float* dst, size_t dst_stride,
 void blt_fill_uniform_cuda(blt_backend backend, float* data, size_t n, uint64_t* rng_state);
 void blt_fill_constant_cuda(blt_backend backend, float* data, size_t n, float v);
 
-// elementwise ops
 void blt_add_cuda(const blt_tensor* a, const blt_tensor* b, blt_tensor* out);
 void blt_mul_cuda(const blt_tensor* a, const blt_tensor* b, blt_tensor* out);
 void blt_scale_cuda(blt_tensor* t, float scalar);
@@ -173,7 +155,6 @@ void blt_swiglu_forward_cuda(const blt_tensor* gate, const blt_tensor* up, blt_t
 void blt_swiglu_backward_cuda(const blt_tensor* grad_out, const blt_tensor* gate,
                               const blt_tensor* up, blt_tensor* grad_gate, blt_tensor* grad_up);
 
-// reduction ops
 void blt_softmax_cuda(const blt_tensor* in, blt_tensor* out);
 void blt_softmax_backward_cuda(const blt_tensor* grad_out, const blt_tensor* softmax_out, blt_tensor* grad_in);
 void blt_cross_entropy_forward_cuda(const blt_tensor* logits, const blt_tensor* targets, blt_tensor* loss_out);
@@ -182,7 +163,6 @@ void blt_rope_precompute_cuda(size_t max_seq_len, const blt_rope_config* config,
 void blt_rope_apply_cuda(const blt_tensor* x, const blt_tensor* cos, const blt_tensor* sin, blt_tensor* out);
 void blt_rope_apply_backward_cuda(const blt_tensor* grad_out, const blt_tensor* cos, const blt_tensor* sin, blt_tensor* grad_in);
 
-// Fused RoPE on packed QKV layout
 void blt_rope_apply_packed_cuda(float* qkv_data, size_t qkv_stride,
                                 size_t head_offset, size_t seq_len,
                                 size_t head_dim, const float* cos, const float* sin);
@@ -195,34 +175,28 @@ void blt_rmsnorm_forward_cuda(const blt_tensor* x, const blt_tensor* weight, blt
 void blt_rmsnorm_backward_cuda(const blt_tensor* grad_out, const blt_tensor* x,
                                const blt_tensor* weight, blt_tensor* grad_x, blt_tensor* grad_weight);
 
-// linear algebra ops
 void blt_matmul_cuda(const blt_tensor* a, const blt_tensor* b, blt_tensor* out);
 void blt_matmul_backward_cuda(const blt_tensor* a, const blt_tensor* b, const blt_tensor* grad_out,
                               blt_tensor* grad_a, blt_tensor* grad_b);
 
-// optimizers
 void blt_sgd_step_cuda(blt_tensor* param, const blt_tensor* grad, float lr);
 void blt_adamw_step_cuda(blt_tensor* param, const blt_tensor* grad,
                          blt_tensor* exp_avg, blt_tensor* exp_avg_sq,
                          const blt_adamw_config* config);
 
-// mask builder
 void blt_build_attention_mask_cuda(const blt_mask_config* config, blt_tensor* out_mask, blt_arena* arena);
 void blt_build_block_diffusion_mask_cuda(const blt_block_diffusion_config* config,
                                          blt_tensor* out_mask, blt_arena* arena);
 
-// patch pool
 void blt_patch_pool_forward_cuda(const blt_tensor* byte_hidden, const blt_patch_info* patches,
                                  size_t num_patches, blt_patch_pool_type pool_type, blt_tensor* out);
 void blt_patch_pool_backward_cuda(const blt_tensor* grad_out, const blt_tensor* byte_hidden,
                                   const blt_patch_info* patches, size_t num_patches,
-                                  blt_patch_pool_type pool_type, blt_tensor* grad_byte_hidden);
+                                  blt_patch_pool_type pool_type,                                    blt_tensor* grad_byte_hidden);
 
-// attention core
 void blt_attention_head_core_cuda(blt_backend backend, const blt_attention_head_args* args);
 void blt_attention_head_core_backward_cuda(blt_backend backend, const blt_attention_head_bwd_args* args);
 
-// gather/scatter
 void blt_embedding_lookup_cuda(const blt_tensor* table, const uint8_t* ids_host, blt_tensor* out);
 void blt_embedding_scatter_add_cuda(const blt_tensor* grad_table, const uint8_t* ids_host,
                                     const blt_tensor* grad_out);
@@ -233,11 +207,9 @@ void blt_indexed_row_scatter_add_normalized_cuda(const blt_tensor* grad_table, c
                                                  const blt_tensor* grad_out, float scale);
 void blt_rows_gather_cuda(const blt_tensor* src, const size_t* pos_host, blt_tensor* dst);
 
-// row statistics
 void blt_entropy_rows_cuda(const blt_tensor* probs, blt_tensor* entropy_out, int use_log2);
 void blt_argmax_rows_cuda(const blt_tensor* logits, uint32_t* out_ids_host);
 
-// cast
 void blt_cast_cuda(const blt_tensor* in, blt_tensor* out);
 #else
 #define BLT_DISPATCH(tensor, cpu_call, cuda_call)               \
@@ -273,12 +245,8 @@ void blt_cast_cuda(const blt_tensor* in, blt_tensor* out);
     } while (0)
 #endif
 
-
-
-// ------------------------------------------------------------
 // BLT Backend Operations
 
-// ------------------
 // ELEMENTWISE
 
 void blt_add(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
@@ -314,9 +282,6 @@ void blt_swiglu_backward(const blt_tensor* grad_out, const blt_tensor* gate, con
                  blt_swiglu_backward_cuda(grad_out, gate, up, grad_gate, grad_up));
 }
 
-
-
-// ------------------
 // REDUCTIONS
 
 void blt_softmax(const blt_tensor* in, blt_tensor* out) {
@@ -420,9 +385,6 @@ void blt_rmsnorm_backward(const blt_tensor* grad_out, const blt_tensor* x, const
                  blt_rmsnorm_backward_cuda(grad_out, x, weight, grad_x, grad_weight));
 }
 
-
-
-// ------------------
 // LINALG
 
 void blt_matmul(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
@@ -435,8 +397,7 @@ void blt_matmul_backward(const blt_tensor* a, const blt_tensor* b, const blt_ten
                  blt_matmul_backward_cuda(a, b, grad_out, grad_a, grad_b));
 }
 
-// ------------------
-// VECMATH (backend-keyed raw-pointer utilities)
+// VECMATH
 
 float blt_vec_dot(blt_backend backend, const float* a, const float* b, size_t n) {
     BLT_DISPATCH_BACKEND_RET(backend,
@@ -472,7 +433,6 @@ void blt_fill_constant(blt_backend backend, float* data, size_t n, float v) {
         blt_fill_constant_cuda(backend, data, n, v));
 }
 
-// ------------------
 // OPTIMIZERS
 
 void blt_sgd_step(blt_tensor* param, const blt_tensor* grad, float lr) {
@@ -487,8 +447,7 @@ void blt_adamw_step(blt_tensor* param, const blt_tensor* grad,
         blt_adamw_step_cuda(param, grad, exp_avg, exp_avg_sq, config));
 }
 
-// ------------------
-// MASK BUILDER (dispatch keyed on the arena that will own the mask)
+// MASK BUILDER (dispatch keyed on arena backend)
 
 void blt_build_attention_mask(const blt_mask_config* config, blt_tensor* out_mask, blt_arena* arena) {
     BLT_DISPATCH_BACKEND((blt_backend)(arena ? arena->backend : BLT_BACKEND_CPU),
@@ -503,7 +462,6 @@ void blt_build_block_diffusion_mask(const blt_block_diffusion_config* config,
         blt_build_block_diffusion_mask_cuda(config, out_mask, arena));
 }
 
-// ------------------
 // PATCH POOL
 
 void blt_patch_pool_forward(const blt_tensor* byte_hidden, const blt_patch_info* patches,
@@ -521,7 +479,6 @@ void blt_patch_pool_backward(const blt_tensor* grad_out, const blt_tensor* byte_
         blt_patch_pool_backward_cuda(grad_out, byte_hidden, patches, num_patches, pool_type, grad_byte_hidden));
 }
 
-// ------------------
 // ATTENTION CORE
 
 void blt_attention_head_core(blt_backend backend, const blt_attention_head_args* args) {
@@ -545,7 +502,6 @@ void* blt_container_alloc(blt_arena* arena, size_t bytes) {
     return blt_container_alloc_cpu(arena, bytes);
 }
 
-// ------------------
 // GATHER / SCATTER
 
 void blt_embedding_lookup(const blt_tensor* table, const uint8_t* ids_host, blt_tensor* out) {
@@ -588,7 +544,6 @@ void blt_rows_gather(const blt_tensor* src, const size_t* pos_host, blt_tensor* 
         blt_rows_gather_cuda(src, pos_host, dst));
 }
 
-// ------------------
 // ROW STATISTICS
 
 void blt_entropy_rows(const blt_tensor* probs, blt_tensor* entropy_out, int use_log2) {
@@ -603,14 +558,12 @@ void blt_argmax_rows(const blt_tensor* logits, uint32_t* out_ids_host) {
         blt_argmax_rows_cuda(logits, out_ids_host));
 }
 
-// ------------------
 // CAST
 
 void blt_cast(const blt_tensor* in, blt_tensor* out) {
     BLT_DISPATCH(in, blt_cast_cpu(in, out), blt_cast_cuda(in, out));
 }
 
-// ------------------
 // PASS SYNC
 
 void blt_backend_pass_sync(blt_backend backend) {

@@ -50,9 +50,7 @@ void blt_generate_greedy(
     while (cur_len < target_len) {
         size_t step_marker = arena->offset;
 
-        // -------------------------------------------------------------
         // 1. Entropy model over the current byte sequence
-        // -------------------------------------------------------------
         size_t bytes_shape[1] = {cur_len};
         blt_tensor bytes_in = blt_tensor_create(arena, bytes_shape, 1, BLT_DTYPE_UINT8);
         blt_tensor_upload(&bytes_in, output_bytes, cur_len);
@@ -72,12 +70,10 @@ void blt_generate_greedy(
         blt_entropy_config entropy_cfg = {.vocab_size = 256, .use_log2 = false};
         blt_compute_entropy(&probs, &entropy_vals, &entropy_cfg);
 
-        // -------------------------------------------------------------
-        // 2. Segment the current sequence into patches
+        // 2. Segment the current sequence into patches.
         //
         // The patcher is host-side control logic, so it consumes a host
         // copy of the entropy signal regardless of the model backend.
-        // -------------------------------------------------------------
         // Host staging (plain malloc: the scratch arena may be device
         // memory, which is not host-writable).
         float* entropy_host = (float*)malloc(cur_len * sizeof(float));
@@ -93,9 +89,7 @@ void blt_generate_greedy(
             &entropy_host_view, output_bytes, patches, BLT_GENERATE_MAX_PATCHES, patcher_config);
         free(entropy_host);
 
-        // -------------------------------------------------------------
         // 3. Full encoder-global-decoder forward pass (single document)
-        // -------------------------------------------------------------
         size_t vocab_shape[2] = {cur_len, vocab_size};
         blt_tensor model_logits = blt_tensor_create(arena, vocab_shape, 2, BLT_DTYPE_FP32);
 
@@ -103,9 +97,7 @@ void blt_generate_greedy(
         blt_model_forward(model, &bytes_in, patches, num_patches,
             NULL, 0, &model_logits, &discard_loss, arena);
 
-        // -------------------------------------------------------------
         // 4. Greedy argmax of the last position's logits
-        // -------------------------------------------------------------
         float* last_row = (float*)malloc(vocab_size * sizeof(float));
         BLT_REQUIRE(last_row != NULL, "blt_generate_greedy: staging alloc failed");
         blt_tensor last_row_view;

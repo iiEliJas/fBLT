@@ -29,9 +29,7 @@
 #include <string.h>
 
 
-//----------------------------------------------------------------------
 // RNG (splitmix64; deterministic, libc-independent)
-
 static uint64_t rng_next(uint64_t* state) {
     uint64_t z = (*state += 0x9E3779B97F4A7C15ULL);
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
@@ -44,7 +42,6 @@ static float rng_uniform01(uint64_t* state) {
 }
 
 
-//----------------------------------------------------------------------
 // Preprocessing
 
 void blt_block_batch_build(blt_block_batch* out, blt_arena* arena,
@@ -107,7 +104,6 @@ void blt_block_batch_build_t(blt_block_batch* out, blt_arena* arena,
 }
 
 
-//----------------------------------------------------------------------
 // Shared step context
 
 typedef struct {
@@ -236,7 +232,6 @@ static void diff_cross_config(const diff_ctx* c, size_t num_patches,
 }
 
 
-//----------------------------------------------------------------------
 // Forward machinery
 
 typedef struct {
@@ -422,7 +417,6 @@ static void forward_with_caches(const blt_local_decoder* model,
     blt_matmul(final_states, &model->lm_head_weight, logits);
 }
 
-// Builds a UINT8 tensor view companion for the CE targets (bytes[1..N)).
 static void make_bytes_tensor(blt_arena* arena, const uint8_t* bytes, size_t len,
                               blt_tensor* out) {
     size_t shape[1] = {len};
@@ -431,7 +425,6 @@ static void make_bytes_tensor(blt_arena* arena, const uint8_t* bytes, size_t len
 }
 
 
-//----------------------------------------------------------------------
 // Public forward
 
 void blt_local_decoder_forward_diffusion(
@@ -513,7 +506,6 @@ void blt_local_decoder_forward_diffusion(
 }
 
 
-//----------------------------------------------------------------------
 // Backward
 
 void blt_local_decoder_backward_diffusion(
@@ -544,13 +536,13 @@ void blt_local_decoder_backward_diffusion(
     blt_check_nd_fp32(&grad->lm_head_grad, 2, (const size_t[]){c.E, c.V},
         "backward_diffusion: lm_head_grad must be [embed_dim, vocab_size] FP32");
 
-    // STEP 1: recompute the forward, caching intermediates.
+    // Recompute the forward, caching intermediates.
     diff_layer_cache* caches;
     blt_tensor logits, final_states;
     forward_with_caches(model, &c, num_patches, &logits, &final_states,
         &caches, arena);
 
-    // STEP 2: terminal gradient dL/d(logits).
+    // Terminal gradient dL/d(logits).
     blt_tensor grad_logits = blt_tensor_create(arena,
         (size_t[2]){c.S, c.V}, 2, BLT_DTYPE_FP32);   // zero-init
 
@@ -606,12 +598,12 @@ void blt_local_decoder_backward_diffusion(
         free(grow_host);
     }
 
-    // STEP 3: LM head backward -> dL/d(final states).
+    // LM head backward -> dL/d(final states).
     blt_tensor dh = blt_tensor_create(arena, (size_t[2]){c.S, c.E}, 2, BLT_DTYPE_FP32);
     blt_matmul_backward(&final_states, &model->lm_head_weight, &grad_logits,
         &dh, &grad->lm_head_grad);
 
-    // STEP 4: reverse layer loop.
+    // Reverse layer loop.
     blt_tensor dP_split = blt_tensor_create(arena,
         (size_t[2]){num_patches * c.k, c.E}, 2, BLT_DTYPE_FP32);   // zero-init
 
@@ -762,7 +754,7 @@ void blt_local_decoder_backward_diffusion(
         }
     }
 
-    // STEP 5: terminal gradients.
+    // Terminal gradients.
     blt_strided_copy(dh.backend, (float*)grad_byte_hidden_in->data, c.N * c.E,
                      (const float*)dh.data, c.N * c.E, 1, c.N * c.E);
 
@@ -780,7 +772,6 @@ void blt_local_decoder_backward_diffusion(
                      (const float*)dP.data, num_patches * c.pdim, 1, num_patches * c.pdim);
 }
 
-//----------------------------------------------------------------------
 // Public inference forward (Fast-BLT section 3.1.1 / Algorithm 1)
 //
 // Same decoder pass as blt_local_decoder_forward_diffusion but with the

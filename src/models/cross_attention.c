@@ -10,17 +10,10 @@
 #include "blt/core/tensor.h"
 #include "blt/core/allocator.h"
 #include "blt/ops/attn_core.h"
-#include <stdlib.h>
-#include <stdio.h>
 #include "blt/ops/matmul.h"
 #include "blt/ops/vecmath.h"
 #include "blt/ops/elementwise.h"
 #include "blt/ops/mask_builder.h"
-
-
-
-//----------------------------------------------------------------
-// Validation
 
 static void validate_cross_attention_call(
     const blt_tensor* query_in, const blt_tensor* kv_in,
@@ -63,11 +56,6 @@ static void validate_cross_attention_call(
     *out_head_dim = head_dim;
 }
 
-
-
-//----------------------------------------------------------------
-// Helper: Builds attention mask
-
 static const float* build_mask(const blt_cross_attention_config* config,
                                size_t num_patches, size_t seq_len, blt_arena* arena) {
     BLT_REQUIRE(config->mask_config->seq_len_q == num_patches &&
@@ -81,15 +69,8 @@ static const float* build_mask(const blt_cross_attention_config* config,
     return (const float*)mask_tensor.data;
 }
 
-
-
-//----------------------------------------------------------------
-// Helper: Process a single cross-attention head
-//
-// Queries come from the patch sequence (length num_patches), keys/values from
-// the byte sequence (length seq_len). Head h occupies the column block
-// [h*head_dim, (h+1)*head_dim) of each [rows, embed_dim] buffer
-
+// Head h occupies column block [h*head_dim, (h+1)*head_dim) of each
+// [rows, embed_dim] buffer. Queries come from patches, K/V from bytes.
 static void cross_attention_head(blt_backend backend, const float* q_data, const float* k_data, const float* v_data,
                                  size_t head_idx, size_t num_patches, size_t seq_len,
                                  size_t embed_dim, size_t head_dim,
@@ -109,8 +90,8 @@ static void cross_attention_head(blt_backend backend, const float* q_data, const
     a.combined = combined_out;
     a.combined_stride = embed_dim;
     a.combined_col_offset = head_offset;
-    a.weights_out = scores_buf;   // doubles as the backward cache when requested
-    a.mask = mask;                // [num_patches * seq_len] additive
+    a.weights_out = scores_buf;
+    a.mask = mask;
     a.nq = num_patches;
     a.nk = seq_len;
     a.head_dim = head_dim;
@@ -120,23 +101,9 @@ static void cross_attention_head(blt_backend backend, const float* q_data, const
     blt_attention_head_core(backend, &a);
 }
 
-
-
-//----------------------------------------------------------------
-// Cross-attention function
-//
-// Pipeline:
-// 1. Projections:       Q = query_in * W_q    [num_patches, embed_dim]
-//                       K = kv_in * W_k       [seq_len, embed_dim]
-//                       V = kv_in * W_v       [seq_len, embed_dim]
-// 2. Scaled Attention:  Scores = (Q * K^T) / sqrt(d_k)
-//                       Attn   = Softmax(Scores + block-diagonal patch mask)
-//                       Head   = Attn * V     [num_patches, embed_dim]
-// 3. Output Projection: Output = Combined * W_proj
-//
-// No positional embeddings (paper-explicit) and no residual connection
-// inside this op — the caller computes P_l = P_{l-1} + output.
-
+// Q/K/V projections, per-head scaled dot-product attention with block-diagonal
+// patch mask, then output projection. No positional embeddings (paper-explicit),
+// no residual — caller computes P_l = P_{l-1} + output.
 void blt_cross_attention_forward(
     const blt_tensor* query_in,
     const blt_tensor* kv_in,
@@ -155,14 +122,10 @@ void blt_cross_attention_forward(
     blt_check_nd_fp32(output, 2, (const size_t[]){num_patches, embed_dim},
                       "blt_cross_attention: output must be [num_patches, embed_dim] FP32");
 
-    // Scale factor for scaled dot-product attention: 1 / sqrt(head_dim)
     float scale = 1.0f / sqrtf((float)head_dim);
 
-    // -----------------------------------------------------------------
-    // STEP 0: Arena Memory Allocations
-    // Workspace for the Q/K/V projections, concatenated multi-head
-    // output, and the per-head [num_patches, seq_len] score matrix
-    // -----------------------------------------------------------------
+    // Arena allocations for Q/K/V projections, concatenated multi-head output,
+    // and per-head [num_patches, seq_len] score matrix.
     size_t q_numel = num_patches * embed_dim;
     size_t kv_numel = seq_len * embed_dim;
     size_t scores_numel = num_patches * seq_len;
@@ -175,12 +138,7 @@ void blt_cross_attention_forward(
 
     { blt_tensor zt; blt_tensor_view_2d(&zt, combined_data, q_numel, 1, query_in->backend); zero_tensor(&zt); }
 
-
-    // -----------------------------------------------------------------
-    // STEP 1: Linear Projections
-    // Q and K/V come from different input tensors, so there is no shared
-    // QKV projection — three separate matmuls against W_q, W_k, W_v.
-    // -----------------------------------------------------------------
+    // Q and K/V come from different inputs, so three separate matmuls.
     blt_tensor q_tensor, k_tensor, v_tensor;
     blt_tensor_view_2d(&q_tensor, q_data, num_patches, embed_dim, query_in->backend);
     blt_tensor_view_2d(&k_tensor, k_data, seq_len, embed_dim, kv_in->backend);
@@ -190,45 +148,22 @@ void blt_cross_attention_forward(
     blt_matmul(kv_in, weights->weight_k, &k_tensor);
     blt_matmul(kv_in, weights->weight_v, &v_tensor);
 
-
     // No RoPE in cross attention
 
     const float* mask_data = build_mask(config, num_patches, seq_len, arena);
 
-
-    // -----------------------------------------------------------------
-    // STEP 2: Per-Head Scaled Dot-Product Attention
-    // For each head h in [0, num_heads - 1]:
-    //   a. Raw scores:        S_ij = Q_i * K_j        (patch i, byte j)
-    //   b. Scale + mask:      S_ij / sqrt(d_k), -inf outside patch i
-    //   c. Softmax over rows: A_ij
-    //   d. Aggregate values:  Head_out_i = SUM_j (A_ij * V_j)
-    // Writes head outputs into combined_data [num_patches, embed_dim]
-    // -----------------------------------------------------------------
     for (size_t head = 0; head < num_heads; ++head) {
         cross_attention_head(query_in->backend, q_data, k_data, v_data, head, num_patches, seq_len,
                              embed_dim, head_dim, mask_data, scale,
                              scores_buf, combined_data);
     }
 
-
-    // -----------------------------------------------------------------
-    // STEP 3: Output Linear Projection
-    // Output = Combined * W_proj
-    // Output tensor shape: [num_patches, embed_dim]  (pre-residual)
-    // -----------------------------------------------------------------
     blt_tensor combined_tensor;
     blt_tensor_view_2d(&combined_tensor, combined_data, num_patches, embed_dim, query_in->backend);
     blt_matmul(&combined_tensor, weights->weight_proj, output);
 
-    // Arena cleanup is the callers responsibility
+    // Arena cleanup is the caller's responsibility.
 }
-
-
-
-
-//-----------------------------------------------------------------------------------------------
-// CROSS-ATTENTION BACKWARD PASS
 
 typedef struct {
     float* q_data;        // [num_patches, embed_dim]
@@ -237,8 +172,6 @@ typedef struct {
     float* combined_data; // [num_patches, embed_dim]
     float* weights_all;   // [num_heads, num_patches, seq_len] softmax weights
 } attn_bwd_forward_cache;
-
-
 
 static void attn_bwd_recompute_forward(
     const blt_tensor* query_in, const blt_tensor* kv_in,
@@ -269,9 +202,8 @@ static void attn_bwd_recompute_forward(
 
     const float* mask_data = build_mask(config, num_patches, seq_len, arena);
 
-    // Per-head softmax attention weights + combined output
-    // cross_attention_head writes the softmaxed weights into the scores buffer
-    // so each heads slice of weights_all doubles as that buffer
+    // Each head's slice of weights_all doubles as the scores buffer;
+    // cross_attention_head writes softmaxed weights into it.
     for (size_t head = 0; head < num_heads; head++) {
         float* W = cache->weights_all + head * num_patches * seq_len;
         cross_attention_head(query_in->backend, cache->q_data, cache->k_data, cache->v_data, head,
@@ -279,9 +211,6 @@ static void attn_bwd_recompute_forward(
                              mask_data, scale, W, cache->combined_data);
     }
 }
-
-
-
 
 void blt_cross_attention_backward(
     const blt_tensor* query_in, const blt_tensor* kv_in,
@@ -339,13 +268,13 @@ void blt_cross_attention_backward(
 
     float scale = 1.0f / sqrtf((float)head_dim);
 
-    // ---- Recompute forward intermediates ----
+    // Recompute forward intermediates (activations not kept for cross-attention).
     attn_bwd_forward_cache cache = {0};
     attn_bwd_recompute_forward(query_in, kv_in, weights, config, arena,
                                 num_patches, seq_len, embed_dim, num_heads, head_dim,
                                 scale, &cache);
 
-    // ---- Step 1: backward through output projection: output = combined @ weight_proj ----
+    // Backward through output projection: output = combined @ weight_proj
     blt_tensor combined_tensor;
     blt_tensor_view_2d(&combined_tensor, cache.combined_data, num_patches, embed_dim, query_in->backend);
 
@@ -356,7 +285,7 @@ void blt_cross_attention_backward(
     blt_matmul_backward(&combined_tensor, weights->weight_proj, grad_out,
                         &grad_combined_tensor, &grad_weights->grad_weight_proj);
 
-    // ---- Step 2-4: per head, backward through weighted-V sum, softmax, and QK^T ----
+    // Per-head backward through softmax and QK^T.
     float* grad_q_data = (float*)blt_arena_alloc(arena, num_patches * embed_dim * sizeof(float), sizeof(float));
     float* grad_k_data = (float*)blt_arena_alloc(arena, seq_len * embed_dim * sizeof(float), sizeof(float));
     float* grad_v_data = (float*)blt_arena_alloc(arena, seq_len * embed_dim * sizeof(float), sizeof(float));
@@ -396,15 +325,14 @@ void blt_cross_attention_backward(
         blt_attention_head_core_backward(query_in->backend, &a);
     }
 
-    // ---- Step 5: backward through the input projections ----
-    // Q = query_in @ W_q  =>  grad_query_in, grad_weight_q
+    // Backward through input projections.
     blt_tensor grad_q_tensor;
     blt_tensor_view_2d(&grad_q_tensor, grad_q_data, num_patches, embed_dim, query_in->backend);
     blt_matmul_backward(query_in, weights->weight_q, &grad_q_tensor,
                         grad_query_in, &grad_weights->grad_weight_q);
 
-    // K = kv_in @ W_k and V = kv_in @ W_v share the same input, so grad_kv_in
-    // is the sum of both matmul input gradients
+    // K and V share the same input, so grad_kv_in is the sum of both matmul
+    // input gradients.
     blt_tensor grad_k_tensor, grad_v_tensor;
     blt_tensor_view_2d(&grad_k_tensor, grad_k_data, seq_len, embed_dim, kv_in->backend);
     blt_tensor_view_2d(&grad_v_tensor, grad_v_data, seq_len, embed_dim, kv_in->backend);
@@ -422,5 +350,5 @@ void blt_cross_attention_backward(
 
     blt_add(&grad_kv_k_tensor, &grad_kv_v_tensor, grad_kv_in);
 
-    // Arena cleanup is callers responsibility
+    // Arena cleanup is the caller's responsibility.
 }

@@ -50,9 +50,8 @@
 #define ENT_LM_HEADS 4
 #define GRAD_CLIP_NORM 1.0f
 
-// ---------------------------------------------------------------------------
 // RNG (xorshift64*)
-// ---------------------------------------------------------------------------
+
 
 static uint64_t g_rng_state = 0x9E3779B97F4A7C15ULL;
 
@@ -85,9 +84,8 @@ static void fill_constant(blt_tensor* t, float v) {
     blt_fill_constant(t->backend, (float*)t->data, t->numel, v);
 }
 
-// ---------------------------------------------------------------------------
 // Sweep config
-// ---------------------------------------------------------------------------
+
 
 typedef enum {
     PATCH_RULE_ENTROPY_GLOBAL = 0,
@@ -306,9 +304,8 @@ static void load_config(const char* path, sweep_config* c) {
 
     blt_arena_destroy(arena);
 }
-// ---------------------------------------------------------------------------
 // Model building + deterministic init
-// ---------------------------------------------------------------------------
+
 
 #define INIT_SCALE 0.05f
 
@@ -418,13 +415,12 @@ static void init_entropy_lm(blt_entropy_lm* lm) {
     fill_uniform(&lm->lm_head_weight, INIT_SCALE);
 }
 // ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
 // Data + windows
 //
 // Windows never cross file boundaries: they are carved from the manifest's
 // per-file {offset,length} index (floor(len/seq_len) per file, tails
 // dropped). Order is deterministic; training wraps around after one epoch.
-// ---------------------------------------------------------------------------
+
 
 typedef struct {
     uint8_t* data;
@@ -505,9 +501,8 @@ static void windows_from_manifest(const byte_buf* manifest_bytes,
     blt_arena_destroy(arena);
 }
 
-// ---------------------------------------------------------------------------
 // Patch construction (trainer-level; model code stays agnostic)
-// ---------------------------------------------------------------------------
+
 
 static size_t build_fixed_patches(size_t seq_len, size_t stride,
                                   blt_patch_info* out) {
@@ -545,13 +540,12 @@ static size_t build_whitespace_patches(const uint8_t* bytes, size_t seq_len,
     }
     return n;
 }
-// ---------------------------------------------------------------------------
 // Per-step pipeline: entropy -> patches -> model forward
 //
 // The entropy LM is co-trained on its own next-byte loss only; because it
 // sees the same data in the same order with the same seed in every run,
 // patch boundaries are identical across all sweep configs.
-// ---------------------------------------------------------------------------
+
 
 typedef struct {
     blt_model* model;
@@ -612,9 +606,8 @@ static void forward_model(const train_ctx* tc, blt_tensor* bytes_in,
                       doc_boundaries, 1, logits, loss, arena);
 }
 
-// ---------------------------------------------------------------------------
 // Grad clipping + SGD (mirrors tests/unit/models/unit_model.c wiring)
-// ---------------------------------------------------------------------------
+
 
 static float tensor_sq_norm(const blt_tensor* t) {
     float* d_host = (float*)malloc(t->numel * sizeof(float));
@@ -834,12 +827,11 @@ static void sgd_apply_entropy_lm(blt_entropy_lm* m, blt_entropy_lm_grad* g, floa
     blt_sgd_step(&m->lm_head_weight, &g->lm_head_grad, lr);
 }
 
-// ---------------------------------------------------------------------------
 // Evaluation: held-out BPB (bits per byte) over a fixed window subset
 //
 // BPB = sum(shifted cross-entropy) / (ln 2 * positions). The loss tensor from
 // blt_model_forward is the MEAN over the seq_len-1 shifted target positions.
-// ---------------------------------------------------------------------------
+
 
 typedef struct {
     double bpb;
@@ -891,9 +883,8 @@ static void eval_stream(const train_ctx* tc, const byte_buf* buf,
     out->avg_patch_len = (patch_count > 0.0) ? patch_bytes / patch_count : 0.0;
 }
 
-// ---------------------------------------------------------------------------
 // Wall clock
-// ---------------------------------------------------------------------------
+
 
 static double now_sec(void) {
     struct timespec ts;
@@ -907,9 +898,8 @@ static void on_signal(int sig) {
     (void)sig;
     g_stop_requested = 1;
 }
-// ---------------------------------------------------------------------------
 // main
-// ---------------------------------------------------------------------------
+
 
 static void usage(const char* argv0) {
     fprintf(stderr,
@@ -964,13 +954,13 @@ int main(int argc, char** argv) {
            cfg.tag, cfg.phase, total_steps, cfg.seq_len, cfg.lr,
            (unsigned long long)cfg.seed);
 
-    // ---- RNG seed (splitmix64 spread so nearby seeds diverge fast)
+    // RNG seed (splitmix64 spread so nearby seeds diverge fast)
     g_rng_state = cfg.seed ^ 0x9E3779B97F4A7C15ULL;
     rng_next_u64();
 
     printf("[sweep] backend=%s\n", backend == BLT_BACKEND_CUDA ? "cuda" : "cpu");
 
-    // ---- Model + entropy LM
+    // Model + entropy LM
     blt_model_config mc;
     build_model_config(&cfg, &mc);
 
@@ -1003,7 +993,7 @@ int main(int argc, char** argv) {
     train_ctx tc = {.model = model, .ent_lm = ent_lm, .cfg = &cfg};
 
     long start_step = 0;
-    // ---- Data
+    // Data
     byte_buf train_buf, held_buf, held_c, held_h, manifest_buf;
     load_file(cfg.train_bin, &train_buf);
     load_file("data/manifest.json", &manifest_buf);
@@ -1022,7 +1012,7 @@ int main(int argc, char** argv) {
     printf("[sweep] train windows=%zu eval windows: all=%zu c=%zu h=%zu\n",
            train_wl.num, held_wl.num, held_c_wl.num, held_h_wl.num);
 
-    // ---- Training loop
+    // Training loop
     const size_t L = cfg.seq_len;
     size_t logits_shape[2] = {L, 256};
     size_t scalar_shape[1] = {1};
@@ -1035,7 +1025,7 @@ int main(int argc, char** argv) {
         (total_steps - start_step > 0 ? (size_t)(total_steps - start_step) : 1));
     if (!step_samples) BLT_FATAL("main: OOM for step samples");
 
-    // ---- Entropy LM warmup: pretrain the patcher's entropy model on its own
+    // Entropy LM warmup: pretrain the patcher's entropy model on its own
     // next-byte loss so dynamic patching is meaningful from the first main
     // step. Identical across all sweep configs (same seed + data order).
     if (ent_lm && cfg.ent_warmup_steps > 0 && start_step < cfg.ent_warmup_steps) {
@@ -1170,7 +1160,7 @@ int main(int argc, char** argv) {
 
     double wall = now_sec() - t_start;
 
-    // ---- Final evaluation
+    // Final evaluation
     blt_arena_reset(scratch);
     // Per-domain BPB over capped windows from the raw domain streams.
     eval_out eo, eo_c, eo_h;
@@ -1184,7 +1174,7 @@ int main(int argc, char** argv) {
     printf("[sweep] FINAL tag=%s bpb=%.4f bpb_c=%.4f bpb_h=%.4f avg_patch=%.2f\n",
            cfg.tag, eo.bpb, eo_c.bpb, eo_h.bpb, eo.avg_patch_len);
 
-    // ---- FLOPs/byte via tools/flops.c
+    // FLOPs/byte via tools/flops.c
     size_t heads = mc.encoder_config.num_heads;
     blt_flops_config fc = {0};
     fc.h_G = cfg.glob_embed_dim; fc.l_G = cfg.glob_num_layers;
@@ -1202,7 +1192,7 @@ int main(int argc, char** argv) {
     if (n_p == 0) n_p = 1;
     fc.n_p = n_p; fc.k = 1; fc.vocab_size = 256;
 
-    // ---- Results line
+    // Results line
     bench_result r;
     bench_result_init(&r, cfg.name, cfg.tag, cfg.phase);
     r.latency.n = n_samples;

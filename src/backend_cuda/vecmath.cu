@@ -119,8 +119,7 @@ __global__ void blt_strided_copy_kernel(float* dst, size_t dst_stride,
                                          size_t rows, size_t cols) {
     const size_t work = rows * cols;
     
-    // Vectorized path: aligned addresses, contiguous columns (stride == cols), multiple of 4
-    bool can_vectorize = (cols % 4 == 0) && 
+    bool can_vectorize = (cols % 4 == 0) &&
                          (dst_stride == cols) && (src_stride == cols) &&
                          (reinterpret_cast<uintptr_t>(dst) % 16 == 0) &&
                          (reinterpret_cast<uintptr_t>(src) % 16 == 0);
@@ -139,7 +138,6 @@ __global__ void blt_strided_copy_kernel(float* dst, size_t dst_stride,
         return;
     }
     
-    // Scalar fallback
     for (size_t off = (size_t)blockIdx.x * blockDim.x + threadIdx.x; off < work;
          off += (size_t)gridDim.x * blockDim.x) {
         const size_t r = off / cols;
@@ -167,7 +165,7 @@ extern "C" void blt_strided_copy_cuda(blt_backend backend, float* dst, size_t ds
 }
 
 __global__ void blt_fill_uniform_kernel(float* data, size_t n, uint64_t rng_state) {
-    // Simple xorshift64* per-thread
+    // xorshift64*
     uint64_t x = rng_state + threadIdx.x + blockIdx.x * blockDim.x;
     for (size_t i = threadIdx.x + blockIdx.x * blockDim.x; i < n; i += blockDim.x * gridDim.x) {
         x ^= x >> 12;
@@ -193,7 +191,7 @@ extern "C" void blt_fill_uniform_cuda(blt_backend backend, float* data, size_t n
     if (blocks == 0) blocks = 1;
     blt_fill_uniform_kernel<<<blocks, 256>>>(data, n, seed);
     blt_cuda_launch_check("blt_fill_uniform");
-    *rng_state = seed + n;  // advance state
+    *rng_state = seed + n;
 }
 
 extern "C" void blt_fill_constant_cuda(blt_backend backend, float* data, size_t n, float v) {

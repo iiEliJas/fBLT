@@ -1,7 +1,6 @@
 #ifndef BLT_OPS_CROSS_ENTROPY_H
 #define BLT_OPS_CROSS_ENTROPY_H
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif

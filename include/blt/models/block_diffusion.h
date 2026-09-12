@@ -13,7 +13,6 @@ extern "C" {
 #include "blt/models/local_decoder.h"
 #include "blt/models/patcher.h"
 
-
 // BLT-D block-wise diffusion training support (Fast-BLT 3.2).
 //
 // Decoder sequence layout during a diffusion training step:
@@ -59,16 +58,13 @@ typedef struct {
 } blt_block_batch;
 
 
-// Builds one corrupted training example.
-//
-// Blocks follow Fast-BLT §3.2.1: for every patch except the first, block
-// j = B consecutive bytes starting at that patch's start index, padded with
-// [PAD] beyond the sequence end, original positions recorded for RoPE.
-// A timestep t ~ U(0,1) is drawn from the seeded RNG and each valid cell is
-// replaced by [MASK] independently with probability t. Deterministic given
-// (bytes, patches, B, rng_seed).
-//
-// Requires num_patches >= 2 (a single patch produces no blocks).
+// Builds one corrupted training example (Fast-BLT §3.2.1).
+// For every patch except the first, block j = B consecutive bytes starting
+// at that patch's start index, padded with [PAD] beyond the sequence end.
+// Original positions recorded for RoPE. A timestep t ~ U(0,1) is drawn
+// from the seeded RNG and each valid cell is replaced by [MASK]
+// independently with probability t. Deterministic given
+// (bytes, patches, B, rng_seed). Requires num_patches >= 2.
 void blt_block_batch_build(blt_block_batch* out, blt_arena* arena,
                            const uint8_t* bytes, size_t N,
                            const blt_patch_info* patches, size_t num_patches,
@@ -97,11 +93,6 @@ void blt_block_batch_build_t(blt_block_batch* out, blt_arena* arena,
 //   d0_mode        D_0 policy for BLOCK rows (ZEROS default / LEARNED table)
 //   logits_out     [N + n_block_rows, vocab_size]
 //   loss_out       scalar: L_clean + L_mask/t   (Fast-BLT Eq. 7)
-//
-// Cross-attention reuses the standard group mechanism (clean rows: own
-// patch; block rows: batch->groups). Self-attention uses the Figure 5
-// matrix via blt_build_block_diffusion_mask(TRAIN). RoPE uses the recorded
-// original positions for block rows (identity for clean rows).
 void blt_local_decoder_forward_diffusion(
     const blt_local_decoder* model,
     const blt_tensor* byte_hidden_in,
@@ -115,7 +106,7 @@ void blt_local_decoder_forward_diffusion(
     blt_arena* arena
 );
 
-// Backward pass mirroring the forward above.
+// Backward pass for the forward above.
 //
 //   grad_byte_hidden_in [N, embed_dim] — dL/d(h_final), clean rows only
 //                       (block-row D_0 gradients go to d0_embed_grad when
@@ -136,10 +127,9 @@ void blt_local_decoder_backward_diffusion(
     blt_arena* arena
 );
 
-// Inference-mode diffusion forward (Fast-BLT section 3.1.1): clean rows
+// Inference-mode diffusion forward (Fast-BLT §3.1.1): clean rows
 // causal, block rows bidirectional over the whole sequence; no loss.
 // Caller drives unmasking via batch->tokens/cell_masked across passes.
-// See src/models/block_diffusion.c for the batch contract.
 void blt_local_decoder_forward_diffusion_infer(
     const blt_local_decoder* model,
     const blt_tensor* byte_hidden_in,

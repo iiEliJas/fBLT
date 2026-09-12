@@ -2,10 +2,7 @@
 //
 // Trains a full BLT-D pipeline (local encoder -> global transformer ->
 // diffusion decoder) on a raw byte corpus with fixed-stride patches and
-// per-window freshly sampled corruption (t ~ U(0,1), seeded RNG).
-//
-// This is the entry point for the real BLT-D vs BLT comparison runs;
-// unit_block_diffusion.c's overfit gate only proves the machinery learns.
+// per-window freshly sampled corruption.
 //
 // Usage:
 //   bin/train_blt_d --corpus FILE [options]
@@ -61,9 +58,7 @@ typedef struct {
     const char* save_path;      // write weights here after training/eval setup
     const char* load_path;      // load weights before training (steps=0 -> eval only)
     size_t eval_skip;           // bytes to skip before the first eval window
-                                // (head-of-corpus boilerplate near-duplicates
-                                // training content; skip deep for honest
-                                // generalization numbers)
+
     float t_min;                // diffusion timestep floor (stabilizes 1/t)
     int lr_decay;               // x0.3 at 60% and 85% of steps (default schedule)
     size_t lr_decay_steps[16];  // custom decay step positions (0 = unused)
@@ -71,23 +66,21 @@ typedef struct {
     float lr_decay_factor;      // factor per custom decay point (default 0.3)
     size_t mask_warmup;         // ramp L_mask scale 0->1 over this many steps
     float mask_scale;           // ceiling for the L_mask weight (1.0 = paper Eq. 7)
-    const char* train_entlm;    // train the entropy LM (plain CE) and
-                                // save it to this path instead of the
-                                // main model
+    const char* train_entlm;    // train the entropy LM (plain CE) and save it to this path instead of the main model
+                                // 
     const char* entropy_lm;     // load pretrained entropy-LM weights for
                                 // --entropy-patches segmentation
     size_t mask_late_step;      // raise the cap from mask_scale to
-    float mask_late_scale;      // mask_late_scale between this step and
-                                // the end (paper section 6 reweighting
-                                // schedule; 0 = disabled)
+    float mask_late_scale;      // mask_late_scale between this step and the end
+
     int entropy_patches;        // segment training/eval windows with the
                                 // entropy LM + patcher (matches inference)
-    int use_cuda;               // 1 = model + training passes on the CUDA
-                                // backend (staged I/O; see --backend)
+    int use_cuda;               // model + training passes on the CUDA backend
+
     size_t enc_layers;          // per-submodule layer overrides (0 = --layers)
     size_t glob_layers;
     size_t dec_layers;
-    int cross_last;             // 1 = cross-attn only after the final local
+    int cross_last;             // cross-attn only after the final local
                                 // layer (encoder + decoder); default all
     float t_warmup_frac;        // high-t curriculum: fraction of steps over
     float t_hi_start;           // which the t floor decays from t_hi_start
@@ -97,15 +90,15 @@ typedef struct {
     float beta2;
     float eps;
     float weight_decay;
-    float max_norm;             // gradient clip threshold
-    const char* grad_norm_log;  // write pre-clip grad norm every step
-    const char* update_norm_log; // write (step, post_clip_norm, update_norm) at spike steps
-    const char* component_norm_log; // write per-component gradient norms every step
-    const char* activation_dump_log; // log activation stats every report-every steps
-    const char* batch_log;           // log batch properties every step
-    size_t eval_every;               // run causal BPB eval every N steps (0 = disabled)
-    const char* loss_log;            // write per-step loss to FILE
-    int deterministic;               // single-GPU bit-reproducible training
+    float max_norm;                     // gradient clip threshold
+    const char* grad_norm_log;          // write pre-clip grad norm every step
+    const char* update_norm_log;        // write (step, post_clip_norm, update_norm) at spike steps
+    const char* component_norm_log;     // write per-component gradient norms every step
+    const char* activation_dump_log;    // log activation stats every report-every steps
+    const char* batch_log;              // log batch properties every step
+    size_t eval_every;                  // run causal BPB eval every N steps (0 = disabled)
+    const char* loss_log;               // write per-step loss to FILE
+    int deterministic;                  // single-GPU bit-reproducible training
 } args_t;
 
 
@@ -1368,10 +1361,9 @@ int main(int argc, char** argv) {
         a.d0_learned ? "learned" : "zeros",
         a.optimizer ? "adamw" : "sgd");
 
-    // -----------------------------------------------------------------
     // Training loop: non-overlapping windows over the corpus, fixed-stride
     // patches, freshly sampled corruption per visit.
-    //
+
     size_t num_windows = (size_t)fsize / a.window;
     BLT_REQUIRE(num_windows >= 1, "corpus smaller than one training window");
 
@@ -1664,11 +1656,10 @@ int main(int argc, char** argv) {
         printf("[CKPT] saved weights to %s\n", a.save_path);
     }
 
-    // -----------------------------------------------------------------
     // Held-out causal BPB evaluation. Same windowing/patches as training;
     // clean-row CE only -- valid for BOTH arms because the Figure-5 TRAIN
     // mask is plain causal (clean rows cannot see block rows).
-    //
+
     double bpb = -1.0;
     if (a.eval_path != NULL) {
         FILE* ef = fopen(a.eval_path, "rb");

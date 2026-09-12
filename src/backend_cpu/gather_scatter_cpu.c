@@ -4,9 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-// CPU reference implementations: straight indexed copies / accumulations in
-// sequence order.
-
 void blt_embedding_lookup_cpu(const blt_tensor* table, const uint8_t* ids_host, blt_tensor* out) {
     BLT_REQUIRE(table->backend == BLT_BACKEND_CPU && out->backend == BLT_BACKEND_CPU,
                 "blt_embedding_lookup: CPU implementation called with non-CPU tensors");

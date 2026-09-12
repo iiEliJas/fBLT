@@ -18,11 +18,10 @@ typedef enum {
     BLT_PATCH_RULE_BOTH
 } blt_patch_rule;
 
-// dynamically sized patch of bytes
 typedef struct {
     size_t start_idx;
-    size_t length;        // number of bytes in this patch
-    float peak_entropy;   // entropy value that triggered this patch
+    size_t length;
+    float peak_entropy;
 } blt_patch_info;
 
 typedef struct {
@@ -34,10 +33,8 @@ typedef struct {
 } blt_patcher_config;
 
 
-// Segments a sequence based on entropy spikes
-// Input: 1D tensor of entropy values (shape: [seq_len])
-// Output: Array of blt_patch_info structs
-// Returns: The total number of patches created
+// Segments a byte sequence into patches using entropy thresholds.
+// `entropy`: 1D [seq_len], `patches_out`: caller-allocated array, returns patch count.
 size_t blt_segment_patches( const blt_tensor* entropy, const uint8_t* bytes, blt_patch_info* patches_out,
                             size_t max_patches, const blt_patcher_config* config
 );

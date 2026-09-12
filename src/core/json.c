@@ -7,9 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-//----------------------------------------------------------------------
-// Recursive-descent parser state
-//
 typedef struct {
     blt_arena* arena;
     const char* text;
@@ -53,10 +50,7 @@ static void expect(json_parser* p, char c) {
 
 
 
-//----------------------------------------------------------------------
-// Strings (with escape handling; \uXXXX decoded to UTF-8)
-//
-
+// Strings — \uXXXX decoded to UTF-8
 static void append_utf8(blt_arena* arena, char** buf, size_t* len, size_t* cap,
                         uint32_t cp) {
     char tmp[4];
@@ -117,7 +111,6 @@ static char* parse_string_raw(json_parser* p, size_t* out_len) {
     while (p->pos < p->len) {
         unsigned char c = (unsigned char)p->text[p->pos++];
         if (c == '"') {
-            // NUL-terminate in the arena buffer
             if (len + 1 > cap) {
                 size_t new_cap = (cap == 0) ? 16 : cap * 2;
                 char* nb = (char*)blt_arena_alloc(p->arena, new_cap, 1);
@@ -157,7 +150,6 @@ static char* parse_string_raw(json_parser* p, size_t* out_len) {
                     } else if (cp >= 0xD800 && cp <= 0xDFFF) {
                         cp = 0xFFFD;
                     }
-                    // encode_utf8 with 4-byte form support
                     if (cp < 0x80) {
                         append_utf8(p->arena, &buf, &len, &cap, cp);
                     } else if (cp < 0x800) {
@@ -193,11 +185,7 @@ static char* parse_string_raw(json_parser* p, size_t* out_len) {
     return NULL;
 }
 
-
-
-//----------------------------------------------------------------------
 // Numbers / literals
-//
 
 static bool is_number_start(char c) {
     return c == '-' || (c >= '0' && c <= '9');
@@ -235,11 +223,7 @@ static void parse_number(json_parser* p, blt_json_value* out) {
     }
 }
 
-
-
-//----------------------------------------------------------------------
 // Containers
-//
 
 static void grow_children(json_parser* p, blt_json_value* container,
                           blt_json_value*** children, char*** keys,
@@ -268,7 +252,7 @@ static void grow_children(json_parser* p, blt_json_value* container,
 
 static void parse_object(json_parser* p, blt_json_value* out) {
     out->type = BLT_JSON_OBJECT;
-    p->pos++; // consume '{'
+    p->pos++;
 
     blt_json_value** children = NULL;
     char** keys = NULL;
@@ -310,7 +294,7 @@ static void parse_object(json_parser* p, blt_json_value* out) {
 
 static void parse_array(json_parser* p, blt_json_value* out) {
     out->type = BLT_JSON_ARRAY;
-    p->pos++; // consume '['
+    p->pos++;
 
     blt_json_value** children = NULL;
     size_t cap = 0;
@@ -373,11 +357,7 @@ static void parse_value(json_parser* p, blt_json_value* out) {
     }
 }
 
-
-
-//----------------------------------------------------------------------
 // Public API
-//
 
 blt_json_value* blt_json_parse(blt_arena* arena, const char* text) {
     BLT_REQUIRE(arena != NULL && text != NULL,

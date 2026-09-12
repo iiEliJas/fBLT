@@ -2,10 +2,6 @@
 #include "blt/core/allocator.h"
 #include "blt/models/model.h"
 
-
-//----------------------------------------------------------------------
-// Doc boundary remapping
-//
 static void map_byte_boundaries_to_patch_boundaries(
     const size_t* byte_doc_boundaries, size_t num_docs,
     const blt_patch_info* patches, size_t num_patches,
@@ -25,11 +21,6 @@ static void map_byte_boundaries_to_patch_boundaries(
     }
 }
 
-
-
-//----------------------------------------------------------------------
-// Create
-//
 blt_model* blt_model_create(blt_arena* arena, const blt_model_config* config) {
     BLT_REQUIRE(arena != NULL && config != NULL,
         "blt_model_create: arena and config cannot be NULL");
@@ -48,8 +39,6 @@ blt_model* blt_model_create(blt_arena* arena, const blt_model_config* config) {
     return model;
 }
 
-
-
 blt_model_grad* blt_model_grad_create(blt_arena* arena, const blt_model* model) {
     BLT_REQUIRE(arena != NULL && model != NULL,
         "blt_model_grad_create: arena and model cannot be NULL");
@@ -63,17 +52,10 @@ blt_model_grad* blt_model_grad_create(blt_arena* arena, const blt_model* model) 
     return grad;
 }
 
-
-
-//----------------------------------------------------------------------
-// Forward path
-//
-// Pipeline:
-//   patch_out, byte_hidden_out = Encoder(bytes_in, patches)      (encode stage)
-//   patch_doc_boundaries       = byte doc_boundaries -> patch indices
-//   O                          = Global(patch_out, patch_doc_boundaries)
-//   logits_out, loss_out       = Decoder(byte_hidden_out, O, bytes_in)   (decode stage)
-//
+// Forward path:
+//   Encoder(bytes, patches) -> patch_out, byte_hidden_out
+//   Global(patch_out, doc_boundaries) -> O
+//   Decoder(byte_hidden_out, O, bytes) -> logits, loss
 
 void blt_model_encode(
     const blt_model* model,
@@ -99,18 +81,14 @@ void blt_model_encode(
     size_t patch_shape[2] = {num_patches, embed_dim};
     size_t byte_shape[2] = {seq_len, embed_dim};
 
-    // -----------------------------------------------------------------
-    // 1. Local encoder: bytes + patches -> P_final, h_final
-    // -----------------------------------------------------------------
+    // 1. Local encoder
     out->patch_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
     out->byte_hidden_out = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
 
     blt_local_encoder_forward(model->encoder, bytes_in, patches, num_patches,
         doc_boundaries, num_docs, &out->patch_out, &out->byte_hidden_out, arena);
 
-    // -----------------------------------------------------------------
-    // 2. Remap doc boundaries from byte indices to patch indices
-    // -----------------------------------------------------------------
+    // 2. Remap doc boundaries byte -> patch indices
     out->patch_doc_boundaries = NULL;
     if (num_docs > 0) {
         out->patch_doc_boundaries = (size_t*)blt_container_alloc(
@@ -119,9 +97,7 @@ void blt_model_encode(
             doc_boundaries, num_docs, patches, num_patches, out->patch_doc_boundaries);
     }
 
-    // -----------------------------------------------------------------
-    // 3. Global transformer: P_final -> O
-    // -----------------------------------------------------------------
+    // 3. Global transformer
     out->global_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
     blt_global_transformer_forward(model->global, &out->patch_out,
         out->patch_doc_boundaries, num_docs, &out->global_out, arena);
@@ -153,7 +129,6 @@ void blt_model_decode(
             "blt_model_decode: bytes_in cannot be NULL when loss_out is requested");
     }
 
-    // The frozen latents define the sequence: h_final rows == logits rows
     size_t seq_len = enc->byte_hidden_out.shape[0];
     if (bytes_in != NULL) {
         BLT_REQUIRE(bytes_in->ndim == 1 && bytes_in->dtype == BLT_DTYPE_UINT8 &&
@@ -189,14 +164,7 @@ void blt_model_forward(
     blt_backend_pass_sync(bytes_in->backend);
 }
 
-
-
-//----------------------------------------------------------------------
-// Backward path
-//
-// Mirrors forward call order in reverse. Forward intermediates
-// (patch_out, byte_hidden_out, global_out) are being recomputed
-//
+// Backward path — recomputes forward intermediates (memory over speed tradeoff).
 void blt_model_backward(
     const blt_model* model,
     const blt_tensor* bytes_in,
@@ -221,9 +189,7 @@ void blt_model_backward(
     size_t patch_shape[2] = {num_patches, embed_dim};
     size_t byte_shape[2] = {seq_len, embed_dim};
 
-    // ----------------
-    // Recompute the forward intermediates needed by the submodule
-    // backward calls.
+    // Recompute forward intermediates needed by submodule backward calls.
     blt_tensor patch_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
     blt_tensor byte_hidden_out = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
     blt_local_encoder_forward(model->encoder, bytes_in, patches, num_patches,
@@ -241,8 +207,7 @@ void blt_model_backward(
     blt_global_transformer_forward(model->global, &patch_out,
         patch_doc_boundaries, num_docs, &global_out, arena);
 
-    // ----------------
-    // 1. Local decoder backward: dL/d(h_final), dL/d(O)
+    // 1. Local decoder backward
     blt_tensor grad_byte_hidden = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
     blt_tensor grad_global_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
 
@@ -250,15 +215,13 @@ void blt_model_backward(
         patches, num_patches, bytes_in, doc_boundaries, num_docs,
         &grad_byte_hidden, &grad_global_out, grad->decoder_grad, arena);
 
-    // ----------------
-    // 2. Global transformer backward: dL/d(P_final)
+    // 2. Global transformer backward
     blt_tensor grad_patch_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
     blt_global_transformer_backward(model->global, &patch_out,
         patch_doc_boundaries, num_docs, &grad_global_out, &grad_patch_out,
         grad->global_grad, arena);
 
-    // ----------------
-    // 3. Local encoder backward: consumes grad_patch_out and grad_byte_hidden
+    // 3. Local encoder backward
     blt_local_encoder_backward(model->encoder, bytes_in, patches, num_patches,
         doc_boundaries, num_docs, &grad_patch_out, &grad_byte_hidden,
         grad->encoder_grad, arena);
