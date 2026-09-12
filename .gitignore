@@ -1,32 +1,58 @@
+# Build artifacts
 build/
 bin/
 bin-cuda/
-data/dummy_entropy.bin
 obj/
 obj-cuda/
 *.exe
 *.o
 *.obj
-bench/*.jsonl
-__pycache__/
-.venv
-.cache/
 
-docs/bltransformerPAPER.md
-docs/fast_bltPAPER.md
-
+# CUDA profiling
 *.nsys-rep
 *.sqlite
 
-tmp/
-reports/
-scripts/
-runs/
+# Python
+__pycache__/
+*.pyc
+.venv/
+.cache/
+
+# Model files and data
+*.safetensors
+*.log
+data/dummy_entropy.bin
 data/raw/
 data/train.bin
 data/heldout.bin
 data/heldout_c.bin
 data/heldout_h.bin
+
+# Generated files
+compile_commands.json
 configs/sweep_state.json
+bench/*.jsonl
 bench/ckpts/
+
+# Tool output
+tmp/
+reports/
+scripts/
+runs/
 logs/
+graphify-out/
+omo/
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+
+# Papers (not part of the distribution)
+docs/bltransformerPAPER.md
+docs/fast_bltPAPER.md
