@@ -12,17 +12,8 @@ __pycache__/
 .venv
 .cache/
 
-docs/Plan.md
 docs/bltransformerPAPER.md
 docs/fast_bltPAPER.md
-graphify-out/
-
-AGENTS.md
-docs/HANDOFF_RESET.md
-compile_commands.json
-.opencode/
-.omo/
-opencode.json
 
 *.nsys-rep
 *.sqlite
