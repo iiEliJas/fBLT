@@ -108,7 +108,11 @@ jobs:
         with:
           cuda: '12.6.2'
           method: network
-          sub-packages: '["nvcc", "cudart", "cublas"]'
+          sub-packages: '["nvcc"]'
+      - name: Install cuBLAS headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcublas-dev
       - name: Syntax-check CUDA sources
         run: |
           FAILURES=0
