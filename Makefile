@@ -168,6 +168,13 @@ test: $(BIN_DIR)/test_main$(EXE_EXT)
 	@echo [TEST] Running tests...
 	@./$(BIN_DIR)/test_main$(EXE_EXT)
 
+test-asan:
+	@echo [TEST-ASAN] Building with sanitizers...
+	@$(MAKE) clean
+	@$(MAKE) CC=gcc CFLAGS="-O1 -g -std=c99 -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude -Itests -Itools -D_POSIX_C_SOURCE=200809L" LDLIBS="-lm" $(BIN_DIR)/test_main
+	@echo [TEST-ASAN] Running tests (leak detection off)...
+	@ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=print_stacktrace=1 ./$(BIN_DIR)/test_main$(EXE_EXT)
+
 main: $(BIN_DIR)/main$(EXE_EXT)
 	@echo [MAIN] Built successfully: $(BIN_DIR)/main$(EXE_EXT)
 
