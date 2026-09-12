@@ -1,6 +1,6 @@
 # fBLT
 
-[![CI](https://github.com/USER/fBLT/actions/workflows/ci.yml/badge.svg)](https://github.com/USER/fBLT/actions/workflows/ci.yml)
+[![CI](https://github.com/iiEliJas/fBLT/actions/workflows/ci.yml/badge.svg)](https://github.com/iiEliJas/fBLT/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 Fast Byte Latent Transformer in pure C and CUDA. A byte-level language model with no tokenizer, built for code completion and small LLMs.
@@ -8,8 +8,8 @@ Fast Byte Latent Transformer in pure C and CUDA. A byte-level language model wit
 **Status: CPU + CUDA complete.** Full pipeline on both backends: ops, models, training loop, and all three Fast-BLT inference modes (BLT-S / BLT-D / BLT-DV). Training and inference benchmarked at two scales (300k params and 3.5M params).
 
 Based on two papers from Meta:
-- [Byte Latent Transformer](https://arxiv.org/abs/2412.09871) - Direct byte modeling with entropy-based dynamic patching. Matches token-based LLM scaling, no vocabulary needed.
-- [Fast Byte Latent Transformer](https://arxiv.org/abs/2605.08044) - Faster inference via diffusion decoding and self-speculation.
+- [Byte Latent Transformer](https://arxiv.org/abs/2412.09871) - Byte modeling with entropy-based dynamic patching. Matches token-based LLM scaling, no vocabulary needed.
+- [Fast Byte Latent Transformer](https://arxiv.org/abs/2605.08044) - Faster inference with diffusion decoding and self-speculation.
 
 ## How it works
 
@@ -21,7 +21,7 @@ Five-stage pipeline:
 
 3. **Local Encoder** - tiny transformer that compresses byte patches into embeddings, using hash n-gram embeddings to recognize byte patterns without a vocabulary
 
-4. **Patch Transformer** - the main model. Block-causal attention over patches (4-8x shorter than the raw byte sequence).
+4. **Patch Transformer** - the main model. Block-causal attention over patches.
 
 5. **Local Decoder** - tiny transformer that expands patches back to bytes autoregressively, with optional self-speculation
 

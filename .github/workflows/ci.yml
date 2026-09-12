@@ -128,9 +128,9 @@ jobs:
           for cu_file in src/backend_cuda/*.cu; do
             echo "  checking: $cu_file"
             if $CUDA_NVCC --syntax-only --std=c++17 -Iinclude -DBLT_WITH_CUDA "$cu_file"; then
-              echo "    ✓ OK"
+              echo "    OK"
             else
-              echo "    ✗ FAILED"
+              echo "    FAILED"
               FAILURES=$((FAILURES + 1))
             fi
           done
