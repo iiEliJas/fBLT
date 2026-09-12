@@ -12,7 +12,7 @@
 // (query, key) cell. Row-validity is reduced to a per-row flag buffer that
 // is checked host-side after sync, mirroring the CPU BLT_REQUIRE.
 
-static int blt_cuda_launch_check(const char* what) {
+static int blt_cuda_launch_check(const char *what) {
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         BLT_FATAL("%s failed: %s", what, cudaGetErrorString(err));
@@ -20,19 +20,16 @@ static int blt_cuda_launch_check(const char* what) {
     return 1;
 }
 
-static void* blt_cuda_upload_temp(const void* host_data, size_t bytes, blt_arena* arena) {
+static void *blt_cuda_upload_temp(const void *host_data, size_t bytes, blt_arena *arena) {
     if (bytes == 0) return NULL;
-    void* dev_ptr = blt_arena_alloc(arena, bytes, 16);
+    void *dev_ptr = blt_arena_alloc(arena, bytes, 16);
     blt_cuda_memcpy_h2d(dev_ptr, host_data, bytes);
     return dev_ptr;
 }
 
-__global__ void blt_attention_mask_kernel(float* mask, size_t seq_q, size_t seq_kv,
-                                          int is_causal, size_t causal_offset,
-                                          size_t sliding_window,
-                                          const size_t* doc_bounds, size_t num_docs,
-                                          const size_t* q_groups, const size_t* kv_groups,
-                                          int bidirectional_group) {
+__global__ void blt_attention_mask_kernel(float *mask, size_t seq_q, size_t seq_kv, int is_causal, size_t causal_offset,
+                                          size_t sliding_window, const size_t *doc_bounds, size_t num_docs,
+                                          const size_t *q_groups, const size_t *kv_groups, int bidirectional_group) {
     const size_t count = seq_q * seq_kv;
     for (size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x; idx < count;
          idx += (size_t)gridDim.x * blockDim.x) {
@@ -86,11 +83,9 @@ __global__ void blt_attention_mask_kernel(float* mask, size_t seq_q, size_t seq_
 }
 
 // A row is valid iff it contains at least one finite (allowed) entry.
-__global__ void blt_mask_row_check_kernel(const float* mask, size_t seq_q, size_t seq_kv,
-                                          unsigned char* row_ok) {
-    for (size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x; i < seq_q;
-         i += (size_t)gridDim.x * blockDim.x) {
-        const float* row = mask + i * seq_kv;
+__global__ void blt_mask_row_check_kernel(const float *mask, size_t seq_q, size_t seq_kv, unsigned char *row_ok) {
+    for (size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x; i < seq_q; i += (size_t)gridDim.x * blockDim.x) {
+        const float *row = mask + i * seq_kv;
         bool any = false;
         for (size_t j = 0; j < seq_kv; j++) {
             if (isfinite(row[j])) {
@@ -102,8 +97,7 @@ __global__ void blt_mask_row_check_kernel(const float* mask, size_t seq_q, size_
     }
 }
 
-extern "C" void blt_build_attention_mask_cuda(const blt_mask_config* config, blt_tensor* out_mask,
-                                              blt_arena* arena) {
+extern "C" void blt_build_attention_mask_cuda(const blt_mask_config *config, blt_tensor *out_mask, blt_arena *arena) {
     const size_t seq_q = config->seq_len_q;
     const size_t seq_kv = config->seq_len_kv;
     const bool has_docs = (config->doc_boundaries != NULL && config->num_docs > 0);
@@ -112,19 +106,19 @@ extern "C" void blt_build_attention_mask_cuda(const blt_mask_config* config, blt
     size_t shape[2] = {seq_q, seq_kv};
     *out_mask = blt_tensor_create(arena, shape, 2, BLT_DTYPE_FP32);
 
-    size_t* d_docs = NULL;
-    size_t* d_qg = NULL;
-    size_t* d_kvg = NULL;
-    unsigned char* d_row_ok = NULL;
+    size_t *d_docs = NULL;
+    size_t *d_qg = NULL;
+    size_t *d_kvg = NULL;
+    unsigned char *d_row_ok = NULL;
     if (has_docs) {
-        d_docs = (size_t*)blt_cuda_upload_temp(config->doc_boundaries, config->num_docs * sizeof(size_t), arena);
+        d_docs = (size_t *)blt_cuda_upload_temp(config->doc_boundaries, config->num_docs * sizeof(size_t), arena);
     }
     if (has_groups) {
-        d_qg = (size_t*)blt_cuda_upload_temp(config->query_group_ids, seq_q * sizeof(size_t), arena);
-        d_kvg = (size_t*)blt_cuda_upload_temp(config->kv_group_ids, seq_kv * sizeof(size_t), arena);
+        d_qg = (size_t *)blt_cuda_upload_temp(config->query_group_ids, seq_q * sizeof(size_t), arena);
+        d_kvg = (size_t *)blt_cuda_upload_temp(config->kv_group_ids, seq_kv * sizeof(size_t), arena);
     }
 
-    d_row_ok = (unsigned char*)blt_arena_alloc(arena, seq_q, 1);
+    d_row_ok = (unsigned char *)blt_arena_alloc(arena, seq_q, 1);
 
     const size_t count = seq_q * seq_kv;
     const unsigned block = 256;
@@ -134,17 +128,15 @@ extern "C" void blt_build_attention_mask_cuda(const blt_mask_config* config, blt
 
     // First pass fills the matrix; second pass flags fully-masked rows.
     blt_attention_mask_kernel<<<(unsigned)blocks, block>>>(
-        (float*)out_mask->data, seq_q, seq_kv,
-        config->is_causal ? 1 : 0, config->causal_offset, config->sliding_window,
-        d_docs, has_docs ? config->num_docs : 0,
-        d_qg, d_kvg,
+        (float *)out_mask->data, seq_q, seq_kv, config->is_causal ? 1 : 0, config->causal_offset,
+        config->sliding_window, d_docs, has_docs ? config->num_docs : 0, d_qg, d_kvg,
         config->bidirectional_within_group ? 1 : 0);
     blt_cuda_launch_check("blt_attention_mask_kernel");
     blt_mask_row_check_kernel<<<(unsigned)(seq_q > 4096 ? 4096 : (seq_q > 0 ? seq_q : 1)), block>>>(
-        (const float*)out_mask->data, seq_q, seq_kv, d_row_ok);
+        (const float *)out_mask->data, seq_q, seq_kv, d_row_ok);
     blt_cuda_launch_check("blt_mask_row_check_kernel");
 
-    unsigned char* row_ok = (unsigned char*)malloc(seq_q);
+    unsigned char *row_ok = (unsigned char *)malloc(seq_q);
     BLT_REQUIRE(row_ok != NULL, "blt_build_attention_mask: failed to allocate row check buffer");
     blt_cuda_memcpy_d2h(row_ok, d_row_ok, seq_q);
     for (size_t i = 0; i < seq_q; i++) {
@@ -158,7 +150,7 @@ extern "C" void blt_build_attention_mask_cuda(const blt_mask_config* config, blt
     free(row_ok);
 }
 
-__global__ void blt_block_diffusion_mask_kernel(float* m, size_t S, size_t N, int infer_mode) {
+__global__ void blt_block_diffusion_mask_kernel(float *m, size_t S, size_t N, int infer_mode) {
     const size_t count = S * S;
     for (size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x; idx < count;
          idx += (size_t)gridDim.x * blockDim.x) {
@@ -180,8 +172,8 @@ __global__ void blt_block_diffusion_mask_kernel(float* m, size_t S, size_t N, in
     }
 }
 
-extern "C" void blt_build_block_diffusion_mask_cuda(const blt_block_diffusion_config* config,
-                                                    blt_tensor* out_mask, blt_arena* arena) {
+extern "C" void blt_build_block_diffusion_mask_cuda(const blt_block_diffusion_config *config, blt_tensor *out_mask,
+                                                    blt_arena *arena) {
     const size_t S = config->seq_len;
     const size_t N = config->num_clean;
 
@@ -194,8 +186,8 @@ extern "C" void blt_build_block_diffusion_mask_cuda(const blt_block_diffusion_co
     if (blocks > 4096) blocks = 4096;
     if (blocks == 0) blocks = 1;
 
-    blt_block_diffusion_mask_kernel<<<(unsigned)blocks, block>>>(
-        (float*)out_mask->data, S, N, config->mode == BLT_BDM_INFER ? 1 : 0);
+    blt_block_diffusion_mask_kernel<<<(unsigned)blocks, block>>>((float *)out_mask->data, S, N,
+                                                                 config->mode == BLT_BDM_INFER ? 1 : 0);
     blt_cuda_launch_check("blt_build_block_diffusion_mask");
 
     // Every supported configuration gives each row a valid key (row i sees

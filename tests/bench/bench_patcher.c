@@ -19,23 +19,21 @@ typedef struct {
     double avg_time;
 } bench_result;
 
-
-
-bench_result benchmark_patcher(const blt_tensor* entropy, const blt_patcher_config* config, size_t max_patches){
-    blt_patch_info* patches = (blt_patch_info*)malloc(max_patches * sizeof(blt_patch_info));
+bench_result benchmark_patcher(const blt_tensor *entropy, const blt_patcher_config *config, size_t max_patches) {
+    blt_patch_info *patches = (blt_patch_info *)malloc(max_patches * sizeof(blt_patch_info));
     BLT_REQUIRE(patches != NULL, "Failed to allocate patches buffer");
 
-    double* times = (double*)malloc(BENCH_ITERATIONS * sizeof(double));
+    double *times = (double *)malloc(BENCH_ITERATIONS * sizeof(double));
     BLT_REQUIRE(times != NULL, "Failed to allocate times buffer");
 
     blt_timer timer;
     blt_timer_init(&timer);
 
-    for (int i = 0; i < BENCH_WARMUP; ++i){
+    for (int i = 0; i < BENCH_WARMUP; ++i) {
         blt_segment_patches(entropy, NULL, patches, max_patches, config);
     }
 
-    for (int i = 0; i < BENCH_ITERATIONS; ++i){
+    for (int i = 0; i < BENCH_ITERATIONS; ++i) {
         blt_timer_start(&timer);
         blt_segment_patches(entropy, NULL, patches, max_patches, config);
         blt_timer_stop(&timer);
@@ -46,10 +44,10 @@ bench_result benchmark_patcher(const blt_tensor* entropy, const blt_patcher_conf
     double min_time = times[0];
     double max_time = times[0];
 
-    for (int i = 0; i < BENCH_ITERATIONS; ++i){
+    for (int i = 0; i < BENCH_ITERATIONS; ++i) {
         total_time += times[i];
-        if(times[i] < min_time) min_time = times[i];
-        if(times[i] > max_time) max_time = times[i];
+        if (times[i] < min_time) min_time = times[i];
+        if (times[i] > max_time) max_time = times[i];
     }
 
     double avg_time = total_time / BENCH_ITERATIONS;
@@ -59,14 +57,12 @@ bench_result benchmark_patcher(const blt_tensor* entropy, const blt_patcher_conf
     double max_throughput = blt_throughput_gb_per_sec(seq_bytes, min_time);
     double avg_throughput = blt_throughput_gb_per_sec(seq_bytes, avg_time);
 
-    bench_result result = {
-        .min_throughput = min_throughput,
-        .max_throughput = max_throughput,
-        .avg_throughput = avg_throughput,
-        .min_time = min_time,
-        .max_time = max_time,
-        .avg_time = avg_time
-    };
+    bench_result result = {.min_throughput = min_throughput,
+                           .max_throughput = max_throughput,
+                           .avg_throughput = avg_throughput,
+                           .min_time = min_time,
+                           .max_time = max_time,
+                           .avg_time = avg_time};
 
     free(patches);
     free(times);
@@ -74,18 +70,16 @@ bench_result benchmark_patcher(const blt_tensor* entropy, const blt_patcher_conf
     return result;
 }
 
-
-
-int main(int argc, char** argv){
-    if (argc < 2){
+int main(int argc, char **argv) {
+    if (argc < 2) {
         fprintf(stderr, "Usage: %s <entropy_file> [sequence_size]\n", argv[0]);
         fprintf(stderr, "  entropy_file: path to binary FP32 entropy array\n");
         fprintf(stderr, "  sequence_size: sequence length (default: file size / sizeof(float))\n");
         return 1;
     }
 
-    FILE* f = fopen(argv[1], "rb");
-    if (!f){
+    FILE *f = fopen(argv[1], "rb");
+    if (!f) {
         fprintf(stderr, "Error: cannot open %s\n", argv[1]);
         return 1;
     }
@@ -94,21 +88,21 @@ int main(int argc, char** argv){
     size_t file_size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    if (file_size % sizeof(float) != 0){
+    if (file_size % sizeof(float) != 0) {
         fprintf(stderr, "Error: file size not a multiple of sizeof(float)\n");
         fclose(f);
         return 1;
     }
 
     size_t seq_len = file_size / sizeof(float);
-    if (argc >= 3){
+    if (argc >= 3) {
         size_t requested_len = atoi(argv[2]);
-        if(requested_len < seq_len){
+        if (requested_len < seq_len) {
             seq_len = requested_len;
         }
     }
 
-    blt_arena* arena = blt_arena_create(file_size, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(file_size, BLT_BACKEND_CPU);
     if (!arena) {
         fprintf(stderr, "Error: arena creation for patcher tests\n");
         return 0;
@@ -116,10 +110,9 @@ int main(int argc, char** argv){
 
     size_t entropy_shape[1] = {seq_len};
     blt_tensor entropy_tensor = blt_tensor_create(arena, entropy_shape, 1, BLT_DTYPE_FP32);
-    float* entropy_data = (float*)entropy_tensor.data;
+    float *entropy_data = (float *)entropy_tensor.data;
 
-
-    if (fread(entropy_data, sizeof(float), file_size / sizeof(float), f) != file_size / sizeof(float)){
+    if (fread(entropy_data, sizeof(float), file_size / sizeof(float), f) != file_size / sizeof(float)) {
         fprintf(stderr, "Error: read failed\n");
         free(entropy_data);
         fclose(f);
@@ -127,33 +120,26 @@ int main(int argc, char** argv){
     }
     fclose(f);
 
-
     size_t max_patches = seq_len;
 
-    blt_patcher_config config_global = {
-        .threshold_global = 1.5f,
-        .threshold_monotonic = 0.0f,
-        .max_patch_length = 256,
-        .rule = BLT_PATCH_RULE_GLOBAL,
-        .reset_on_newline = false
-    };
+    blt_patcher_config config_global = {.threshold_global = 1.5f,
+                                        .threshold_monotonic = 0.0f,
+                                        .max_patch_length = 256,
+                                        .rule = BLT_PATCH_RULE_GLOBAL,
+                                        .reset_on_newline = false};
 
-    blt_patcher_config config_monotonic = {
-        .threshold_global = 10.0f,
-        .threshold_monotonic = 0.5f,
-        .max_patch_length = 256,
-        .rule = BLT_PATCH_RULE_MONOTONIC,
-        .reset_on_newline = false
-    };
+    blt_patcher_config config_monotonic = {.threshold_global = 10.0f,
+                                           .threshold_monotonic = 0.5f,
+                                           .max_patch_length = 256,
+                                           .rule = BLT_PATCH_RULE_MONOTONIC,
+                                           .reset_on_newline = false};
 
-    blt_patcher_config config_both = {
-        .threshold_global = 1.5f,
-        .threshold_monotonic = 0.5f,
-        .max_patch_length = 256,
-        .rule = BLT_PATCH_RULE_BOTH,
-        .reset_on_newline = false
-    };
- 
+    blt_patcher_config config_both = {.threshold_global = 1.5f,
+                                      .threshold_monotonic = 0.5f,
+                                      .max_patch_length = 256,
+                                      .rule = BLT_PATCH_RULE_BOTH,
+                                      .reset_on_newline = false};
+
     printf("----------------------------------------\n");
     printf("BLT Patcher Microbenchmark\n");
     printf("----------------------------------------\n");
@@ -192,10 +178,10 @@ int main(int argc, char** argv){
     printf("\n");
 
     double fastest_throughput = result_global.avg_throughput;
-    if (result_monotonic.avg_throughput > fastest_throughput){
+    if (result_monotonic.avg_throughput > fastest_throughput) {
         fastest_throughput = result_monotonic.avg_throughput;
     }
-    if (result_both.avg_throughput > fastest_throughput){
+    if (result_both.avg_throughput > fastest_throughput) {
         fastest_throughput = result_both.avg_throughput;
     }
 
@@ -203,7 +189,7 @@ int main(int argc, char** argv){
     printf("Summary\n");
     printf("----------------------------------------\n");
     printf("Fastest configuration: %.3f GB/s\n", fastest_throughput);
-    if (fastest_throughput > 1.0f){
+    if (fastest_throughput > 1.0f) {
         printf("YES - Performance exceeds 1.0 GB/s threshold\n");
     } else {
         printf("NO - Performance below 1.0 GB/s threshold\n");

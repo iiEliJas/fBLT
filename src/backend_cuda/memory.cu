@@ -4,7 +4,7 @@
 
 #include <cuda_runtime.h>
 
-static void blt_cuda_check(cudaError_t err, const char* what) {
+static void blt_cuda_check(cudaError_t err, const char *what) {
     if (err != cudaSuccess) {
         BLT_FATAL("CUDA %s failed: %s", what, cudaGetErrorString(err));
     }
@@ -12,9 +12,9 @@ static void blt_cuda_check(cudaError_t err, const char* what) {
 
 // Thread-local scratch arena for temporary CUDA allocations.
 // Avoids per-call cudaMalloc/free churn. Initialized on first use with 512MB capacity.
-static __thread blt_arena* blt_cuda_scratch_arena = NULL;
+static __thread blt_arena *blt_cuda_scratch_arena = NULL;
 
-extern "C" blt_arena* blt_cuda_get_scratch_arena(void) {
+extern "C" blt_arena *blt_cuda_get_scratch_arena(void) {
     if (blt_cuda_scratch_arena == NULL) {
         blt_cuda_scratch_arena = blt_arena_create(512 * 1024 * 1024, BLT_BACKEND_CUDA);
     }
@@ -27,13 +27,13 @@ extern "C" void blt_cuda_scratch_reset(void) {
     }
 }
 
-extern "C" void* blt_cuda_malloc(size_t bytes) {
-    void* ptr = NULL;
+extern "C" void *blt_cuda_malloc(size_t bytes) {
+    void *ptr = NULL;
     blt_cuda_check(cudaMalloc(&ptr, bytes), "cudaMalloc");
     return ptr;
 }
 
-extern "C" void blt_cuda_free(void* ptr) {
+extern "C" void blt_cuda_free(void *ptr) {
     if (!ptr) {
         return;
     }
@@ -43,15 +43,15 @@ extern "C" void blt_cuda_free(void* ptr) {
     }
 }
 
-extern "C" void blt_cuda_memset(void* dst, int value, size_t bytes) {
+extern "C" void blt_cuda_memset(void *dst, int value, size_t bytes) {
     blt_cuda_check(cudaMemset(dst, value, bytes), "cudaMemset");
 }
 
-extern "C" void blt_cuda_memcpy_h2d(void* dst, const void* src, size_t bytes) {
+extern "C" void blt_cuda_memcpy_h2d(void *dst, const void *src, size_t bytes) {
     blt_cuda_check(cudaMemcpy(dst, src, bytes, cudaMemcpyHostToDevice), "cudaMemcpy H2D");
 }
 
-extern "C" void blt_cuda_memcpy_d2h(void* dst, const void* src, size_t bytes) {
+extern "C" void blt_cuda_memcpy_d2h(void *dst, const void *src, size_t bytes) {
     blt_cuda_check(cudaMemcpy(dst, src, bytes, cudaMemcpyDeviceToHost), "cudaMemcpy D2H");
 }
 

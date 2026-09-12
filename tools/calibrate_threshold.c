@@ -14,20 +14,18 @@ typedef struct {
     float avg_patch_len;
 } calibration_stats;
 
-static calibration_stats compute_stats(const blt_patch_info* patches, size_t patch_count, size_t total_bytes){
-    calibration_stats stats = {
-        .total_bytes = total_bytes,
-        .total_patches = patch_count,
-        .min_patch_len = patch_count > 0 ? patches[0].length : 0,
-        .max_patch_len = 0,
-        .avg_patch_len = patch_count > 0 ? (float)total_bytes / (float)patch_count : 0.0f
-    };
+static calibration_stats compute_stats(const blt_patch_info *patches, size_t patch_count, size_t total_bytes) {
+    calibration_stats stats = {.total_bytes = total_bytes,
+                               .total_patches = patch_count,
+                               .min_patch_len = patch_count > 0 ? patches[0].length : 0,
+                               .max_patch_len = 0,
+                               .avg_patch_len = patch_count > 0 ? (float)total_bytes / (float)patch_count : 0.0f};
 
-    for(size_t i = 0; i < patch_count; ++i){
-        if(patches[i].length < stats.min_patch_len){
+    for (size_t i = 0; i < patch_count; ++i) {
+        if (patches[i].length < stats.min_patch_len) {
             stats.min_patch_len = patches[i].length;
         }
-        if(patches[i].length > stats.max_patch_len){
+        if (patches[i].length > stats.max_patch_len) {
             stats.max_patch_len = patches[i].length;
         }
     }
@@ -35,10 +33,10 @@ static calibration_stats compute_stats(const blt_patch_info* patches, size_t pat
     return stats;
 }
 
-
-int calibrate_threshold(const char* entropy_file, float target_patch_size, float* calibrated_threshold, calibration_stats* out_stats){
-    FILE* f = fopen(entropy_file, "rb");
-    if(!f){
+int calibrate_threshold(const char *entropy_file, float target_patch_size, float *calibrated_threshold,
+                        calibration_stats *out_stats) {
+    FILE *f = fopen(entropy_file, "rb");
+    if (!f) {
         fprintf(stderr, "Error: cannot open %s\n", entropy_file);
         return 1;
     }
@@ -47,7 +45,7 @@ int calibrate_threshold(const char* entropy_file, float target_patch_size, float
     size_t file_size = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    if(file_size % sizeof(float) != 0){
+    if (file_size % sizeof(float) != 0) {
         fprintf(stderr, "Error: file size not a multiple of sizeof(float)\n");
         fclose(f);
         return 1;
@@ -55,7 +53,7 @@ int calibrate_threshold(const char* entropy_file, float target_patch_size, float
 
     size_t seq_len = file_size / sizeof(float);
 
-    blt_arena* arena = blt_arena_create(file_size, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(file_size, BLT_BACKEND_CPU);
     if (!arena) {
         fprintf(stderr, "Error: arena creation for patcher tests\n");
         return 0;
@@ -63,9 +61,9 @@ int calibrate_threshold(const char* entropy_file, float target_patch_size, float
 
     size_t entropy_shape[1] = {seq_len};
     blt_tensor entropy_tensor = blt_tensor_create(arena, entropy_shape, 1, BLT_DTYPE_FP32);
-    float* entropy_data = (float*)entropy_tensor.data;
+    float *entropy_data = (float *)entropy_tensor.data;
 
-    if(fread(entropy_data, sizeof(float), seq_len, f) != seq_len){
+    if (fread(entropy_data, sizeof(float), seq_len, f) != seq_len) {
         fprintf(stderr, "Error: read failed\n");
         free(entropy_data);
         fclose(f);
@@ -73,10 +71,9 @@ int calibrate_threshold(const char* entropy_file, float target_patch_size, float
     }
     fclose(f);
 
-
     size_t max_patches = seq_len;
-    blt_patch_info* patches = (blt_patch_info*)malloc(max_patches * sizeof(blt_patch_info));
-    if(!patches){
+    blt_patch_info *patches = (blt_patch_info *)malloc(max_patches * sizeof(blt_patch_info));
+    if (!patches) {
         fprintf(stderr, "Error: allocation failed\n");
         free(entropy_data);
         return 1;
@@ -84,8 +81,8 @@ int calibrate_threshold(const char* entropy_file, float target_patch_size, float
 
     float theta_low = 0.0f;
     float theta_high = 0.0f;
-    for(size_t i = 0; i < seq_len; ++i){
-        if(entropy_data[i] > theta_high){
+    for (size_t i = 0; i < seq_len; ++i) {
+        if (entropy_data[i] > theta_high) {
             theta_high = entropy_data[i];
         }
     }
@@ -97,30 +94,28 @@ int calibrate_threshold(const char* entropy_file, float target_patch_size, float
     printf("\nSearching for threshold...\n");
     printf("Target patch size: %.2f, tolerance: %.4f\n", target_patch_size, epsilon);
 
-    for(int iter = 0; iter < max_iter; ++iter){
+    for (int iter = 0; iter < max_iter; ++iter) {
         float theta_mid = (theta_low + theta_high) / 2.0f;
 
-        blt_patcher_config config = {
-            .threshold_global = theta_mid,
-            .threshold_monotonic = 0.0f,
-            .max_patch_length = 256,
-            .rule = BLT_PATCH_RULE_GLOBAL,
-            .reset_on_newline = false
-        };
+        blt_patcher_config config = {.threshold_global = theta_mid,
+                                     .threshold_monotonic = 0.0f,
+                                     .max_patch_length = 256,
+                                     .rule = BLT_PATCH_RULE_GLOBAL,
+                                     .reset_on_newline = false};
 
         size_t patch_count = blt_segment_patches(&entropy_tensor, NULL, patches, max_patches, &config);
         float avg_len = (float)seq_len / (float)patch_count;
 
         printf("Iter %2d: theta=%.6f, avg_patch_len=%.3f\n", iter, theta_mid, avg_len);
 
-        if(fabsf(avg_len - target_patch_size) < epsilon){
+        if (fabsf(avg_len - target_patch_size) < epsilon) {
             theta_best = theta_mid;
             break;
         }
 
         theta_best = theta_mid;
 
-        if(avg_len < target_patch_size){
+        if (avg_len < target_patch_size) {
             theta_low = theta_mid;
         } else {
             theta_high = theta_mid;
@@ -128,14 +123,12 @@ int calibrate_threshold(const char* entropy_file, float target_patch_size, float
     }
 
     calibration_stats stats = compute_stats(patches, seq_len, seq_len);
-    if(stats.total_patches > 0){
-        blt_patcher_config config = {
-            .threshold_global = theta_best,
-            .threshold_monotonic = 0.0f,
-            .max_patch_length = 256,
-            .rule = BLT_PATCH_RULE_GLOBAL,
-            .reset_on_newline = false
-        };
+    if (stats.total_patches > 0) {
+        blt_patcher_config config = {.threshold_global = theta_best,
+                                     .threshold_monotonic = 0.0f,
+                                     .max_patch_length = 256,
+                                     .rule = BLT_PATCH_RULE_GLOBAL,
+                                     .reset_on_newline = false};
         size_t final_patch_count = blt_segment_patches(&entropy_tensor, NULL, patches, max_patches, &config);
         stats = compute_stats(patches, final_patch_count, seq_len);
     }
@@ -157,9 +150,8 @@ int calibrate_threshold(const char* entropy_file, float target_patch_size, float
     return 0;
 }
 
-
-int main(int argc, char** argv){
-    if(argc < 2){
+int main(int argc, char **argv) {
+    if (argc < 2) {
         fprintf(stderr, "Usage: %s <entropy_file> [target_patch_size]\n", argv[0]);
         fprintf(stderr, "  entropy_file: path to binary FP32 entropy array\n");
         fprintf(stderr, "  target_patch_size: desired average patch length (default 6.0)\n");
@@ -167,7 +159,7 @@ int main(int argc, char** argv){
     }
 
     float target_patch_size = 6.0f;
-    if(argc >= 3){
+    if (argc >= 3) {
         target_patch_size = atof(argv[2]);
     }
 

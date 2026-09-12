@@ -20,23 +20,21 @@ int run_deterministic_regression_test(void) {
     }
 
     // Use a small config: 200 steps, seed=7, deterministic
-    const char* cmd1 =
-        "./bin/train_blt_d --corpus data/train.bin --steps 200 --lr 0.05 "
-        "--block-size 4 --window 48 --embed 64 --hidden 128 --layers 2 "
-        "--d0-mode learned --seed 7 --report-every 200 "
-        "--diffusion 1 --mask-warmup 10000 --mask-scale 0.3 --t-min 0.1 "
-        "--optimizer sgd --backend cpu --deterministic "
-        "--grad-norm-log /tmp/blt_det_test1.log --loss-log /tmp/blt_det_loss1.log "
-        "> /dev/null 2>&1";
+    const char *cmd1 = "./bin/train_blt_d --corpus data/train.bin --steps 200 --lr 0.05 "
+                       "--block-size 4 --window 48 --embed 64 --hidden 128 --layers 2 "
+                       "--d0-mode learned --seed 7 --report-every 200 "
+                       "--diffusion 1 --mask-warmup 10000 --mask-scale 0.3 --t-min 0.1 "
+                       "--optimizer sgd --backend cpu --deterministic "
+                       "--grad-norm-log /tmp/blt_det_test1.log --loss-log /tmp/blt_det_loss1.log "
+                       "> /dev/null 2>&1";
 
-    const char* cmd2 =
-        "./bin/train_blt_d --corpus data/train.bin --steps 200 --lr 0.05 "
-        "--block-size 4 --window 48 --embed 64 --hidden 128 --layers 2 "
-        "--d0-mode learned --seed 7 --report-every 200 "
-        "--diffusion 1 --mask-warmup 10000 --mask-scale 0.3 --t-min 0.1 "
-        "--optimizer sgd --backend cpu --deterministic "
-        "--grad-norm-log /tmp/blt_det_test2.log --loss-log /tmp/blt_det_loss2.log "
-        "> /dev/null 2>&1";
+    const char *cmd2 = "./bin/train_blt_d --corpus data/train.bin --steps 200 --lr 0.05 "
+                       "--block-size 4 --window 48 --embed 64 --hidden 128 --layers 2 "
+                       "--d0-mode learned --seed 7 --report-every 200 "
+                       "--diffusion 1 --mask-warmup 10000 --mask-scale 0.3 --t-min 0.1 "
+                       "--optimizer sgd --backend cpu --deterministic "
+                       "--grad-norm-log /tmp/blt_det_test2.log --loss-log /tmp/blt_det_loss2.log "
+                       "> /dev/null 2>&1";
 
     int rc1 = system(cmd1);
     int rc2 = system(cmd2);
@@ -46,8 +44,8 @@ int run_deterministic_regression_test(void) {
     TEST_ASSERT(rc2 == 0);
 
     // Compare gradnorm logs byte-for-byte
-    FILE* f1 = fopen("/tmp/blt_det_test1.log", "rb");
-    FILE* f2 = fopen("/tmp/blt_det_test2.log", "rb");
+    FILE *f1 = fopen("/tmp/blt_det_test1.log", "rb");
+    FILE *f2 = fopen("/tmp/blt_det_test2.log", "rb");
     TEST_ASSERT(f1 != NULL);
     TEST_ASSERT(f2 != NULL);
 
@@ -59,8 +57,8 @@ int run_deterministic_regression_test(void) {
 
     rewind(f1);
     rewind(f2);
-    char* buf1 = (char*)malloc((size_t)sz1);
-    char* buf2 = (char*)malloc((size_t)sz2);
+    char *buf1 = (char *)malloc((size_t)sz1);
+    char *buf2 = (char *)malloc((size_t)sz2);
     TEST_ASSERT(buf1 != NULL && buf2 != NULL);
     size_t r1 = fread(buf1, 1, (size_t)sz1, f1);
     size_t r2 = fread(buf2, 1, (size_t)sz2, f2);
@@ -73,8 +71,8 @@ int run_deterministic_regression_test(void) {
     free(buf2);
 
     // Compare loss logs as well
-    FILE* l1 = fopen("/tmp/blt_det_loss1.log", "rb");
-    FILE* l2 = fopen("/tmp/blt_det_loss2.log", "rb");
+    FILE *l1 = fopen("/tmp/blt_det_loss1.log", "rb");
+    FILE *l2 = fopen("/tmp/blt_det_loss2.log", "rb");
     TEST_ASSERT(l1 != NULL);
     TEST_ASSERT(l2 != NULL);
 
@@ -86,8 +84,8 @@ int run_deterministic_regression_test(void) {
 
     rewind(l1);
     rewind(l2);
-    char* lbuf1 = (char*)malloc((size_t)lsz1);
-    char* lbuf2 = (char*)malloc((size_t)lsz2);
+    char *lbuf1 = (char *)malloc((size_t)lsz1);
+    char *lbuf2 = (char *)malloc((size_t)lsz2);
     TEST_ASSERT(lbuf1 != NULL && lbuf2 != NULL);
     size_t lr1 = fread(lbuf1, 1, (size_t)lsz1, l1);
     size_t lr2 = fread(lbuf2, 1, (size_t)lsz2, l2);

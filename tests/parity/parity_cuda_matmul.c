@@ -11,13 +11,11 @@
 
 #ifndef BLT_WITH_CUDA
 
-int run_cuda_parity_matmul(void) {
-    return 1;
-}
+int run_cuda_parity_matmul(void) { return 1; }
 
 #else
 
-static uint32_t prng_next(uint32_t* state) {
+static uint32_t prng_next(uint32_t *state) {
     uint32_t x = *state;
     x ^= x << 13;
     x ^= x >> 17;
@@ -26,14 +24,14 @@ static uint32_t prng_next(uint32_t* state) {
     return x;
 }
 
-static void fill_random(blt_tensor* t, uint32_t* state) {
-    float* d = (float*)t->data;
+static void fill_random(blt_tensor *t, uint32_t *state) {
+    float *d = (float *)t->data;
     for (size_t i = 0; i < t->numel; i++) {
         d[i] = ((float)(prng_next(state) & 0xFFFF) / 32768.0f - 1.0f);
     }
 }
 
-static blt_tensor make_2d(blt_arena* arena, size_t rows, size_t cols, uint32_t* state) {
+static blt_tensor make_2d(blt_arena *arena, size_t rows, size_t cols, uint32_t *state) {
     size_t shape[2] = {rows, cols};
     blt_tensor t = blt_tensor_create(arena, shape, 2, BLT_DTYPE_FP32);
     if (state) {
@@ -43,8 +41,8 @@ static blt_tensor make_2d(blt_arena* arena, size_t rows, size_t cols, uint32_t* 
 }
 
 int run_cuda_parity_matmul(void) {
-    blt_arena* host = blt_arena_create(4 << 20, BLT_BACKEND_CPU);
-    blt_arena* dev = blt_arena_create(4 << 20, BLT_BACKEND_CUDA);
+    blt_arena *host = blt_arena_create(4 << 20, BLT_BACKEND_CPU);
+    blt_arena *dev = blt_arena_create(4 << 20, BLT_BACKEND_CUDA);
     TEST_ASSERT(host != NULL && dev != NULL);
 
     uint32_t rng = 0xCAFEBABEu;

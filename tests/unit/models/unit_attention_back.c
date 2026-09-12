@@ -30,8 +30,8 @@
 //                                           [0,0,0,0,2,2]]
 
 int run_attention_backward_model_tests(void) {
-    blt_arena* arena = blt_arena_create(65536, BLT_BACKEND_CPU);
-    blt_arena* attention_arena = blt_arena_create(8192, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(65536, BLT_BACKEND_CPU);
+    blt_arena *attention_arena = blt_arena_create(8192, BLT_BACKEND_CPU);
 
     if (!arena || !attention_arena) {
         fprintf(stderr, "[FAIL] arena creation for attention backward tests\n");
@@ -52,27 +52,31 @@ int run_attention_backward_model_tests(void) {
     blt_tensor grad_weight_qkv = blt_tensor_create(arena, qkv_shape, 2, BLT_DTYPE_FP32);
     blt_tensor grad_weight_proj = blt_tensor_create(arena, proj_shape, 2, BLT_DTYPE_FP32);
 
-    float* input_data = (float*)input.data;
-    input_data[0] = 1.0f; input_data[1] = 2.0f;
+    float *input_data = (float *)input.data;
+    input_data[0] = 1.0f;
+    input_data[1] = 2.0f;
 
-    float* qkv_data = (float*)weight_qkv.data;
+    float *qkv_data = (float *)weight_qkv.data;
     for (size_t row = 0; row < 2; ++row) {
         for (size_t col = 0; col < 6; ++col) {
             qkv_data[row * 6 + col] = 0.0f;
         }
     }
     for (size_t i = 0; i < 2; ++i) {
-        qkv_data[i * 6 + i] = 1.0f;       // Q
-        qkv_data[i * 6 + 2 + i] = 1.0f;   // K
-        qkv_data[i * 6 + 4 + i] = 1.0f;   // V
+        qkv_data[i * 6 + i] = 1.0f;     // Q
+        qkv_data[i * 6 + 2 + i] = 1.0f; // K
+        qkv_data[i * 6 + 4 + i] = 1.0f; // V
     }
 
-    float* proj_data = (float*)weight_proj.data;
-    proj_data[0] = 1.0f; proj_data[1] = 0.0f;
-    proj_data[2] = 0.0f; proj_data[3] = 1.0f;
+    float *proj_data = (float *)weight_proj.data;
+    proj_data[0] = 1.0f;
+    proj_data[1] = 0.0f;
+    proj_data[2] = 0.0f;
+    proj_data[3] = 1.0f;
 
-    float* grad_out_data = (float*)grad_out.data;
-    grad_out_data[0] = 1.0f; grad_out_data[1] = 1.0f;
+    float *grad_out_data = (float *)grad_out.data;
+    grad_out_data[0] = 1.0f;
+    grad_out_data[1] = 1.0f;
 
     blt_attention_config config = {0};
     config.embed_dim = 2;
@@ -81,25 +85,21 @@ int run_attention_backward_model_tests(void) {
     config.is_causal = false;
     config.use_rope = false;
 
-    blt_multihead_attention_backward(&input, &weight_qkv, &weight_proj, &grad_out,
-                                      &grad_input, &grad_weight_qkv, &grad_weight_proj,
-                                      &config, attention_arena);
+    blt_multihead_attention_backward(&input, &weight_qkv, &weight_proj, &grad_out, &grad_input, &grad_weight_qkv,
+                                     &grad_weight_proj, &config, attention_arena);
 
-    float* gi = (float*)grad_input.data;
+    float *gi = (float *)grad_input.data;
     TEST_ASSERT(fabsf(gi[0] - 1.0f) < 1e-4f);
     TEST_ASSERT(fabsf(gi[1] - 1.0f) < 1e-4f);
 
-    float* gp = (float*)grad_weight_proj.data;
+    float *gp = (float *)grad_weight_proj.data;
     const float expected_grad_proj[] = {1.0f, 1.0f, 2.0f, 2.0f};
     for (size_t i = 0; i < 4; ++i) {
         TEST_ASSERT(fabsf(gp[i] - expected_grad_proj[i]) < 1e-4f);
     }
 
-    float* gq = (float*)grad_weight_qkv.data;
-    const float expected_grad_qkv[] = {
-        0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f,
-        0.0f, 0.0f, 0.0f, 0.0f, 2.0f, 2.0f
-    };
+    float *gq = (float *)grad_weight_qkv.data;
+    const float expected_grad_qkv[] = {0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 2.0f, 2.0f};
     for (size_t i = 0; i < 12; ++i) {
         TEST_ASSERT(fabsf(gq[i] - expected_grad_qkv[i]) < 1e-4f);
     }

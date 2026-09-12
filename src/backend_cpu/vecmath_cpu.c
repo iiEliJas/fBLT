@@ -3,7 +3,7 @@
 
 #include <math.h>
 
-float blt_vec_dot_cpu(blt_backend backend, const float* a, const float* b, size_t n) {
+float blt_vec_dot_cpu(blt_backend backend, const float *a, const float *b, size_t n) {
     (void)backend;
     BLT_REQUIRE(backend == BLT_BACKEND_CPU, "blt_vec_dot: CPU implementation called with non-CPU backend");
     float sum = 0.0f;
@@ -13,11 +13,11 @@ float blt_vec_dot_cpu(blt_backend backend, const float* a, const float* b, size_
     return sum;
 }
 
-void blt_softmax_masked_row_inplace_cpu(
-    blt_backend backend, float* row, size_t row_len, size_t row_idx,
-    bool is_causal, const float* mask_row, float scale) {
+void blt_softmax_masked_row_inplace_cpu(blt_backend backend, float *row, size_t row_len, size_t row_idx, bool is_causal,
+                                        const float *mask_row, float scale) {
     (void)backend;
-    BLT_REQUIRE(backend == BLT_BACKEND_CPU, "blt_softmax_masked_row_inplace: CPU implementation called with non-CPU backend");
+    BLT_REQUIRE(backend == BLT_BACKEND_CPU,
+                "blt_softmax_masked_row_inplace: CPU implementation called with non-CPU backend");
 
     float max_val = -INFINITY;
 
@@ -52,8 +52,7 @@ void blt_softmax_masked_row_inplace_cpu(
     }
 }
 
-void blt_strided_copy_cpu(blt_backend backend, float* dst, size_t dst_stride,
-                          const float* src, size_t src_stride,
+void blt_strided_copy_cpu(blt_backend backend, float *dst, size_t dst_stride, const float *src, size_t src_stride,
                           size_t rows, size_t cols) {
     (void)backend;
     BLT_REQUIRE(backend == BLT_BACKEND_CPU, "blt_strided_copy: CPU implementation called with non-CPU backend");
@@ -62,7 +61,7 @@ void blt_strided_copy_cpu(blt_backend backend, float* dst, size_t dst_stride,
     }
 }
 
-static float rng_uniform_u64(uint64_t* state, float scale) {
+static float rng_uniform_u64(uint64_t *state, float scale) {
     uint64_t x = *state;
     x ^= x >> 12;
     x ^= x << 25;
@@ -71,7 +70,7 @@ static float rng_uniform_u64(uint64_t* state, float scale) {
     return (((float)(x >> 40) / 16777216.0f) * 2.0f - 1.0f) * scale;
 }
 
-void blt_fill_uniform_cpu(blt_backend backend, float* data, size_t n, uint64_t* rng_state) {
+void blt_fill_uniform_cpu(blt_backend backend, float *data, size_t n, uint64_t *rng_state) {
     (void)backend;
     BLT_REQUIRE(backend == BLT_BACKEND_CPU, "blt_fill_uniform: CPU implementation called with non-CPU backend");
     for (size_t i = 0; i < n; ++i) {
@@ -79,7 +78,7 @@ void blt_fill_uniform_cpu(blt_backend backend, float* data, size_t n, uint64_t* 
     }
 }
 
-void blt_fill_constant_cpu(blt_backend backend, float* data, size_t n, float v) {
+void blt_fill_constant_cpu(blt_backend backend, float *data, size_t n, float v) {
     (void)backend;
     BLT_REQUIRE(backend == BLT_BACKEND_CPU, "blt_fill_constant: CPU implementation called with non-CPU backend");
     for (size_t i = 0; i < n; ++i) {

@@ -4,19 +4,15 @@
 #include "blt/ops/patch_pool.h"
 #include "blt/core/allocator.h"
 
-
-
-static int is_allowed(const blt_tensor* mask, size_t seq_len_kv, size_t i, size_t j) {
-    float* data = (float*)mask->data;
+static int is_allowed(const blt_tensor *mask, size_t seq_len_kv, size_t i, size_t j) {
+    float *data = (float *)mask->data;
     return data[i * seq_len_kv + j] == 0.0f;
 }
 
-
-
 //----------------------------------------------------------------------------
-// Plain causal mask test 
+// Plain causal mask test
 static int run_mask_builder_causal_test(void) {
-    blt_arena* arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
     if (!arena) {
         return 0;
     }
@@ -42,13 +38,11 @@ static int run_mask_builder_causal_test(void) {
     return 1;
 }
 
-
-
 //----------------------------------------------------------------------------
 // Sliding window with causal masking test
 // only the current position and the (window-1) positions before it should be allowed
 static int run_mask_builder_sliding_window_test(void) {
-    blt_arena* arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
     if (!arena) {
         return 0;
     }
@@ -73,13 +67,11 @@ static int run_mask_builder_sliding_window_test(void) {
     return 1;
 }
 
-
-
 //----------------------------------------------------------------------------
-// Document boundariestest 
+// Document boundariestest
 // positions in different documents should never attend to each other, even without causal masking
 static int run_mask_builder_doc_boundary_test(void) {
-    blt_arena* arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
     if (!arena) {
         return 0;
     }
@@ -109,8 +101,6 @@ static int run_mask_builder_doc_boundary_test(void) {
     return 1;
 }
 
-
-
 //------------------------------------------------------------------------
 // K-split test
 //
@@ -119,30 +109,30 @@ static int run_mask_builder_doc_boundary_test(void) {
 // [num_patches*k, E] and back is a lossless round-trip
 
 static int run_patch_k_split(void) {
-    blt_arena* arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
     if (!arena) return 0;
 
     // --- group id expansion ---
-    size_t group_ids_in[2] = { 0, 1 };
+    size_t group_ids_in[2] = {0, 1};
     size_t k = 3;
     size_t num_patches = 2;
-    size_t* expanded = (size_t*)blt_arena_alloc(arena, num_patches * k * sizeof(size_t), 64);
+    size_t *expanded = (size_t *)blt_arena_alloc(arena, num_patches * k * sizeof(size_t), 64);
     TEST_ASSERT(expanded != NULL);
 
     blt_patch_expand_group_ids(group_ids_in, num_patches, k, expanded);
 
-    size_t expected[6] = { 0, 0, 0, 1, 1, 1 };
+    size_t expected[6] = {0, 0, 0, 1, 1, 1};
     for (size_t i = 0; i < num_patches * k; i++) {
         TEST_ASSERT(expanded[i] == expected[i]);
     }
 
     // --- reshape round-trip ---
     size_t E = 4;
-    size_t patch_dim = E * k;   // = 12
-    size_t patch_shape[2] = { num_patches, patch_dim };
+    size_t patch_dim = E * k; // = 12
+    size_t patch_shape[2] = {num_patches, patch_dim};
     blt_tensor p = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
 
-    float* d = (float*)p.data;
+    float *d = (float *)p.data;
     for (size_t i = 0; i < num_patches * patch_dim; i++) d[i] = (float)i;
 
     // view as [num_patches*k, E]
@@ -156,8 +146,8 @@ static int run_patch_k_split(void) {
     TEST_ASSERT(concat_view.shape[0] == num_patches && concat_view.shape[1] == patch_dim);
 
     // must be bit-identical to the original data, since its the same buffer
-    const float* orig = (const float*)p.data;
-    const float* roundtrip = (const float*)concat_view.data;
+    const float *orig = (const float *)p.data;
+    const float *roundtrip = (const float *)concat_view.data;
     for (size_t i = 0; i < num_patches * patch_dim; i++) {
         TEST_ASSERT(orig[i] == roundtrip[i]);
     }
@@ -166,13 +156,11 @@ static int run_patch_k_split(void) {
     return 1;
 }
 
-
-
 //----------------------------------------------------------------------------
 // Block-diagonal group mask test
 // only matching query/kv groups may attend to each other
 static int run_mask_builder_group_test(void) {
-    blt_arena* arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
     if (!arena) {
         return 0;
     }
@@ -202,8 +190,6 @@ static int run_mask_builder_group_test(void) {
     blt_arena_destroy(arena);
     return 1;
 }
-
-
 
 int run_mask_builder_backend_tests(void) {
     int ok = 1;

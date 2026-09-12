@@ -8,13 +8,13 @@
 #include <string.h>
 
 typedef struct {
-    blt_arena* arena;
-    const char* text;
+    blt_arena *arena;
+    const char *text;
     size_t pos;
     size_t len;
 } json_parser;
 
-static void skip_ws(json_parser* p) {
+static void skip_ws(json_parser *p) {
     while (p->pos < p->len) {
         char c = p->text[p->pos];
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
@@ -25,22 +25,19 @@ static void skip_ws(json_parser* p) {
     }
 }
 
-static void parse_value(json_parser* p, blt_json_value* out);
+static void parse_value(json_parser *p, blt_json_value *out);
 
-static blt_json_value* alloc_value(blt_arena* arena) {
-    blt_json_value* v =
-        (blt_json_value*)blt_arena_alloc(arena, sizeof(blt_json_value), sizeof(void*));
+static blt_json_value *alloc_value(blt_arena *arena) {
+    blt_json_value *v = (blt_json_value *)blt_arena_alloc(arena, sizeof(blt_json_value), sizeof(void *));
     memset(v, 0, sizeof(*v));
     v->type = BLT_JSON_NULL;
     return v;
 }
 
 // Kept as a separate function so the fatal message format lives in one place.
-static void fail(const json_parser* p, const char* msg) {
-    BLT_FATAL("json: %s at byte offset %zu", msg, p->pos);
-}
+static void fail(const json_parser *p, const char *msg) { BLT_FATAL("json: %s at byte offset %zu", msg, p->pos); }
 
-static void expect(json_parser* p, char c) {
+static void expect(json_parser *p, char c) {
     skip_ws(p);
     if (p->pos >= p->len || p->text[p->pos] != c) {
         BLT_FATAL("json: expected '%c' at byte offset %zu", c, p->pos);
@@ -48,11 +45,8 @@ static void expect(json_parser* p, char c) {
     p->pos++;
 }
 
-
-
 // Strings — \uXXXX decoded to UTF-8
-static void append_utf8(blt_arena* arena, char** buf, size_t* len, size_t* cap,
-                        uint32_t cp) {
+static void append_utf8(blt_arena *arena, char **buf, size_t *len, size_t *cap, uint32_t cp) {
     char tmp[4];
     size_t n = 0;
     if (cp < 0x80) {
@@ -67,7 +61,7 @@ static void append_utf8(blt_arena* arena, char** buf, size_t* len, size_t* cap,
     }
     if (*len + n + 1 > *cap) {
         size_t new_cap = (*cap == 0) ? 16 : *cap * 2;
-        char* nb = (char*)blt_arena_alloc(arena, new_cap, 1);
+        char *nb = (char *)blt_arena_alloc(arena, new_cap, 1);
         if (*buf) memcpy(nb, *buf, *len);
         *buf = nb;
         *cap = new_cap;
@@ -76,7 +70,7 @@ static void append_utf8(blt_arena* arena, char** buf, size_t* len, size_t* cap,
     *len += n;
 }
 
-static uint32_t parse_hex4(json_parser* p) {
+static uint32_t parse_hex4(json_parser *p) {
     uint32_t val = 0;
     for (int i = 0; i < 4; i++) {
         if (p->pos >= p->len) {
@@ -97,14 +91,14 @@ static uint32_t parse_hex4(json_parser* p) {
     return val;
 }
 
-static char* parse_string_raw(json_parser* p, size_t* out_len) {
+static char *parse_string_raw(json_parser *p, size_t *out_len) {
     skip_ws(p);
     if (p->pos >= p->len || p->text[p->pos] != '"') {
         fail(p, "expected string");
     }
     p->pos++;
 
-    char* buf = NULL;
+    char *buf = NULL;
     size_t len = 0;
     size_t cap = 0;
 
@@ -113,7 +107,7 @@ static char* parse_string_raw(json_parser* p, size_t* out_len) {
         if (c == '"') {
             if (len + 1 > cap) {
                 size_t new_cap = (cap == 0) ? 16 : cap * 2;
-                char* nb = (char*)blt_arena_alloc(p->arena, new_cap, 1);
+                char *nb = (char *)blt_arena_alloc(p->arena, new_cap, 1);
                 if (buf) memcpy(nb, buf, len);
                 buf = nb;
                 cap = new_cap;
@@ -127,55 +121,71 @@ static char* parse_string_raw(json_parser* p, size_t* out_len) {
             }
             char e = p->text[p->pos++];
             switch (e) {
-                case '"': append_utf8(p->arena, &buf, &len, &cap, '"'); break;
-                case '\\': append_utf8(p->arena, &buf, &len, &cap, '\\'); break;
-                case '/': append_utf8(p->arena, &buf, &len, &cap, '/'); break;
-                case 'b': append_utf8(p->arena, &buf, &len, &cap, '\b'); break;
-                case 'f': append_utf8(p->arena, &buf, &len, &cap, '\f'); break;
-                case 'n': append_utf8(p->arena, &buf, &len, &cap, '\n'); break;
-                case 'r': append_utf8(p->arena, &buf, &len, &cap, '\r'); break;
-                case 't': append_utf8(p->arena, &buf, &len, &cap, '\t'); break;
-                case 'u': {
-                    uint32_t cp = parse_hex4(p);
-                    // Surrogate pairs: decode to a single codepoint.
-                    if (cp >= 0xD800 && cp <= 0xDBFF && p->pos + 1 < p->len &&
-                        p->text[p->pos] == '\\' && p->text[p->pos + 1] == 'u') {
-                        p->pos += 2;
-                        uint32_t lo = parse_hex4(p);
-                        if (lo >= 0xDC00 && lo <= 0xDFFF) {
-                            cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
-                        } else {
-                            cp = 0xFFFD;
-                        }
-                    } else if (cp >= 0xD800 && cp <= 0xDFFF) {
+            case '"':
+                append_utf8(p->arena, &buf, &len, &cap, '"');
+                break;
+            case '\\':
+                append_utf8(p->arena, &buf, &len, &cap, '\\');
+                break;
+            case '/':
+                append_utf8(p->arena, &buf, &len, &cap, '/');
+                break;
+            case 'b':
+                append_utf8(p->arena, &buf, &len, &cap, '\b');
+                break;
+            case 'f':
+                append_utf8(p->arena, &buf, &len, &cap, '\f');
+                break;
+            case 'n':
+                append_utf8(p->arena, &buf, &len, &cap, '\n');
+                break;
+            case 'r':
+                append_utf8(p->arena, &buf, &len, &cap, '\r');
+                break;
+            case 't':
+                append_utf8(p->arena, &buf, &len, &cap, '\t');
+                break;
+            case 'u': {
+                uint32_t cp = parse_hex4(p);
+                // Surrogate pairs: decode to a single codepoint.
+                if (cp >= 0xD800 && cp <= 0xDBFF && p->pos + 1 < p->len && p->text[p->pos] == '\\' &&
+                    p->text[p->pos + 1] == 'u') {
+                    p->pos += 2;
+                    uint32_t lo = parse_hex4(p);
+                    if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                        cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                    } else {
                         cp = 0xFFFD;
                     }
-                    if (cp < 0x80) {
-                        append_utf8(p->arena, &buf, &len, &cap, cp);
-                    } else if (cp < 0x800) {
-                        append_utf8(p->arena, &buf, &len, &cap, cp);
-                    } else if (cp < 0x10000) {
-                        append_utf8(p->arena, &buf, &len, &cap, cp);
-                    } else {
-                        char tmp[4];
-                        tmp[0] = (char)(0xF0 | (cp >> 18));
-                        tmp[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
-                        tmp[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
-                        tmp[3] = (char)(0x80 | (cp & 0x3F));
-                        if (len + 4 + 1 > cap) {
-                            size_t new_cap = (cap == 0) ? 16 : cap * 2;
-                            char* nb = (char*)blt_arena_alloc(p->arena, new_cap, 1);
-                            if (buf) memcpy(nb, buf, len);
-                            buf = nb;
-                            cap = new_cap;
-                        }
-                        memcpy(buf + len, tmp, 4);
-                        len += 4;
-                    }
-                    break;
+                } else if (cp >= 0xD800 && cp <= 0xDFFF) {
+                    cp = 0xFFFD;
                 }
-                default:
-                    fail(p, "unknown escape");
+                if (cp < 0x80) {
+                    append_utf8(p->arena, &buf, &len, &cap, cp);
+                } else if (cp < 0x800) {
+                    append_utf8(p->arena, &buf, &len, &cap, cp);
+                } else if (cp < 0x10000) {
+                    append_utf8(p->arena, &buf, &len, &cap, cp);
+                } else {
+                    char tmp[4];
+                    tmp[0] = (char)(0xF0 | (cp >> 18));
+                    tmp[1] = (char)(0x80 | ((cp >> 12) & 0x3F));
+                    tmp[2] = (char)(0x80 | ((cp >> 6) & 0x3F));
+                    tmp[3] = (char)(0x80 | (cp & 0x3F));
+                    if (len + 4 + 1 > cap) {
+                        size_t new_cap = (cap == 0) ? 16 : cap * 2;
+                        char *nb = (char *)blt_arena_alloc(p->arena, new_cap, 1);
+                        if (buf) memcpy(nb, buf, len);
+                        buf = nb;
+                        cap = new_cap;
+                    }
+                    memcpy(buf + len, tmp, 4);
+                    len += 4;
+                }
+                break;
+            }
+            default:
+                fail(p, "unknown escape");
             }
         } else {
             append_utf8(p->arena, &buf, &len, &cap, c);
@@ -187,11 +197,9 @@ static char* parse_string_raw(json_parser* p, size_t* out_len) {
 
 // Numbers / literals
 
-static bool is_number_start(char c) {
-    return c == '-' || (c >= '0' && c <= '9');
-}
+static bool is_number_start(char c) { return c == '-' || (c >= '0' && c <= '9'); }
 
-static void parse_number(json_parser* p, blt_json_value* out) {
+static void parse_number(json_parser *p, blt_json_value *out) {
     size_t start = p->pos;
     if (p->pos < p->len && p->text[p->pos] == '-') p->pos++;
     while (p->pos < p->len && isdigit((unsigned char)p->text[p->pos])) p->pos++;
@@ -225,37 +233,35 @@ static void parse_number(json_parser* p, blt_json_value* out) {
 
 // Containers
 
-static void grow_children(json_parser* p, blt_json_value* container,
-                          blt_json_value*** children, char*** keys,
-                          size_t* cap) {
+static void grow_children(json_parser *p, blt_json_value *container, blt_json_value ***children, char ***keys,
+                          size_t *cap) {
     if (*cap == 0) {
         *cap = 4;
-        *children = (blt_json_value**)blt_arena_alloc(
-            p->arena, *cap * sizeof(blt_json_value*), sizeof(void*));
+        *children = (blt_json_value **)blt_arena_alloc(p->arena, *cap * sizeof(blt_json_value *), sizeof(void *));
         if (keys) {
-            *keys = (char**)blt_arena_alloc(p->arena, *cap * sizeof(char*), sizeof(void*));
+            *keys = (char **)blt_arena_alloc(p->arena, *cap * sizeof(char *), sizeof(void *));
         }
     } else if (container->num_children == *cap) {
         size_t new_cap = *cap * 2;
-        blt_json_value** nc = (blt_json_value**)blt_arena_alloc(
-            p->arena, new_cap * sizeof(blt_json_value*), sizeof(void*));
-        memcpy(nc, *children, *cap * sizeof(blt_json_value*));
+        blt_json_value **nc =
+            (blt_json_value **)blt_arena_alloc(p->arena, new_cap * sizeof(blt_json_value *), sizeof(void *));
+        memcpy(nc, *children, *cap * sizeof(blt_json_value *));
         *children = nc;
         if (keys) {
-            char** nk = (char**)blt_arena_alloc(p->arena, new_cap * sizeof(char*), sizeof(void*));
-            memcpy(nk, *keys, *cap * sizeof(char*));
+            char **nk = (char **)blt_arena_alloc(p->arena, new_cap * sizeof(char *), sizeof(void *));
+            memcpy(nk, *keys, *cap * sizeof(char *));
             *keys = nk;
         }
         *cap = new_cap;
     }
 }
 
-static void parse_object(json_parser* p, blt_json_value* out) {
+static void parse_object(json_parser *p, blt_json_value *out) {
     out->type = BLT_JSON_OBJECT;
     p->pos++;
 
-    blt_json_value** children = NULL;
-    char** keys = NULL;
+    blt_json_value **children = NULL;
+    char **keys = NULL;
     size_t cap = 0;
     out->num_children = 0;
 
@@ -270,9 +276,9 @@ static void parse_object(json_parser* p, blt_json_value* out) {
     for (;;) {
         skip_ws(p);
         size_t key_len = 0;
-        char* key = parse_string_raw(p, &key_len);
+        char *key = parse_string_raw(p, &key_len);
         expect(p, ':');
-        blt_json_value* child = alloc_value(p->arena);
+        blt_json_value *child = alloc_value(p->arena);
         parse_value(p, child);
 
         grow_children(p, out, &children, &keys, &cap);
@@ -292,11 +298,11 @@ static void parse_object(json_parser* p, blt_json_value* out) {
     out->keys = keys;
 }
 
-static void parse_array(json_parser* p, blt_json_value* out) {
+static void parse_array(json_parser *p, blt_json_value *out) {
     out->type = BLT_JSON_ARRAY;
     p->pos++;
 
-    blt_json_value** children = NULL;
+    blt_json_value **children = NULL;
     size_t cap = 0;
     out->num_children = 0;
 
@@ -309,7 +315,7 @@ static void parse_array(json_parser* p, blt_json_value* out) {
     }
 
     for (;;) {
-        blt_json_value* child = alloc_value(p->arena);
+        blt_json_value *child = alloc_value(p->arena);
         parse_value(p, child);
         grow_children(p, out, &children, NULL, &cap);
         children[out->num_children++] = child;
@@ -326,7 +332,7 @@ static void parse_array(json_parser* p, blt_json_value* out) {
     out->keys = NULL;
 }
 
-static void parse_value(json_parser* p, blt_json_value* out) {
+static void parse_value(json_parser *p, blt_json_value *out) {
     skip_ws(p);
     if (p->pos >= p->len) {
         fail(p, "unexpected end of input");
@@ -359,9 +365,8 @@ static void parse_value(json_parser* p, blt_json_value* out) {
 
 // Public API
 
-blt_json_value* blt_json_parse(blt_arena* arena, const char* text) {
-    BLT_REQUIRE(arena != NULL && text != NULL,
-        "blt_json_parse: arena and text cannot be NULL");
+blt_json_value *blt_json_parse(blt_arena *arena, const char *text) {
+    BLT_REQUIRE(arena != NULL && text != NULL, "blt_json_parse: arena and text cannot be NULL");
 
     json_parser p;
     p.arena = arena;
@@ -369,7 +374,7 @@ blt_json_value* blt_json_parse(blt_arena* arena, const char* text) {
     p.len = strlen(text);
     p.pos = 0;
 
-    blt_json_value* root = alloc_value(arena);
+    blt_json_value *root = alloc_value(arena);
     parse_value(&p, root);
     skip_ws(&p);
     if (p.pos != p.len) {
@@ -378,8 +383,8 @@ blt_json_value* blt_json_parse(blt_arena* arena, const char* text) {
     return root;
 }
 
-blt_json_value* blt_json_parse_file(blt_arena* arena, const char* path) {
-    FILE* f = fopen(path, "rb");
+blt_json_value *blt_json_parse_file(blt_arena *arena, const char *path) {
+    FILE *f = fopen(path, "rb");
     if (!f) {
         BLT_FATAL("blt_json_parse_file: cannot open %s", path);
     }
@@ -390,7 +395,7 @@ blt_json_value* blt_json_parse_file(blt_arena* arena, const char* path) {
         fclose(f);
         BLT_FATAL("blt_json_parse_file: ftell failed on %s", path);
     }
-    char* buf = (char*)malloc((size_t)sz + 1);
+    char *buf = (char *)malloc((size_t)sz + 1);
     if (!buf) {
         fclose(f);
         BLT_FATAL("blt_json_parse_file: out of memory reading %s", path);
@@ -399,12 +404,12 @@ blt_json_value* blt_json_parse_file(blt_arena* arena, const char* path) {
     fclose(f);
     buf[rd] = '\0';
 
-    blt_json_value* root = blt_json_parse(arena, buf);
+    blt_json_value *root = blt_json_parse(arena, buf);
     free(buf);
     return root;
 }
 
-const blt_json_value* blt_json_get(const blt_json_value* obj, const char* key) {
+const blt_json_value *blt_json_get(const blt_json_value *obj, const char *key) {
     if (!obj || obj->type != BLT_JSON_OBJECT) return NULL;
     for (size_t i = 0; i < obj->num_children; i++) {
         if (strcmp(obj->keys[i], key) == 0) {
@@ -414,14 +419,14 @@ const blt_json_value* blt_json_get(const blt_json_value* obj, const char* key) {
     return NULL;
 }
 
-bool blt_json_as_bool(const blt_json_value* v) {
+bool blt_json_as_bool(const blt_json_value *v) {
     if (!v || v->type != BLT_JSON_BOOL) {
         BLT_FATAL("blt_json_as_bool: value is not a bool");
     }
     return v->bool_val;
 }
 
-int64_t blt_json_as_int(const blt_json_value* v) {
+int64_t blt_json_as_int(const blt_json_value *v) {
     if (!v) {
         BLT_FATAL("blt_json_as_int: missing value");
     }
@@ -431,7 +436,7 @@ int64_t blt_json_as_int(const blt_json_value* v) {
     return 0;
 }
 
-double blt_json_as_float(const blt_json_value* v) {
+double blt_json_as_float(const blt_json_value *v) {
     if (!v) {
         BLT_FATAL("blt_json_as_float: missing value");
     }
@@ -441,42 +446,39 @@ double blt_json_as_float(const blt_json_value* v) {
     return 0.0;
 }
 
-const char* blt_json_as_string(const blt_json_value* v) {
+const char *blt_json_as_string(const blt_json_value *v) {
     if (!v || v->type != BLT_JSON_STRING) {
         BLT_FATAL("blt_json_as_string: value is not a string");
     }
     return v->str_val;
 }
 
-bool blt_json_get_bool(const blt_json_value* obj, const char* key, bool fallback) {
-    const blt_json_value* v = blt_json_get(obj, key);
+bool blt_json_get_bool(const blt_json_value *obj, const char *key, bool fallback) {
+    const blt_json_value *v = blt_json_get(obj, key);
     return (v && v->type == BLT_JSON_BOOL) ? v->bool_val : fallback;
 }
 
-int64_t blt_json_get_int(const blt_json_value* obj, const char* key, int64_t fallback) {
-    const blt_json_value* v = blt_json_get(obj, key);
-    return (v && (v->type == BLT_JSON_INT || v->type == BLT_JSON_FLOAT))
-        ? blt_json_as_int(v) : fallback;
+int64_t blt_json_get_int(const blt_json_value *obj, const char *key, int64_t fallback) {
+    const blt_json_value *v = blt_json_get(obj, key);
+    return (v && (v->type == BLT_JSON_INT || v->type == BLT_JSON_FLOAT)) ? blt_json_as_int(v) : fallback;
 }
 
-double blt_json_get_float(const blt_json_value* obj, const char* key, double fallback) {
-    const blt_json_value* v = blt_json_get(obj, key);
-    return (v && (v->type == BLT_JSON_INT || v->type == BLT_JSON_FLOAT))
-        ? blt_json_as_float(v) : fallback;
+double blt_json_get_float(const blt_json_value *obj, const char *key, double fallback) {
+    const blt_json_value *v = blt_json_get(obj, key);
+    return (v && (v->type == BLT_JSON_INT || v->type == BLT_JSON_FLOAT)) ? blt_json_as_float(v) : fallback;
 }
 
-const char* blt_json_get_string(const blt_json_value* obj, const char* key,
-                                const char* fallback) {
-    const blt_json_value* v = blt_json_get(obj, key);
+const char *blt_json_get_string(const blt_json_value *obj, const char *key, const char *fallback) {
+    const blt_json_value *v = blt_json_get(obj, key);
     return (v && v->type == BLT_JSON_STRING) ? v->str_val : fallback;
 }
 
-size_t blt_json_array_size(const blt_json_value* arr) {
+size_t blt_json_array_size(const blt_json_value *arr) {
     if (!arr || arr->type != BLT_JSON_ARRAY) return 0;
     return arr->num_children;
 }
 
-const blt_json_value* blt_json_array_at(const blt_json_value* arr, size_t i) {
+const blt_json_value *blt_json_array_at(const blt_json_value *arr, size_t i) {
     if (!arr || arr->type != BLT_JSON_ARRAY || i >= arr->num_children) return NULL;
     return arr->children[i];
 }

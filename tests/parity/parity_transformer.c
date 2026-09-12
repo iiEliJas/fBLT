@@ -13,13 +13,11 @@
 
 #define PARITY_ARENA_BYTES (16 * 1024 * 1024)
 
-
-
 // -----------------------------------------------------------------------
 // Attention parity test
 
 int run_attention_parity_test(void) {
-    blt_arena* arena = blt_arena_create(PARITY_ARENA_BYTES, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(PARITY_ARENA_BYTES, BLT_BACKEND_CPU);
     if (!arena) {
         return 0;
     }
@@ -43,14 +41,14 @@ int run_attention_parity_test(void) {
     size_t seq_len = input.shape[0];
     size_t embed_dim = input.shape[1];
 
-    size_t out_shape[2] = { seq_len, embed_dim };
+    size_t out_shape[2] = {seq_len, embed_dim};
     blt_tensor output = blt_tensor_create(arena, out_shape, 2, BLT_DTYPE_FP32);
 
     // same config as generated
     blt_attention_config config = {0};
     config.embed_dim = embed_dim;
     config.num_heads = 4;
-    config.head_dim = 0;  // inferred as embed_dim / num_heads
+    config.head_dim = 0; // inferred as embed_dim / num_heads
     config.is_causal = true;
 
     blt_multihead_attention(&input, &qkv_w, &proj_w, &output, &config, arena);
@@ -61,14 +59,12 @@ int run_attention_parity_test(void) {
     return 1;
 }
 
-
-
 int run_attention_backward_parity_test(void) {
-    blt_arena* arena = blt_arena_create(PARITY_ARENA_BYTES, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(PARITY_ARENA_BYTES, BLT_BACKEND_CPU);
     if (!arena) {
         return 0;
     }
- 
+
     blt_tensor input = {0};
     blt_tensor qkv_w = {0};
     blt_tensor proj_w = {0};
@@ -76,7 +72,7 @@ int run_attention_backward_parity_test(void) {
     blt_tensor expected_grad_input = {0};
     blt_tensor expected_grad_qkv_w = {0};
     blt_tensor expected_grad_proj_w = {0};
- 
+
     int ok = 1;
     ok &= load_binary_tensor("data/attn_input.bin", arena, &input);
     ok &= load_binary_tensor("data/attn_qkv_w.bin", arena, &qkv_w);
@@ -89,44 +85,42 @@ int run_attention_backward_parity_test(void) {
         blt_arena_destroy(arena);
         return 0;
     }
- 
+
     TEST_ASSERT(input.ndim == 2);
     size_t seq_len = input.shape[0];
     size_t embed_dim = input.shape[1];
- 
-    size_t in_shape[2] = { seq_len, embed_dim };
-    size_t qkv_shape[2] = { embed_dim, 3 * embed_dim };
-    size_t proj_shape[2] = { embed_dim, embed_dim };
- 
+
+    size_t in_shape[2] = {seq_len, embed_dim};
+    size_t qkv_shape[2] = {embed_dim, 3 * embed_dim};
+    size_t proj_shape[2] = {embed_dim, embed_dim};
+
     blt_tensor grad_input = blt_tensor_create(arena, in_shape, 2, BLT_DTYPE_FP32);
     blt_tensor grad_weight_qkv = blt_tensor_create(arena, qkv_shape, 2, BLT_DTYPE_FP32);
     blt_tensor grad_weight_proj = blt_tensor_create(arena, proj_shape, 2, BLT_DTYPE_FP32);
- 
+
     // same config as the forward parity test
     blt_attention_config config = {0};
     config.embed_dim = embed_dim;
     config.num_heads = 4;
-    config.head_dim = 0;  // inferred as embed_dim / num_heads
+    config.head_dim = 0; // inferred as embed_dim / num_heads
     config.is_causal = true;
- 
-    blt_multihead_attention_backward(&input, &qkv_w, &proj_w, &grad_out,
-                                      &grad_input, &grad_weight_qkv, &grad_weight_proj,
-                                      &config, arena);
- 
+
+    blt_multihead_attention_backward(&input, &qkv_w, &proj_w, &grad_out, &grad_input, &grad_weight_qkv,
+                                     &grad_weight_proj, &config, arena);
+
     TEST_ASSERT_CLOSE(&grad_input, &expected_grad_input, PARITY_ATOL);
     TEST_ASSERT_CLOSE(&grad_weight_qkv, &expected_grad_qkv_w, PARITY_ATOL);
     TEST_ASSERT_CLOSE(&grad_weight_proj, &expected_grad_proj_w, PARITY_ATOL);
- 
+
     blt_arena_destroy(arena);
     return 1;
 }
-
 
 // -----------------------------------------------------------------------
 // Transformer block parity test
 
 int run_transformer_block_parity_test(void) {
-    blt_arena* arena = blt_arena_create(PARITY_ARENA_BYTES, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(PARITY_ARENA_BYTES, BLT_BACKEND_CPU);
     if (!arena) {
         return 0;
     }
@@ -163,22 +157,23 @@ int run_transformer_block_parity_test(void) {
     size_t embed_dim = input.shape[1];
     size_t hidden_dim = ffn_up_w.shape[1];
 
-    size_t out_shape[2] = { seq_len, embed_dim };
+    size_t out_shape[2] = {seq_len, embed_dim};
     blt_tensor output = blt_tensor_create(arena, out_shape, 2, BLT_DTYPE_FP32);
 
     // This block uses standard LayerNorm + GELU config
     blt_transformer_config config = {
-        .attn_config = {
-            .embed_dim = embed_dim,
-            .num_heads = 4,
-            .head_dim = 0,
-            .is_causal = true,
-            .use_rope = true,
-            .rope_theta = 10000.0f,
-        },
+        .attn_config =
+            {
+                .embed_dim = embed_dim,
+                .num_heads = 4,
+                .head_dim = 0,
+                .is_causal = true,
+                .use_rope = true,
+                .rope_theta = 10000.0f,
+            },
         .hidden_dim = hidden_dim,
         .layer_norm_eps = 1e-5f,
-        .norm_type = BLT_NORM_LAYERNORM,          // [Note for myself]: Swap norm_type/activation_type for future tests
+        .norm_type = BLT_NORM_LAYERNORM, // [Note for myself]: Swap norm_type/activation_type for future tests
         .activation_type = BLT_ACTIVATION_GELU,
     };
 
@@ -190,7 +185,7 @@ int run_transformer_block_parity_test(void) {
         .norm2_weight = &norm2_weight,
         .norm2_bias = &norm2_bias,
         .ffn_up_w = &ffn_up_w,
-        .ffn_gate_w = NULL,   // [Unused]: activation_type == BLT_ACTIVATION_GELU
+        .ffn_gate_w = NULL, // [Unused]: activation_type == BLT_ACTIVATION_GELU
         .ffn_down_w = &ffn_down_w,
     };
 
@@ -201,8 +196,8 @@ int run_transformer_block_parity_test(void) {
     size_t offset_after = arena->offset;
 
     // confirm the block allocated stayed inside the arenas bump offset
-    printf("    [transformer parity] block arena footprint: %zu -> %zu bytes (capacity %zu)\n",
-           offset_before, offset_after, arena->capacity);
+    printf("    [transformer parity] block arena footprint: %zu -> %zu bytes (capacity %zu)\n", offset_before,
+           offset_after, arena->capacity);
     TEST_ASSERT(offset_after <= arena->capacity);
     TEST_ASSERT(offset_after >= offset_before);
 
@@ -211,8 +206,6 @@ int run_transformer_block_parity_test(void) {
     blt_arena_destroy(arena);
     return 1;
 }
-
-
 
 // -----------------------------------------------------------------------
 // all tests

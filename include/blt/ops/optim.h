@@ -8,7 +8,7 @@ extern "C" {
 #include "blt/core/tensor.h"
 
 // In-place SGD: param -= lr * grad.
-void blt_sgd_step(blt_tensor* param, const blt_tensor* grad, float lr);
+void blt_sgd_step(blt_tensor *param, const blt_tensor *grad, float lr);
 
 // Single-tensor AdamW (decoupled weight decay), PyTorch-compatible math.
 // exp_avg / exp_avg_sq are persistent per-parameter state tensors of the
@@ -19,13 +19,12 @@ typedef struct {
     float beta1;
     float beta2;
     float eps;
-    float weight_decay;   // decoupled L2 applied as p -= lr * wd * p
+    float weight_decay; // decoupled L2 applied as p -= lr * wd * p
     size_t step;
 } blt_adamw_config;
 
-void blt_adamw_step(blt_tensor* param, const blt_tensor* grad,
-                    blt_tensor* exp_avg, blt_tensor* exp_avg_sq,
-                    const blt_adamw_config* config);
+void blt_adamw_step(blt_tensor *param, const blt_tensor *grad, blt_tensor *exp_avg, blt_tensor *exp_avg_sq,
+                    const blt_adamw_config *config);
 
 #ifdef __cplusplus
 }

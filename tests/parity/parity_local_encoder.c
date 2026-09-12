@@ -2,8 +2,7 @@
 #include "test_suite.h"
 #include "blt/models/local_encoder.h"
 
-
-static void build_reference_patches(blt_patch_info* patches, size_t* num_patches) {
+static void build_reference_patches(blt_patch_info *patches, size_t *num_patches) {
     size_t starts[] = {0, 4, 9, 13, 18};
     size_t n = sizeof(starts) / sizeof(starts[0]);
     for (size_t i = 0; i < n; i++) {
@@ -14,11 +13,9 @@ static void build_reference_patches(blt_patch_info* patches, size_t* num_patches
     *num_patches = n;
 }
 
-
-
 // Loader for UINT8 Tensors (Used for bytes array)
-static int load_binary_tensor_uint8(const char* path, blt_arena* arena, blt_tensor* out_tensor) {
-    FILE* fp = fopen(path, "rb");
+static int load_binary_tensor_uint8(const char *path, blt_arena *arena, blt_tensor *out_tensor) {
+    FILE *fp = fopen(path, "rb");
     if (!fp) {
         fprintf(stderr, "failed to open %s\n", path);
         return 0;
@@ -51,7 +48,7 @@ static int load_binary_tensor_uint8(const char* path, blt_arena* arena, blt_tens
         return 0;
     }
 
-    uint8_t* data = (uint8_t*)out_tensor->data;
+    uint8_t *data = (uint8_t *)out_tensor->data;
     if (fread(data, 1, numel, fp) != numel) {
         fclose(fp);
         return 0;
@@ -61,11 +58,9 @@ static int load_binary_tensor_uint8(const char* path, blt_arena* arena, blt_tens
     return 1;
 }
 
-
-
-static int load_reference_weights(blt_local_encoder* model, const char* dir, blt_arena* arena) {
+static int load_reference_weights(blt_local_encoder *model, const char *dir, blt_arena *arena) {
     char path[512];
-    const blt_local_encoder_config* cfg = &model->config;
+    const blt_local_encoder_config *cfg = &model->config;
 
     snprintf(path, sizeof(path), "%s/byte_embedding_weight.bin", dir);
     TEST_ASSERT(blt_test_load_binary_tensor(path, arena, &model->byte_embedding_weight));
@@ -76,7 +71,7 @@ static int load_reference_weights(blt_local_encoder* model, const char* dir, blt
     }
 
     for (size_t l = 0; l < cfg->num_layers; l++) {
-        blt_local_encoder_layer_storage* ls = &model->layers[l];
+        blt_local_encoder_layer_storage *ls = &model->layers[l];
 
         snprintf(path, sizeof(path), "%s/layer_%zu_norm1_weight.bin", dir, l);
         TEST_ASSERT(blt_test_load_binary_tensor(path, arena, &ls->norm1_weight));
@@ -117,13 +112,11 @@ static int load_reference_weights(blt_local_encoder* model, const char* dir, blt
     return 1;
 }
 
-
-
 static int run_local_encoder_parity_case(bool cross_attn_all_layers) {
-    blt_arena* arena = blt_arena_create(8 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(8 * 1024 * 1024, BLT_BACKEND_CPU);
     if (!arena) return 0;
 
-    const char* suffix = cross_attn_all_layers ? "all_layers" : "final_layer";
+    const char *suffix = cross_attn_all_layers ? "all_layers" : "final_layer";
     char path_bytes[256], path_patch[256], path_hidden[256], weights_dir[256];
     snprintf(path_bytes, sizeof(path_bytes), "data/local_encoder_bytes_in.bin");
     snprintf(path_patch, sizeof(path_patch), "data/local_encoder_patch_out_%s.bin", suffix);
@@ -161,7 +154,7 @@ static int run_local_encoder_parity_case(bool cross_attn_all_layers) {
     cfg.ngram_config.normalize = true;
     cfg.ngram_config.embed_dim = cfg.embed_dim;
 
-    blt_local_encoder* model = blt_local_encoder_create(arena, &cfg);
+    blt_local_encoder *model = blt_local_encoder_create(arena, &cfg);
     TEST_ASSERT(model != NULL);
 
     load_reference_weights(model, weights_dir, arena);
@@ -169,8 +162,7 @@ static int run_local_encoder_parity_case(bool cross_attn_all_layers) {
     blt_tensor patch_out = blt_tensor_create(arena, expected_patch.shape, expected_patch.ndim, BLT_DTYPE_FP32);
     blt_tensor byte_hidden_out = blt_tensor_create(arena, expected_hidden.shape, expected_hidden.ndim, BLT_DTYPE_FP32);
 
-    blt_local_encoder_forward(model, &bytes_in, patches, num_patches,
-                               NULL, 0, &patch_out, &byte_hidden_out, arena);
+    blt_local_encoder_forward(model, &bytes_in, patches, num_patches, NULL, 0, &patch_out, &byte_hidden_out, arena);
 
     TEST_ASSERT_CLOSE(&patch_out, &expected_patch, 1e-4f);
     TEST_ASSERT_CLOSE(&byte_hidden_out, &expected_hidden, 1e-4f);
@@ -179,8 +171,7 @@ static int run_local_encoder_parity_case(bool cross_attn_all_layers) {
     return 1;
 }
 
-
-
 int run_local_encoder_parity(void) {
-    return run_local_encoder_parity_case(true) && run_local_encoder_parity_case(false);;
+    return run_local_encoder_parity_case(true) && run_local_encoder_parity_case(false);
+    ;
 }

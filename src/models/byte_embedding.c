@@ -4,7 +4,7 @@
 
 // Allocates [vocab_size, embed_dim] FP32 table via arena.
 // Caller fills weight->data separately (random init or pretrained).
-blt_byte_embedding blt_byte_embedding_create(blt_arena* arena, size_t vocab_size, size_t embed_dim) {
+blt_byte_embedding blt_byte_embedding_create(blt_arena *arena, size_t vocab_size, size_t embed_dim) {
     blt_byte_embedding emb;
     const size_t shape[2] = {vocab_size, embed_dim};
     emb.vocab_size = vocab_size;
@@ -13,8 +13,7 @@ blt_byte_embedding blt_byte_embedding_create(blt_arena* arena, size_t vocab_size
     return emb;
 }
 
-void blt_byte_embedding_forward(const blt_byte_embedding* emb, const blt_tensor* bytes_in,
-                                 blt_tensor* out) {
+void blt_byte_embedding_forward(const blt_byte_embedding *emb, const blt_tensor *bytes_in, blt_tensor *out) {
     BLT_REQUIRE(bytes_in->dtype == BLT_DTYPE_UINT8, "bytes_in must be a UINT8 tensor");
     BLT_REQUIRE(bytes_in->ndim == 1, "bytes_in must be a 1D tensor of shape [seq_len]");
 
@@ -30,10 +29,10 @@ void blt_byte_embedding_forward(const blt_byte_embedding* emb, const blt_tensor*
 
     // Ids may live on either backend; the lookup consumes them on the
     // host side of the dispatched op, so device inputs are staged first.
-    uint8_t* stage = NULL;
-    const uint8_t* ids = bytes_in->data;
+    uint8_t *stage = NULL;
+    const uint8_t *ids = bytes_in->data;
     if (bytes_in->backend != BLT_BACKEND_CPU) {
-        stage = (uint8_t*)malloc(bytes_in->numel);
+        stage = (uint8_t *)malloc(bytes_in->numel);
         BLT_REQUIRE(stage != NULL, "blt_byte_embedding_forward: staging alloc failed");
         blt_tensor_download(bytes_in, stage, bytes_in->numel);
         ids = stage;
@@ -44,8 +43,8 @@ void blt_byte_embedding_forward(const blt_byte_embedding* emb, const blt_tensor*
 
 // Scatter-add: grad_weight[bytes_in[i], :] += grad_out[i, :]
 // grad_weight must be pre-zeroed by caller.
-void blt_byte_embedding_backward(const blt_byte_embedding* emb, const blt_tensor* bytes_in,
-                                  const blt_tensor* grad_out, blt_tensor* grad_weight) {
+void blt_byte_embedding_backward(const blt_byte_embedding *emb, const blt_tensor *bytes_in, const blt_tensor *grad_out,
+                                 blt_tensor *grad_weight) {
     BLT_REQUIRE(bytes_in->dtype == BLT_DTYPE_UINT8, "bytes_in must be a UINT8 tensor");
     BLT_REQUIRE(bytes_in->ndim == 1, "bytes_in must be a 1D tensor of shape [seq_len]");
 
@@ -62,10 +61,10 @@ void blt_byte_embedding_backward(const blt_byte_embedding* emb, const blt_tensor
     const size_t seq_len = bytes_in->shape[0];
     (void)seq_len;
 
-    uint8_t* stage = NULL;
-    const uint8_t* ids = bytes_in->data;
+    uint8_t *stage = NULL;
+    const uint8_t *ids = bytes_in->data;
     if (bytes_in->backend != BLT_BACKEND_CPU) {
-        stage = (uint8_t*)malloc(bytes_in->numel);
+        stage = (uint8_t *)malloc(bytes_in->numel);
         BLT_REQUIRE(stage != NULL, "blt_byte_embedding_backward: staging alloc failed");
         blt_tensor_download(bytes_in, stage, bytes_in->numel);
         ids = stage;

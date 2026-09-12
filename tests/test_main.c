@@ -9,14 +9,10 @@
 #include "test_helpers.h"
 #include "test_suite.h"
 
-
-
 typedef struct {
-    const char* name;
+    const char *name;
     int (*fn)(void);
 } test_case;
-
-
 
 int main(void) {
     const test_case core_tests[] = {
@@ -35,7 +31,7 @@ int main(void) {
         {"rope backend", run_rope_backend_test},
         {"optimizer backend", run_optim_backend_tests},
         {"mask builder backend", run_mask_builder_backend_tests},
-        {"bf16 cast", run_bf16_cast_tests},  
+        {"bf16 cast", run_bf16_cast_tests},
         {"deterministic regression", run_deterministic_regression_test},
     };
 
@@ -56,7 +52,7 @@ int main(void) {
         {"local encoder k-split", run_local_encoder_k_split},
         {"global transformer causal mask", run_global_transformer_causal_mask},
         {"global transformer doc boundary", run_global_transformer_doc_boundary},
-        {"local decoder cross mask", run_local_decoder_cross_mask}, 
+        {"local decoder cross mask", run_local_decoder_cross_mask},
         {"local decoder k-split", run_local_decoder_k_split},
         {"blt model generate sanity", run_blt_model_generate_sanity},
         {"model stage split", run_model_stage_split_equivalence},
@@ -77,7 +73,7 @@ int main(void) {
         {"block diffusion gradcheck", run_block_diffusion_gradcheck},
         {"block diffusion overfit gate", run_block_diffusion_overfit_gate},
     };
-    
+
     const test_case parity_tests[] = {
         {"matmul parity", run_matmul_parity_test},
         {"softmax parity", run_softmax_parity_test},
@@ -92,7 +88,7 @@ int main(void) {
         {"local encoder overfit", run_lencoder_overfit_test},
         {"local encoder parity", run_local_encoder_parity},
         {"global transformer parity", run_global_transformer_parity},
-        {"global transformer overfit", run_global_transformer_overfit}, 
+        {"global transformer overfit", run_global_transformer_overfit},
         {"local decoder parity", run_local_decoder_parity},
         {"local decoder overfit", run_local_decoder_overfit},
         {"blt model overfit", run_blt_model_overfit},
@@ -170,6 +166,6 @@ int main(void) {
     printf("\n------------------------------------------\n");
     printf("Summary: %d/%zu tests passed\n", passed, test_count);
     printf("------------------------------------------\n");
-    
+
     return passed == (int)test_count ? 0 : 1;
 }

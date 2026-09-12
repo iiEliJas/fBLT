@@ -12,7 +12,6 @@ extern "C" {
 #include "blt/models/local_decoder.h"
 #include "blt/models/patcher.h"
 
-
 // Two-tier KV cache for cache-aware incremental decoding (Fast-BLT).
 //
 // Tier 1 (byte window): per-layer self-attention K/V for decoder byte
@@ -44,61 +43,55 @@ extern "C" {
 // parity.
 
 typedef struct {
-    const blt_local_decoder* decoder;
+    const blt_local_decoder *decoder;
     size_t max_seq_len;
-    size_t max_subtokens;          // capacity of tier 2 (= max_seq_len; patches have >= 1 byte)
+    size_t max_subtokens; // capacity of tier 2 (= max_seq_len; patches have >= 1 byte)
     size_t embed_dim;
-    size_t k;                      // patch_dim / embed_dim split factor (1 = no split)
+    size_t k; // patch_dim / embed_dim split factor (1 = no split)
     size_t patch_dim;
 
     // tier 1: [num_layers] tensors, each [max_seq_len, embed_dim]
-    blt_tensor* self_k;
-    blt_tensor* self_v;
-    size_t self_len;               // valid byte positions [0, self_len)
+    blt_tensor *self_k;
+    blt_tensor *self_v;
+    size_t self_len; // valid byte positions [0, self_len)
 
     // tier 2: [num_layers] tensors, each [max_subtokens, embed_dim]
-    blt_tensor* cross_k;
-    blt_tensor* cross_v;
-    size_t cross_num_patches;      // patches whose sub-token K/V are valid
+    blt_tensor *cross_k;
+    blt_tensor *cross_v;
+    size_t cross_num_patches; // patches whose sub-token K/V are valid
 
-    blt_patch_info* cached_patches;   // boundary snapshot of cached patches [max_seq_len]
+    blt_patch_info *cached_patches; // boundary snapshot of cached patches [max_seq_len]
 } blt_kv_cache;
-
 
 // Allocates zeroed K/V buffers for every layer plus bookkeeping storage.
 // Tensor payloads come from `arena` (either backend); container metadata
 // lives on the host heap.
-blt_kv_cache* blt_kv_cache_create(blt_arena* arena, const blt_local_decoder* decoder,
-                                  size_t max_seq_len);
+blt_kv_cache *blt_kv_cache_create(blt_arena *arena, const blt_local_decoder *decoder, size_t max_seq_len);
 
 // Frees the cache's host-side container. Tensor payloads die with the arena.
-void blt_kv_cache_destroy(blt_kv_cache* cache);
+void blt_kv_cache_destroy(blt_kv_cache *cache);
 
 // Invalidates everything (lengths -> 0). Buffer contents stay as-is.
-void blt_kv_cache_reset(blt_kv_cache* cache);
+void blt_kv_cache_reset(blt_kv_cache *cache);
 
 // Rolls the cache back to self-attn validity [0, self_len) and cross-attn
 // validity for the first num_patches patches. Both may only shrink relative
 // to what was previously marked valid OR grow to cover entries this caller
 // has just refreshed; no data is cleared.
-void blt_kv_cache_truncate(blt_kv_cache* cache, size_t self_len, size_t num_patches);
+void blt_kv_cache_truncate(blt_kv_cache *cache, size_t self_len, size_t num_patches);
 
 // Longest common prefix between the cached patch boundaries and `patches`.
 // Returns how many leading patches are identical (start_idx AND length);
 // 0 when nothing is cached yet. This is the number of patches whose tier-2
 // entries (and whose bytes' tier-1 entries) provably remain valid.
-size_t blt_kv_cache_common_patches(const blt_kv_cache* cache,
-                                   const blt_patch_info* patches, size_t num_patches);
+size_t blt_kv_cache_common_patches(const blt_kv_cache *cache, const blt_patch_info *patches, size_t num_patches);
 
 // Recomputes tier-2 cross-attn K/V for patches [from_patch, num_patches)
 // against patch_in [num_patches, patch_dim] (split form internally).
 // Only firing layers (cross_attn_placement) write entries, mirroring the
 // dense path. Callers must first truncate() to from_patch.
-void blt_kv_cache_refresh_cross(blt_kv_cache* cache,
-                                const blt_tensor* patch_in,
-                                const blt_patch_info* patches, size_t num_patches,
-                                size_t from_patch,
-                                blt_arena* arena);
+void blt_kv_cache_refresh_cross(blt_kv_cache *cache, const blt_tensor *patch_in, const blt_patch_info *patches,
+                                size_t num_patches, size_t from_patch, blt_arena *arena);
 
 // Cache-aware incremental decoder forward for n new byte rows.
 //
@@ -112,12 +105,8 @@ void blt_kv_cache_refresh_cross(blt_kv_cache* cache,
 // which must already cover all patches touched by the new rows (call
 // refresh_cross first). Bit-identical to running the dense
 // blt_local_decoder_forward_ext over the same prefix + these rows.
-void blt_kv_decode_step(blt_kv_cache* cache,
-                        const blt_tensor* patch_in,
-                        const blt_patch_info* patches, size_t num_patches,
-                        const blt_tensor* d0_rows,
-                        blt_tensor* logits_out,
-                        blt_arena* arena);
+void blt_kv_decode_step(blt_kv_cache *cache, const blt_tensor *patch_in, const blt_patch_info *patches,
+                        size_t num_patches, const blt_tensor *d0_rows, blt_tensor *logits_out, blt_arena *arena);
 
 #ifdef __cplusplus
 }

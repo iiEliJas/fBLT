@@ -18,7 +18,7 @@
 // weights[0][2] == weights[0][3] == 0
 // weights[1][0] == weights[1][1] == 0
 
-static void fill_identity(float* data, size_t dim) {
+static void fill_identity(float *data, size_t dim) {
     for (size_t r = 0; r < dim; ++r) {
         for (size_t c = 0; c < dim; ++c) {
             data[r * dim + c] = (r == c) ? 1.0f : 0.0f;
@@ -26,9 +26,7 @@ static void fill_identity(float* data, size_t dim) {
     }
 }
 
-
-
-static void print_weights(const char* label, const float* w, size_t num_patches, size_t seq_len) {
+static void print_weights(const char *label, const float *w, size_t num_patches, size_t seq_len) {
     printf("%s:\n", label);
     for (size_t i = 0; i < num_patches; ++i) {
         printf("  patch %zu: [", i);
@@ -39,10 +37,8 @@ static void print_weights(const char* label, const float* w, size_t num_patches,
     }
 }
 
-
-
 int main(void) {
-    blt_arena* arena = blt_arena_create(65536, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(65536, BLT_BACKEND_CPU);
     if (!arena) {
         fprintf(stderr, "arena creation failed\n");
         return 1;
@@ -66,18 +62,36 @@ int main(void) {
     blt_tensor q_tensor = blt_tensor_create(arena, query_shape, 2, BLT_DTYPE_FP32);
     blt_tensor k_tensor = blt_tensor_create(arena, kv_shape, 2, BLT_DTYPE_FP32);
 
-    float* query_data = (float*)query_in.data;
-    query_data[0] = 1.0f; query_data[1] = 0.0f; query_data[2] = 1.0f; query_data[3] = 0.0f;
-    query_data[4] = 0.0f; query_data[5] = 1.0f; query_data[6] = 0.0f; query_data[7] = 1.0f;
+    float *query_data = (float *)query_in.data;
+    query_data[0] = 1.0f;
+    query_data[1] = 0.0f;
+    query_data[2] = 1.0f;
+    query_data[3] = 0.0f;
+    query_data[4] = 0.0f;
+    query_data[5] = 1.0f;
+    query_data[6] = 0.0f;
+    query_data[7] = 1.0f;
 
-    float* kv_data = (float*)kv_in.data;
-    kv_data[0]  = 1.0f; kv_data[1]  = 0.0f; kv_data[2]  = 1.0f; kv_data[3]  = 0.0f;
-    kv_data[4]  = 0.0f; kv_data[5]  = 1.0f; kv_data[6]  = 0.0f; kv_data[7]  = 1.0f;
-    kv_data[8]  = 1.0f; kv_data[9]  = 0.0f; kv_data[10] = 1.0f; kv_data[11] = 0.0f;
-    kv_data[12] = 0.0f; kv_data[13] = 1.0f; kv_data[14] = 0.0f; kv_data[15] = 1.0f;
+    float *kv_data = (float *)kv_in.data;
+    kv_data[0] = 1.0f;
+    kv_data[1] = 0.0f;
+    kv_data[2] = 1.0f;
+    kv_data[3] = 0.0f;
+    kv_data[4] = 0.0f;
+    kv_data[5] = 1.0f;
+    kv_data[6] = 0.0f;
+    kv_data[7] = 1.0f;
+    kv_data[8] = 1.0f;
+    kv_data[9] = 0.0f;
+    kv_data[10] = 1.0f;
+    kv_data[11] = 0.0f;
+    kv_data[12] = 0.0f;
+    kv_data[13] = 1.0f;
+    kv_data[14] = 0.0f;
+    kv_data[15] = 1.0f;
 
-    fill_identity((float*)weight_q.data, embed_dim);
-    fill_identity((float*)weight_k.data, embed_dim);
+    fill_identity((float *)weight_q.data, embed_dim);
+    fill_identity((float *)weight_k.data, embed_dim);
 
     blt_matmul(&query_in, &weight_q, &q_tensor);
     blt_matmul(&kv_in, &weight_k, &k_tensor);
@@ -100,27 +114,27 @@ int main(void) {
 
     blt_tensor mask_tensor = {0};
     blt_build_attention_mask(&mask_cfg, &mask_tensor, arena);
-    const float* mask_data = (const float*)mask_tensor.data;
+    const float *mask_data = (const float *)mask_tensor.data;
 
     printf("Mask (0 = allowed, -inf = masked):\n");
     print_weights("mask", mask_data, num_patches, seq_len);
     printf("\n");
 
-    const float* q_data = (const float*)q_tensor.data;
-    const float* k_data = (const float*)k_tensor.data;
-    float* weights_buf = (float*)blt_arena_alloc(arena, num_patches * seq_len * sizeof(float), sizeof(float));
+    const float *q_data = (const float *)q_tensor.data;
+    const float *k_data = (const float *)k_tensor.data;
+    float *weights_buf = (float *)blt_arena_alloc(arena, num_patches * seq_len * sizeof(float), sizeof(float));
 
     for (size_t head = 0; head < num_heads; ++head) {
         size_t head_offset = head * head_dim;
 
         for (size_t i = 0; i < num_patches; ++i) {
-            const float* q_i = q_data + i * embed_dim + head_offset;
-            const float* mask_row = mask_data + i * seq_len;
-            float* w_i = weights_buf + i * seq_len;
+            const float *q_i = q_data + i * embed_dim + head_offset;
+            const float *mask_row = mask_data + i * seq_len;
+            float *w_i = weights_buf + i * seq_len;
 
             float max_val = -INFINITY;
             for (size_t j = 0; j < seq_len; ++j) {
-                const float* k_j = k_data + j * embed_dim + head_offset;
+                const float *k_j = k_data + j * embed_dim + head_offset;
                 float score = blt_vec_dot(BLT_BACKEND_CPU, q_i, k_j, head_dim) * scale + mask_row[j];
                 w_i[j] = score;
                 if (isfinite(score) && score > max_val) {

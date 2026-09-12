@@ -8,7 +8,7 @@
 #include "blt/infer/self_speculation.h"
 
 // splitmix64 — deterministic PRNG for top-p sampling.
-static uint64_t rng_next(uint64_t* state) {
+static uint64_t rng_next(uint64_t *state) {
     *state += 0x9E3779B97F4A7C15ULL;
     uint64_t z = *state;
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
@@ -16,9 +16,7 @@ static uint64_t rng_next(uint64_t* state) {
     return z ^ (z >> 31);
 }
 
-uint32_t blt_unmask_select_confidence(const float* scores,
-                                      const uint8_t* masked, size_t B,
-                                      float alpha) {
+uint32_t blt_unmask_select_confidence(const float *scores, const uint8_t *masked, size_t B, float alpha) {
     uint32_t sel = 0;
     size_t best = SIZE_MAX;
     for (size_t b = 0; b < B; b++) {
@@ -30,9 +28,7 @@ uint32_t blt_unmask_select_confidence(const float* scores,
     return sel;
 }
 
-uint32_t blt_unmask_select_eb(const float* scores,
-                              const uint8_t* masked, size_t B,
-                              float gamma) {
+uint32_t blt_unmask_select_eb(const float *scores, const uint8_t *masked, size_t B, float gamma) {
     size_t order[32];
     size_t n = 0;
     for (size_t b = 0; b < B; b++) {
@@ -51,8 +47,7 @@ uint32_t blt_unmask_select_eb(const float* scores,
     uint32_t sel = 0;
     float cum = 0.0f;
     size_t taken = 0;
-    while (taken < n &&
-           (taken == 0 || cum + scores[order[taken]] <= gamma)) {
+    while (taken < n && (taken == 0 || cum + scores[order[taken]] <= gamma)) {
         cum += scores[order[taken]];
         sel |= (uint32_t)1u << order[taken];
         taken++;
@@ -63,14 +58,14 @@ uint32_t blt_unmask_select_eb(const float* scores,
 
 typedef struct {
     float p_max;
-    float entropy;   // nats
+    float entropy; // nats
 } row_stats;
 
-static void row_analyze(const float* row, size_t V, float temperature_scale_unused,
-                        row_stats* out) {
+static void row_analyze(const float *row, size_t V, float temperature_scale_unused, row_stats *out) {
     (void)temperature_scale_unused;
     float mx = row[0];
-    for (size_t v = 1; v < V; v++) if (row[v] > mx) mx = row[v];
+    for (size_t v = 1; v < V; v++)
+        if (row[v] > mx) mx = row[v];
     double sum = 0.0;
     for (size_t v = 0; v < V; v++) sum += exp((double)row[v] - (double)mx);
     double pmax = 0.0, H = 0.0;
@@ -83,30 +78,42 @@ static void row_analyze(const float* row, size_t V, float temperature_scale_unus
     out->entropy = (float)H;
 }
 
-static uint8_t row_argmax(const float* row, size_t V) {
+static uint8_t row_argmax(const float *row, size_t V) {
     size_t best = 0;
     float bv = row[0];
     for (size_t v = 1; v < V; v++) {
-        if (row[v] > bv) { bv = row[v]; best = v; }
+        if (row[v] > bv) {
+            bv = row[v];
+            best = v;
+        }
     }
     return (uint8_t)best;
 }
 
-static uint8_t row_sample_top_p(const float* row, size_t V, float top_p,
-                                uint64_t* rng) {
+static uint8_t row_sample_top_p(const float *row, size_t V, float top_p, uint64_t *rng) {
     // Insertion sort by descending probability — fine for V <= 512.
     size_t idx[512];
     double p[512];
     float mx = row[0];
-    for (size_t v = 1; v < V; v++) if (row[v] > mx) mx = row[v];
+    for (size_t v = 1; v < V; v++)
+        if (row[v] > mx) mx = row[v];
     double sum = 0.0;
-    for (size_t v = 0; v < V; v++) { p[v] = exp((double)row[v] - (double)mx); sum += p[v]; }
-    for (size_t v = 0; v < V; v++) { p[v] /= sum; idx[v] = v; }
+    for (size_t v = 0; v < V; v++) {
+        p[v] = exp((double)row[v] - (double)mx);
+        sum += p[v];
+    }
+    for (size_t v = 0; v < V; v++) {
+        p[v] /= sum;
+        idx[v] = v;
+    }
     for (size_t i = 1; i < V; i++) {
         const size_t ki = idx[i];
         const double pi = p[ki];
         size_t j = i;
-        while (j > 0 && p[idx[j - 1]] < pi) { idx[j] = idx[j - 1]; j--; }
+        while (j > 0 && p[idx[j - 1]] < pi) {
+            idx[j] = idx[j - 1];
+            j--;
+        }
         idx[j] = ki;
     }
 
@@ -114,7 +121,10 @@ static uint8_t row_sample_top_p(const float* row, size_t V, float top_p,
     size_t nucleus = V - 1;
     for (size_t i = 0; i < V; i++) {
         cum += p[idx[i]];
-        if (cum >= (double)top_p) { nucleus = i; break; }
+        if (cum >= (double)top_p) {
+            nucleus = i;
+            break;
+        }
     }
     double r = (double)(rng_next(rng) >> 11) * (1.0 / 9007199254740992.0); // [0,1)
     double acc = 0.0;
@@ -125,14 +135,13 @@ static uint8_t row_sample_top_p(const float* row, size_t V, float top_p,
     return (uint8_t)idx[nucleus];
 }
 
-size_t blt_block_adapt_b(size_t cur_b, double rolling_acceptance,
-                         size_t b_min, size_t b_max, float target) {
+size_t blt_block_adapt_b(size_t cur_b, double rolling_acceptance, size_t b_min, size_t b_max, float target) {
     if (b_max == 0 || b_max < b_min) return cur_b;
     size_t lo = b_min ? b_min : 1;
     if (lo > b_max) lo = b_max;
     size_t b = cur_b < lo ? lo : cur_b;
     b = b > b_max ? b_max : b;
-    if (!(rolling_acceptance >= 0.0)) return b;   // NaN: no history yet
+    if (!(rolling_acceptance >= 0.0)) return b; // NaN: no history yet
     if (rolling_acceptance > (double)(target + BLT_ADAPT_B_MARGIN)) {
         if (b < b_max) b++;
     } else if (rolling_acceptance < (double)(target - BLT_ADAPT_B_MARGIN)) {
@@ -143,25 +152,18 @@ size_t blt_block_adapt_b(size_t cur_b, double rolling_acceptance,
 
 #define BLT_BLOCKGEN_MAX_B 32
 
-size_t blt_draft_block(
-    const blt_model* model,
-    const blt_model_enc_out* enc,
-    const blt_patch_info* patches, size_t num_patches,
-    const uint8_t* prefix, size_t prefix_len,
-    const blt_block_gen_config* config,
-    uint8_t* out_block,
-    blt_arena* scratch
-) {
-    BLT_REQUIRE(model != NULL && enc != NULL && patches != NULL && prefix != NULL &&
-                config != NULL && out_block != NULL && scratch != NULL,
-        "blt_draft_block: arguments cannot be NULL");
+size_t blt_draft_block(const blt_model *model, const blt_model_enc_out *enc, const blt_patch_info *patches,
+                       size_t num_patches, const uint8_t *prefix, size_t prefix_len, const blt_block_gen_config *config,
+                       uint8_t *out_block, blt_arena *scratch) {
+    BLT_REQUIRE(model != NULL && enc != NULL && patches != NULL && prefix != NULL && config != NULL &&
+                    out_block != NULL && scratch != NULL,
+                "blt_draft_block: arguments cannot be NULL");
     const size_t B = config->block_size;
-    BLT_REQUIRE(B >= 1 && B <= BLT_BLOCKGEN_MAX_B,
-        "blt_draft_block: block_size must be in [1, 32]");
+    BLT_REQUIRE(B >= 1 && B <= BLT_BLOCKGEN_MAX_B, "blt_draft_block: block_size must be in [1, 32]");
     BLT_REQUIRE(prefix_len + B <= model->config.decoder_config.max_seq_len,
-        "blt_draft_block: prefix_len + block_size exceeds decoder max_seq_len");
+                "blt_draft_block: prefix_len + block_size exceeds decoder max_seq_len");
 
-    const blt_local_decoder* dec = model->decoder;
+    const blt_local_decoder *dec = model->decoder;
     const size_t V = model->config.decoder_config.vocab_size;
 
     // t=0 keeps every loss path inert; all block rows cross-attend o_M.
@@ -200,7 +202,7 @@ size_t blt_draft_block(
             targets[b] = 0;
             valid[b] = 1;
             cell_masked[b] = masked[b];
-            groups[b] = num_patches - 1;   // all rows attend o_M
+            groups[b] = num_patches - 1; // all rows attend o_M
         }
         batch.tokens = tok32;
         batch.positions = pos;
@@ -212,32 +214,29 @@ size_t blt_draft_block(
         size_t logits_shape[2] = {prefix_len + B, V};
         blt_tensor logits = blt_tensor_create(scratch, logits_shape, 2, BLT_DTYPE_FP32);
 
-        blt_local_decoder_forward_diffusion_infer(
-            dec, &enc->byte_hidden_out, &enc->global_out,
-            patches, num_patches, &batch, config->d0_mode, &logits, scratch);
+        blt_local_decoder_forward_diffusion_infer(dec, &enc->byte_hidden_out, &enc->global_out, patches, num_patches,
+                                                  &batch, config->d0_mode, &logits, scratch);
         nfes++;
 
         // Stage logits to host for row analysis + sampling.
-        float* rows_host = (float*)malloc(logits.numel * sizeof(float));
+        float *rows_host = (float *)malloc(logits.numel * sizeof(float));
         BLT_REQUIRE(rows_host != NULL, "blockgen: logits staging alloc failed");
         blt_tensor_download(&logits, rows_host, logits.numel * sizeof(float));
         float conf[BLT_BLOCKGEN_MAX_B], ent[BLT_BLOCKGEN_MAX_B];
         uint8_t pred[BLT_BLOCKGEN_MAX_B];
-        const float* rows = rows_host;
+        const float *rows = rows_host;
         for (size_t b = 0; b < B; b++) {
-            const float* row = rows + (prefix_len + b) * V;
+            const float *row = rows + (prefix_len + b) * V;
             row_stats st;
             row_analyze(row, V, 1.0f, &st);
             conf[b] = st.p_max;
             ent[b] = st.entropy;
-            pred[b] = config->opts.use_top_p
-                ? row_sample_top_p(row, V, config->opts.top_p, &rng)
-                : row_argmax(row, V);
+            pred[b] = config->opts.use_top_p ? row_sample_top_p(row, V, config->opts.top_p, &rng) : row_argmax(row, V);
         }
 
         const uint32_t sel = (config->opts.strategy == BLT_UNMASK_CONFIDENCE)
-            ? blt_unmask_select_confidence(conf, masked, B, config->opts.threshold)
-            : blt_unmask_select_eb(ent, masked, B, config->opts.threshold);
+                                 ? blt_unmask_select_confidence(conf, masked, B, config->opts.threshold)
+                                 : blt_unmask_select_eb(ent, masked, B, config->opts.threshold);
         free(rows_host);
 
         int any = 0;
@@ -262,11 +261,9 @@ size_t blt_draft_block(
     return nfes;
 }
 
-static void segment_prefix(blt_arena* arena, const blt_entropy_lm* entropy_model,
-                           const blt_patcher_config* patcher_config,
-                           const uint8_t* bytes, size_t len,
-                           blt_patch_info* patches, size_t max_patches,
-                           size_t* num_patches_out) {
+static void segment_prefix(blt_arena *arena, const blt_entropy_lm *entropy_model,
+                           const blt_patcher_config *patcher_config, const uint8_t *bytes, size_t len,
+                           blt_patch_info *patches, size_t max_patches, size_t *num_patches_out) {
     // Must mirror compute_entropy_vals in self_speculation.c bit-for-bit.
     size_t shape1[1] = {len};
     blt_tensor bytes_in = blt_tensor_create(arena, shape1, 1, BLT_DTYPE_UINT8);
@@ -290,50 +287,38 @@ static void segment_prefix(blt_arena* arena, const blt_entropy_lm* entropy_model
 
     // The patcher is host-only: stage device entropies through host memory.
     if (ent_tensor.backend == BLT_BACKEND_CPU) {
-        *num_patches_out = blt_segment_patches(&ent_tensor, bytes, patches,
-                                               max_patches, patcher_config);
+        *num_patches_out = blt_segment_patches(&ent_tensor, bytes, patches, max_patches, patcher_config);
         return;
     }
-    float* ent_host = (float*)malloc(len * sizeof(float));
+    float *ent_host = (float *)malloc(len * sizeof(float));
     BLT_REQUIRE(ent_host != NULL, "segment_for_generation: staging alloc failed");
     blt_tensor_download(&ent_tensor, ent_host, len * sizeof(float));
     blt_tensor ent_view;
     view_1d(&ent_view, ent_host, len, BLT_DTYPE_FP32, BLT_BACKEND_CPU);
-    *num_patches_out = blt_segment_patches(&ent_view, bytes, patches,
-                                           max_patches, patcher_config);
+    *num_patches_out = blt_segment_patches(&ent_view, bytes, patches, max_patches, patcher_config);
     free(ent_host);
 }
 
-static void generate_common(
-    const blt_model* model,
-    const blt_entropy_lm* entropy_model,
-    const blt_patcher_config* patcher_config,
-    const uint8_t* prompt_bytes, size_t prompt_len,
-    size_t max_new_bytes,
-    uint8_t* output_bytes,
-    const blt_block_gen_config* config,
-    int do_verify,
-    blt_infer_stats* stats,
-    blt_arena* scratch
-) {
-    BLT_REQUIRE(model != NULL && entropy_model != NULL && patcher_config != NULL &&
-                prompt_bytes != NULL && output_bytes != NULL && config != NULL &&
-                scratch != NULL,
-        "blockdiff generation: arguments cannot be NULL");
+static void generate_common(const blt_model *model, const blt_entropy_lm *entropy_model,
+                            const blt_patcher_config *patcher_config, const uint8_t *prompt_bytes, size_t prompt_len,
+                            size_t max_new_bytes, uint8_t *output_bytes, const blt_block_gen_config *config,
+                            int do_verify, blt_infer_stats *stats, blt_arena *scratch) {
+    BLT_REQUIRE(model != NULL && entropy_model != NULL && patcher_config != NULL && prompt_bytes != NULL &&
+                    output_bytes != NULL && config != NULL && scratch != NULL,
+                "blockdiff generation: arguments cannot be NULL");
     BLT_REQUIRE(prompt_len >= 1, "blockdiff generation: prompt must be non-empty");
     const size_t target_len = prompt_len + max_new_bytes;
     BLT_REQUIRE(target_len <= model->config.decoder_config.max_seq_len,
-        "blockdiff generation: total length exceeds decoder max_seq_len");
+                "blockdiff generation: total length exceeds decoder max_seq_len");
     // Both models must cover the same sequence budget.
-    const blt_model* verifier = config->verifier_model ? config->verifier_model : model;
+    const blt_model *verifier = config->verifier_model ? config->verifier_model : model;
     BLT_REQUIRE(target_len <= verifier->config.decoder_config.max_seq_len,
-        "blockdiff generation: target length exceeds verifier max_seq_len");
+                "blockdiff generation: target length exceeds verifier max_seq_len");
 
     memcpy(output_bytes, prompt_bytes, prompt_len);
     size_t l = prompt_len;
 
-    const int adaptive = (do_verify && config->B_max > 0 &&
-                          config->adapt_window > 0);
+    const int adaptive = (do_verify && config->B_max > 0 && config->adapt_window > 0);
     size_t cur_B = config->block_size;
     double acc_hist[64];
     size_t hist_len = 0, hist_pos = 0;
@@ -354,11 +339,9 @@ static void generate_common(
         enum { MAX_PATCHES = 256 };
         blt_patch_info patches[MAX_PATCHES];
         size_t num_patches = 0;
-        segment_prefix(scratch, entropy_model, patcher_config,
-                       output_bytes, l, patches, MAX_PATCHES, &num_patches);
+        segment_prefix(scratch, entropy_model, patcher_config, output_bytes, l, patches, MAX_PATCHES, &num_patches);
         BLT_REQUIRE(num_patches >= 1, "blockdiff generation: empty segmentation");
-        BLT_REQUIRE(patcher_config->max_patch_length * num_patches >= l ||
-                    num_patches < MAX_PATCHES,
+        BLT_REQUIRE(patcher_config->max_patch_length * num_patches >= l || num_patches < MAX_PATCHES,
                     "blockdiff generation: patch array exhausted; increase "
                     "max_patch_length or the segment budget");
 
@@ -371,8 +354,8 @@ static void generate_common(
         if (stats) stats->nfe_encoder_global++;
 
         uint8_t draft[BLT_BLOCKGEN_MAX_B];
-        const size_t passes = blt_draft_block(model, &enc, patches, num_patches,
-                                              output_bytes, l, &rcfg, draft, scratch);
+        const size_t passes =
+            blt_draft_block(model, &enc, patches, num_patches, output_bytes, l, &rcfg, draft, scratch);
         if (stats) stats->nfe_decoder += passes;
         if (stats) stats->bytes_drafted += B;
 
@@ -382,13 +365,11 @@ static void generate_common(
             l += B;
         } else {
             memcpy(output_bytes + l, draft, B);
-            const size_t committed =
-                config->boundary_aligned
-                ? blt_verify_draft_aligned(verifier, entropy_model,
-                                           patcher_config, output_bytes, l, B,
-                                           target_len, stats, scratch)
-                : blt_verify_draft(verifier, entropy_model, patcher_config,
-                                   output_bytes, l, B, target_len, stats, scratch);
+            const size_t committed = config->boundary_aligned
+                                         ? blt_verify_draft_aligned(verifier, entropy_model, patcher_config,
+                                                                    output_bytes, l, B, target_len, stats, scratch)
+                                         : blt_verify_draft(verifier, entropy_model, patcher_config, output_bytes, l, B,
+                                                            target_len, stats, scratch);
             BLT_REQUIRE(committed > l, "blockdiff DV: verify made no progress");
 
             if (adaptive) {
@@ -398,8 +379,7 @@ static void generate_common(
                 if (hist_len < config->adapt_window) hist_len++;
                 double sum = 0.0;
                 for (size_t i = 0; i < hist_len; i++) sum += acc_hist[i];
-                cur_B = blt_block_adapt_b(cur_B, sum / (double)hist_len,
-                                          config->B_min, config->B_max,
+                cur_B = blt_block_adapt_b(cur_B, sum / (double)hist_len, config->B_min, config->B_max,
                                           config->accept_target);
             }
             l = committed;
@@ -409,34 +389,19 @@ static void generate_common(
     }
 }
 
-void blt_generate_greedy_blockdiff(
-    const blt_model* model,
-    const blt_entropy_lm* entropy_model,
-    const blt_patcher_config* patcher_config,
-    const uint8_t* prompt_bytes, size_t prompt_len,
-    size_t max_new_bytes,
-    uint8_t* output_bytes,
-    const blt_block_gen_config* config,
-    blt_infer_stats* stats,
-    blt_arena* scratch
-) {
-    generate_common(model, entropy_model, patcher_config,
-                    prompt_bytes, prompt_len, max_new_bytes, output_bytes,
-                    config, 0, stats, scratch);
+void blt_generate_greedy_blockdiff(const blt_model *model, const blt_entropy_lm *entropy_model,
+                                   const blt_patcher_config *patcher_config, const uint8_t *prompt_bytes,
+                                   size_t prompt_len, size_t max_new_bytes, uint8_t *output_bytes,
+                                   const blt_block_gen_config *config, blt_infer_stats *stats, blt_arena *scratch) {
+    generate_common(model, entropy_model, patcher_config, prompt_bytes, prompt_len, max_new_bytes, output_bytes, config,
+                    0, stats, scratch);
 }
 
-void blt_generate_greedy_blockdiff_verify(
-    const blt_model* model,
-    const blt_entropy_lm* entropy_model,
-    const blt_patcher_config* patcher_config,
-    const uint8_t* prompt_bytes, size_t prompt_len,
-    size_t max_new_bytes,
-    uint8_t* output_bytes,
-    const blt_block_gen_config* config,
-    blt_infer_stats* stats,
-    blt_arena* scratch
-) {
-    generate_common(model, entropy_model, patcher_config,
-                    prompt_bytes, prompt_len, max_new_bytes, output_bytes,
-                    config, 1, stats, scratch);
+void blt_generate_greedy_blockdiff_verify(const blt_model *model, const blt_entropy_lm *entropy_model,
+                                          const blt_patcher_config *patcher_config, const uint8_t *prompt_bytes,
+                                          size_t prompt_len, size_t max_new_bytes, uint8_t *output_bytes,
+                                          const blt_block_gen_config *config, blt_infer_stats *stats,
+                                          blt_arena *scratch) {
+    generate_common(model, entropy_model, patcher_config, prompt_bytes, prompt_len, max_new_bytes, output_bytes, config,
+                    1, stats, scratch);
 }

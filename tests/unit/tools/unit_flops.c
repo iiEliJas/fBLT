@@ -34,7 +34,7 @@ int run_flops_hand_derived_test(void) {
     cfg.h_E = 768;
     cfg.l_E = 1;
     cfg.w_E = 512;
-    cfg.enc_heads = 10;       /* cross-attn heads, per Table 10 */
+    cfg.enc_heads = 10; /* cross-attn heads, per Table 10 */
     cfg.enc_head_dim = 64;
     cfg.d_ff_E = 4;
 
@@ -42,7 +42,7 @@ int run_flops_hand_derived_test(void) {
     cfg.h_D = 768;
     cfg.l_D = 7;
     cfg.w_D = 512;
-    cfg.dec_heads = 10;       /* cross-attn heads, per Table 10 */
+    cfg.dec_heads = 10; /* cross-attn heads, per Table 10 */
     cfg.dec_head_dim = 64;
     cfg.d_ff_D = 4;
 

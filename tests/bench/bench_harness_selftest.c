@@ -28,7 +28,7 @@
 static float work_buf[WORKLOAD_ELEMS];
 static volatile double work_sink;
 
-static void workload(void* arg) {
+static void workload(void *arg) {
     (void)arg;
     double acc = 0.0;
     for (int rep = 0; rep < 8; ++rep) {
@@ -46,20 +46,20 @@ static void init_work_buf(void) {
 }
 
 // One full measurement pass of the fixed config: collect samples + stats.
-static void measure_once(bench_stats* out) {
+static void measure_once(bench_stats *out) {
     double samples[ITERATIONS];
     bench_collect_samples(workload, NULL, WARMUP, ITERATIONS, samples);
     bench_stats_compute(out, samples, ITERATIONS);
 }
 
-int main(int argc, char** argv) {
-    const char* jsonl_path = (argc > 1) ? argv[1] : "bench/dummy_results.jsonl";
+int main(int argc, char **argv) {
+    const char *jsonl_path = (argc > 1) ? argv[1] : "bench/dummy_results.jsonl";
 
     init_work_buf();
 
     printf("BLT benchmark harness self-test\n");
-    printf("  workload: fixed FMA sweep, %d iterations x%d runs (warmup %d, cold pass discarded)\n",
-           ITERATIONS, 2, WARMUP);
+    printf("  workload: fixed FMA sweep, %d iterations x%d runs (warmup %d, cold pass discarded)\n", ITERATIONS, 2,
+           WARMUP);
 
     // ---- Criterion 1: two runs of the same config agree within 2% ----
     bench_stats run1;
@@ -67,22 +67,21 @@ int main(int argc, char** argv) {
     measure_once(&run1);
     measure_once(&run2);
 
-    printf("  run1: mean=%.3f ms stddev=%.3f ms p50=%.3f ms p99=%.3f ms\n",
-           run1.mean * 1e3, run1.stddev * 1e3, run1.p50 * 1e3, run1.p99 * 1e3);
-    printf("  run2: mean=%.3f ms stddev=%.3f ms p50=%.3f ms p99=%.3f ms\n",
-           run2.mean * 1e3, run2.stddev * 1e3, run2.p50 * 1e3, run2.p99 * 1e3);
+    printf("  run1: mean=%.3f ms stddev=%.3f ms p50=%.3f ms p99=%.3f ms\n", run1.mean * 1e3, run1.stddev * 1e3,
+           run1.p50 * 1e3, run1.p99 * 1e3);
+    printf("  run2: mean=%.3f ms stddev=%.3f ms p50=%.3f ms p99=%.3f ms\n", run2.mean * 1e3, run2.stddev * 1e3,
+           run2.p50 * 1e3, run2.p99 * 1e3);
 
     double diff = fabs(run1.mean - run2.mean);
     double rel = diff / fmax(run1.mean, run2.mean);
 
     int pass = 1;
     if (rel > SELFTEST_TOLERANCE) {
-        fprintf(stderr, "[FAIL] run means differ by %.2f%% (tolerance %.2f%%)\n",
-                rel * 100.0, SELFTEST_TOLERANCE * 100.0);
+        fprintf(stderr, "[FAIL] run means differ by %.2f%% (tolerance %.2f%%)\n", rel * 100.0,
+                SELFTEST_TOLERANCE * 100.0);
         pass = 0;
     } else {
-        printf("  [OK] run means agree within %.2f%% (<= %.2f%%)\n",
-               rel * 100.0, SELFTEST_TOLERANCE * 100.0);
+        printf("  [OK] run means agree within %.2f%% (<= %.2f%%)\n", rel * 100.0, SELFTEST_TOLERANCE * 100.0);
     }
 
     // Sanity: stats fields are populated and ordered.
@@ -90,8 +89,7 @@ int main(int argc, char** argv) {
         fprintf(stderr, "[FAIL] sample count wrong\n");
         pass = 0;
     }
-    if (!(run1.min <= run1.p50 && run1.p50 <= run1.p90 && run1.p90 <= run1.p99 &&
-          run1.p99 <= run1.max)) {
+    if (!(run1.min <= run1.p50 && run1.p50 <= run1.p90 && run1.p90 <= run1.p99 && run1.p99 <= run1.max)) {
         fprintf(stderr, "[FAIL] percentiles not monotonic\n");
         pass = 0;
     }
@@ -109,14 +107,12 @@ int main(int argc, char** argv) {
     bench_result_add_metric(&r2, "dummy_metric", 45.0);
     bench_result_add_metric(&r2, "gb_per_sec", 1.0 / run2.mean / 1e9 * 8.0 * WORKLOAD_ELEMS * 8);
 
-    if (bench_write_json(jsonl_path, &r1) != 0 ||
-        bench_write_json(jsonl_path, &r2) != 0) {
+    if (bench_write_json(jsonl_path, &r1) != 0 || bench_write_json(jsonl_path, &r2) != 0) {
         fprintf(stderr, "[FAIL] could not append to %s\n", jsonl_path);
         return 1;
     }
     printf("  [OK] wrote 2 dummy entries to %s\n", jsonl_path);
-    printf("  check report: python3 tools/bench_report.py --results %s --baseline dummy_a\n",
-           jsonl_path);
+    printf("  check report: python3 tools/bench_report.py --results %s --baseline dummy_a\n", jsonl_path);
 
     printf(pass ? "SELFTEST PASS\n" : "SELFTEST FAIL\n");
     return pass ? 0 : 1;

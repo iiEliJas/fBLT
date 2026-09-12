@@ -8,8 +8,8 @@
 #include "test_suite.h"
 
 int run_attention_model_tests(void) {
-    blt_arena* arena = blt_arena_create(65536, BLT_BACKEND_CPU);
-    blt_arena* attention_arena = blt_arena_create(4096, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(65536, BLT_BACKEND_CPU);
+    blt_arena *attention_arena = blt_arena_create(4096, BLT_BACKEND_CPU);
 
     if (!arena || !attention_arena) {
         fprintf(stderr, "[FAIL] arena creation for attention tests\n");
@@ -27,12 +27,18 @@ int run_attention_model_tests(void) {
     blt_tensor output = blt_tensor_create(arena, output_shape, 2, BLT_DTYPE_FP32);
     blt_tensor expected = blt_tensor_create(arena, output_shape, 2, BLT_DTYPE_FP32);
 
-    float* input_data = (float*)input.data;
-    float* qkv_data = (float*)weight_qkv.data;
-    float* proj_data = (float*)weight_proj.data;
+    float *input_data = (float *)input.data;
+    float *qkv_data = (float *)weight_qkv.data;
+    float *proj_data = (float *)weight_proj.data;
 
-    input_data[0] = 1.0f; input_data[1] = 0.0f; input_data[2] = 1.0f; input_data[3] = 0.0f;
-    input_data[4] = 0.0f; input_data[5] = 1.0f; input_data[6] = 0.0f; input_data[7] = 1.0f;
+    input_data[0] = 1.0f;
+    input_data[1] = 0.0f;
+    input_data[2] = 1.0f;
+    input_data[3] = 0.0f;
+    input_data[4] = 0.0f;
+    input_data[5] = 1.0f;
+    input_data[6] = 0.0f;
+    input_data[7] = 1.0f;
 
     for (size_t row = 0; row < 4; ++row) {
         for (size_t col = 0; col < 12; ++col) {
@@ -72,11 +78,9 @@ int run_attention_model_tests(void) {
 
     TEST_ASSERT_CLOSE(&rope_output, &rope_output_repeat, 1e-4f);
 
-    float* expected_data = (float*)expected.data;
-    const float expected_values[] = {
-        0.6697615f, 0.3302385f, 0.6697615f, 0.3302385f,
-        0.3302385f, 0.6697615f, 0.3302385f, 0.6697615f
-    };
+    float *expected_data = (float *)expected.data;
+    const float expected_values[] = {0.6697615f, 0.3302385f, 0.6697615f, 0.3302385f,
+                                     0.3302385f, 0.6697615f, 0.3302385f, 0.6697615f};
     for (size_t i = 0; i < 8; ++i) {
         expected_data[i] = expected_values[i];
     }
@@ -88,12 +92,9 @@ int run_attention_model_tests(void) {
     return 1;
 }
 
-
-
-
 int run_attention_masked_model_tests(void) {
-    blt_arena* arena = blt_arena_create(65536, BLT_BACKEND_CPU);
-    blt_arena* attention_arena = blt_arena_create(4096, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(65536, BLT_BACKEND_CPU);
+    blt_arena *attention_arena = blt_arena_create(4096, BLT_BACKEND_CPU);
 
     if (!arena || !attention_arena) {
         fprintf(stderr, "[FAIL] arena creation for masked attention tests\n");
@@ -112,13 +113,19 @@ int run_attention_masked_model_tests(void) {
     blt_tensor causal_output = blt_tensor_create(arena, output_shape, 2, BLT_DTYPE_FP32);
     blt_tensor expected = blt_tensor_create(arena, output_shape, 2, BLT_DTYPE_FP32);
 
-    float* input_data = (float*)input.data;
-    float* qkv_data = (float*)weight_qkv.data;
-    float* proj_data = (float*)weight_proj.data;
+    float *input_data = (float *)input.data;
+    float *qkv_data = (float *)weight_qkv.data;
+    float *proj_data = (float *)weight_proj.data;
 
     // Same setup as run_attention_model_tests: W_qkv and W_proj are identity matrices.
-    input_data[0] = 1.0f; input_data[1] = 0.0f; input_data[2] = 1.0f; input_data[3] = 0.0f;
-    input_data[4] = 0.0f; input_data[5] = 1.0f; input_data[6] = 0.0f; input_data[7] = 1.0f;
+    input_data[0] = 1.0f;
+    input_data[1] = 0.0f;
+    input_data[2] = 1.0f;
+    input_data[3] = 0.0f;
+    input_data[4] = 0.0f;
+    input_data[5] = 1.0f;
+    input_data[6] = 0.0f;
+    input_data[7] = 1.0f;
 
     for (size_t row = 0; row < 4; ++row) {
         for (size_t col = 0; col < 12; ++col) {
@@ -150,17 +157,14 @@ int run_attention_masked_model_tests(void) {
     masked_config.embed_dim = 4;
     masked_config.num_heads = 2;
     masked_config.head_dim = 2;
-    masked_config.is_causal = false;    // false to use the masked config
+    masked_config.is_causal = false; // false to use the masked config
     masked_config.use_rope = false;
     masked_config.mask_config = &mask_cfg;
 
     blt_multihead_attention(&input, &weight_qkv, &weight_proj, &masked_output, &masked_config, attention_arena);
 
-    float* expected_data = (float*)expected.data;
-    const float expected_values[] = {
-        1.0f,       0.0f,       1.0f,       0.0f,
-        0.3302385f, 0.6697615f, 0.3302385f, 0.6697615f
-    };
+    float *expected_data = (float *)expected.data;
+    const float expected_values[] = {1.0f, 0.0f, 1.0f, 0.0f, 0.3302385f, 0.6697615f, 0.3302385f, 0.6697615f};
     for (size_t i = 0; i < 8; ++i) {
         expected_data[i] = expected_values[i];
     }

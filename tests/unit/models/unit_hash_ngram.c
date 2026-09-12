@@ -7,56 +7,49 @@
 #include <stdint.h>
 #include <string.h>
 
-
-
 // -------------------------------------------------------------------
-// Test 1: rolling hash returns sentinel until enough bytes are seen, 
+// Test 1: rolling hash returns sentinel until enough bytes are seen,
 // then produces a deterministic value
 // -------------------------------------------------------------------
 static int test_rolling_hash_basic(void) {
     blt_rolling_hash_state state;
     blt_rolling_hash_init(&state, 3, 1000000007ULL, 97);
- 
+
     uint64_t h0 = blt_rolling_hash_update(&state, 'a');
     uint64_t h1 = blt_rolling_hash_update(&state, 'b');
     TEST_ASSERT(h0 == UINT64_MAX);
     TEST_ASSERT(h1 == UINT64_MAX);
- 
+
     uint64_t h2 = blt_rolling_hash_update(&state, 'c');
     TEST_ASSERT(h2 != UINT64_MAX);
     TEST_ASSERT(h2 < 97);
- 
+
     uint64_t h3 = blt_rolling_hash_update(&state, 'd');
     TEST_ASSERT(h3 != UINT64_MAX);
     TEST_ASSERT(h3 < 97);
- 
+
     return 1;
 }
- 
-
 
 // -------------------------------------------------------------------
 // Test 2: same byte sequence produces the same hash trace
 // -------------------------------------------------------------------
 
 static int test_rolling_hash_deterministic(void) {
-    const uint8_t bytes[6] = { 'f','u','n','c','t','n' };
- 
+    const uint8_t bytes[6] = {'f', 'u', 'n', 'c', 't', 'n'};
+
     blt_rolling_hash_state s1, s2;
     blt_rolling_hash_init(&s1, 3, 1000000007ULL, 97);
     blt_rolling_hash_init(&s2, 3, 1000000007ULL, 97);
- 
+
     for (size_t i = 0; i < 6; i++) {
         uint64_t r1 = blt_rolling_hash_update(&s1, bytes[i]);
         uint64_t r2 = blt_rolling_hash_update(&s2, bytes[i]);
         TEST_ASSERT(r1 == r2);
     }
- 
+
     return 1;
 }
-
-
-
 
 // -------------------------------------------------------------------
 // Test 3: Hash Determinism & Rolling Correctness
@@ -95,14 +88,12 @@ static int test_hash_rolling_correctness(void) {
     return 1;
 }
 
-
-
 // -------------------------------------------------------------------
 // Test 4: Boundary Omission
 // -------------------------------------------------------------------
 
 static int test_boundary_omission() {
-    blt_arena* arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
     TEST_ASSERT(arena != NULL);
 
     blt_hash_ngram_config config;
@@ -132,14 +123,14 @@ static int test_boundary_omission() {
     out = blt_tensor_create(arena, emb_shape, 2, BLT_DTYPE_FP32);
 
     // Fill byte_emb with identifiable non-zero values
-    float* emb_data = (float*)byte_emb.data;
+    float *emb_data = (float *)byte_emb.data;
     for (size_t i = 0; i < seq_len * config.embed_dim; i++) {
         emb_data[i] = (float)i + 1.0f;
     }
 
     blt_hash_ngram_forward(&weights, &config, &bytes_in, &byte_emb, &out);
 
-    float* out_data = (float*)out.data;
+    float *out_data = (float *)out.data;
 
     // Assert position 0 gets no contribution from the 3-gram table
     for (size_t e = 0; e < config.embed_dim; e++) {
@@ -154,7 +145,6 @@ static int test_boundary_omission() {
     blt_arena_destroy(arena);
     return 1;
 }
-
 
 // -------------------------------------------------------------------
 // Helper for small config. 2 n-gram sizes, tiny vocab/embed_dim
@@ -173,8 +163,6 @@ static blt_hash_ngram_config make_test_config(size_t embed_dim) {
     return config;
 }
 
-
-
 // -------------------------------------------------------------------
 // Test 4: forward pass on a longer sequence adds nonzero contributions
 // for positions past the smallest n-gram size
@@ -183,39 +171,39 @@ static blt_hash_ngram_config make_test_config(size_t embed_dim) {
 static int test_forward_long_sequence(void) {
     const size_t embed_dim = 4;
 
-    blt_arena* arena = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
     TEST_ASSERT(arena != NULL);
- 
+
     blt_hash_ngram_config config = make_test_config(embed_dim);
     blt_hash_ngram_weights weights = blt_hash_ngram_create(arena, &config);
- 
+
     size_t seq_len = 8;
-    size_t bytes_shape[1] = { seq_len };
+    size_t bytes_shape[1] = {seq_len};
     blt_tensor bytes_in = blt_tensor_create(arena, bytes_shape, 1, BLT_DTYPE_UINT8);
-    uint8_t* bytes_data = (uint8_t*)bytes_in.data;
-    const char* text = "function";  // 8 bytes
+    uint8_t *bytes_data = (uint8_t *)bytes_in.data;
+    const char *text = "function"; // 8 bytes
     memcpy(bytes_data, text, seq_len);
- 
-    size_t emb_shape[2] = { seq_len, embed_dim };
+
+    size_t emb_shape[2] = {seq_len, embed_dim};
     blt_tensor byte_emb = blt_tensor_create(arena, emb_shape, 2, BLT_DTYPE_FP32);
-    float* emb_data = (float*)byte_emb.data;
+    float *emb_data = (float *)byte_emb.data;
     memset(emb_data, 0, seq_len * embed_dim * sizeof(float));
- 
+
     blt_tensor out = blt_tensor_create(arena, emb_shape, 2, BLT_DTYPE_FP32);
- 
+
     blt_hash_ngram_forward(&weights, &config, &bytes_in, &byte_emb, &out);
- 
+
     TEST_ASSERT(out.shape[0] == seq_len);
     TEST_ASSERT(out.shape[1] == embed_dim);
- 
+
     /* Position 0 gets no n-gram contribution (neither n=3 nor n=4 has
        enough preceding bytes yet), so with a zero byte embedding and
        normalization it must be exactly zero. */
-    float* out_data = (float*)out.data;
+    float *out_data = (float *)out.data;
     for (size_t e = 0; e < embed_dim; e++) {
         TEST_ASSERT(out_data[0 * embed_dim + e] == 0.0f);
     }
- 
+
     /* Position 3 (0-indexed) has seen 4 bytes, so both n=3 and n=4
        n-grams are active; output should be nonzero somewhere in the row. */
     int nonzero_found = 0;
@@ -226,12 +214,10 @@ static int test_forward_long_sequence(void) {
         }
     }
     TEST_ASSERT(nonzero_found);
- 
+
     blt_arena_destroy(arena);
     return 1;
 }
- 
-
 
 // -------------------------------------------------------------------
 // Test 5: backward pass produces correctly-shaped gradients
@@ -240,51 +226,51 @@ static int test_forward_long_sequence(void) {
 
 static int test_backward_basic(void) {
     const size_t embed_dim = 4;
-    
-    blt_arena* arena = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
+
+    blt_arena *arena = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
     TEST_ASSERT(arena != NULL);
- 
+
     blt_hash_ngram_config config = make_test_config(embed_dim);
 
     size_t seq_len = 8;
-    size_t bytes_shape[1] = { seq_len };
+    size_t bytes_shape[1] = {seq_len};
     blt_tensor bytes_in = blt_tensor_create(arena, bytes_shape, 1, BLT_DTYPE_UINT8);
-    uint8_t* bytes_data = (uint8_t*)bytes_in.data;
-    const char* text = "function";
+    uint8_t *bytes_data = (uint8_t *)bytes_in.data;
+    const char *text = "function";
     memcpy(bytes_data, text, seq_len);
- 
-    size_t emb_shape[2] = { seq_len, embed_dim };
+
+    size_t emb_shape[2] = {seq_len, embed_dim};
     blt_tensor grad_out = blt_tensor_create(arena, emb_shape, 2, BLT_DTYPE_FP32);
-    float* grad_out_data = (float*)grad_out.data;
+    float *grad_out_data = (float *)grad_out.data;
     for (size_t i = 0; i < seq_len * embed_dim; i++) {
         grad_out_data[i] = 2.0f;
     }
- 
+
     blt_tensor grad_byte_emb = blt_tensor_create(arena, emb_shape, 2, BLT_DTYPE_FP32);
- 
+
     blt_tensor grad_tables[BLT_MAX_NGRAM_SIZES];
     for (size_t t = 0; t < config.num_ngram_sizes; t++) {
-        size_t table_shape[2] = { config.per_ngram_vocab, embed_dim };
+        size_t table_shape[2] = {config.per_ngram_vocab, embed_dim};
         grad_tables[t] = blt_tensor_create(arena, table_shape, 2, BLT_DTYPE_FP32);
         memset(grad_tables[t].data, 0, grad_tables[t].numel * sizeof(float));
     }
- 
+
     blt_hash_ngram_backward(&config, &bytes_in, &grad_out, &grad_byte_emb, grad_tables);
- 
+
     // grad_byte_emb should equal grad_out scaled by 1/(num_ngram_sizes+1)
     float scale = 1.0f / (float)(config.num_ngram_sizes + 1);
-    float* grad_byte_emb_data = (float*)grad_byte_emb.data;
+    float *grad_byte_emb_data = (float *)grad_byte_emb.data;
     for (size_t i = 0; i < seq_len * embed_dim; i++) {
         float expected = grad_out_data[i] * scale;
         float diff = grad_byte_emb_data[i] - expected;
         if (diff < 0) diff = -diff;
         TEST_ASSERT(diff < 1e-5f);
     }
- 
+
     // At least one table should have received a nonzero scatter-add.
     int nonzero_found = 0;
     for (size_t t = 0; t < config.num_ngram_sizes; t++) {
-        float* table_data = (float*)grad_tables[t].data;
+        float *table_data = (float *)grad_tables[t].data;
         for (size_t i = 0; i < grad_tables[t].numel; i++) {
             if (table_data[i] != 0.0f) {
                 nonzero_found = 1;
@@ -293,11 +279,10 @@ static int test_backward_basic(void) {
         }
     }
     TEST_ASSERT(nonzero_found);
- 
+
     blt_arena_destroy(arena);
     return 1;
 }
-
 
 // -------------------------------------------------------------------
 // Main Test Runner

@@ -15,25 +15,23 @@
 extern "C" {
 #endif
 
-void* blt_cuda_malloc(size_t bytes);
-void blt_cuda_free(void* ptr);
-void blt_cuda_memset(void* dst, int value, size_t bytes);
-void blt_cuda_memcpy_h2d(void* dst, const void* src, size_t bytes);
-void blt_cuda_memcpy_d2h(void* dst, const void* src, size_t bytes);
+void *blt_cuda_malloc(size_t bytes);
+void blt_cuda_free(void *ptr);
+void blt_cuda_memset(void *dst, int value, size_t bytes);
+void blt_cuda_memcpy_h2d(void *dst, const void *src, size_t bytes);
+void blt_cuda_memcpy_d2h(void *dst, const void *src, size_t bytes);
 
 // Scratch arena: avoids per-call cudaMalloc/free. 256MB, thread-local, init on first use.
-blt_arena* blt_cuda_get_scratch_arena(void);
+blt_arena *blt_cuda_get_scratch_arena(void);
 void blt_cuda_scratch_reset(void);
 
 // Flush stream + check for kernel errors.
 void blt_backend_pass_sync_cuda(void);
 
-void blt_rope_apply_packed_cuda(float* qkv_data, size_t qkv_stride,
-                                size_t head_offset, size_t seq_len,
-                                size_t head_dim, const float* cos, const float* sin);
-void blt_rope_apply_packed_backward_cuda(float* qkv_data, size_t qkv_stride,
-                                         size_t head_offset, size_t seq_len,
-                                         size_t head_dim, const float* cos, const float* sin);
+void blt_rope_apply_packed_cuda(float *qkv_data, size_t qkv_stride, size_t head_offset, size_t seq_len, size_t head_dim,
+                                const float *cos, const float *sin);
+void blt_rope_apply_packed_backward_cuda(float *qkv_data, size_t qkv_stride, size_t head_offset, size_t seq_len,
+                                         size_t head_dim, const float *cos, const float *sin);
 
 #ifdef __cplusplus
 }

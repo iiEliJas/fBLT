@@ -11,36 +11,35 @@
 //   glob.L<i>.<self 7>, dec.L<i>.<self 7>, dec.L<i>.<cross 5>,
 //   dec.lm_head, dec.d0_embed
 
-static const char* SELF_NAMES[] = {
+static const char *SELF_NAMES[] = {
     "norm1", "attn_qkv", "attn_proj", "norm2", "ffn_up", "ffn_gate", "ffn_down",
 };
 
-static const char* CROSS_NAMES[] = {
+static const char *CROSS_NAMES[] = {
     "cross_norm", "cross_q", "cross_k", "cross_v", "cross_proj",
 };
 
-static blt_tensor* self_tensor(blt_local_layer_storage* l, size_t j) {
-    blt_tensor* all[] = {
+static blt_tensor *self_tensor(blt_local_layer_storage *l, size_t j) {
+    blt_tensor *all[] = {
         &l->norm1_weight, &l->attn_qkv_w, &l->attn_proj_w, &l->norm2_weight,
-        &l->ffn_up_w, &l->ffn_gate_w, &l->ffn_down_w,
+        &l->ffn_up_w,     &l->ffn_gate_w, &l->ffn_down_w,
     };
     return all[j];
 }
 
-static blt_tensor* cross_tensor(blt_local_layer_storage* l, size_t j) {
-    blt_tensor* all[] = {
-        &l->cross_norm_weight, &l->cross_weight_q, &l->cross_weight_k,
-        &l->cross_weight_v, &l->cross_weight_proj,
+static blt_tensor *cross_tensor(blt_local_layer_storage *l, size_t j) {
+    blt_tensor *all[] = {
+        &l->cross_norm_weight, &l->cross_weight_q, &l->cross_weight_k, &l->cross_weight_v, &l->cross_weight_proj,
     };
     return all[j];
 }
 
-static blt_tensor* global_self_tensor(blt_transformer_layer_storage* l, size_t j) {
+static blt_tensor *global_self_tensor(blt_transformer_layer_storage *l, size_t j) {
     // Same field order as the local self-attention block.
-    return self_tensor((blt_local_layer_storage*)l, j);
+    return self_tensor((blt_local_layer_storage *)l, j);
 }
 
-size_t blt_model_num_tensors(const blt_model* model) {
+size_t blt_model_num_tensors(const blt_model *model) {
     const size_t L = model->config.encoder_config.num_layers;
     const size_t G = model->config.global_config.num_layers;
     const size_t D = model->config.decoder_config.num_layers;
@@ -48,14 +47,11 @@ size_t blt_model_num_tensors(const blt_model* model) {
     return 1 + NT + (L + D) * 12 + G * 7 + 2;
 }
 
-static void emit_name(char* buf, size_t cap, const char* prefix, size_t layer,
-                      const char* leaf) {
+static void emit_name(char *buf, size_t cap, const char *prefix, size_t layer, const char *leaf) {
     snprintf(buf, cap, "%s.L%zu.%s", prefix, layer, leaf);
 }
 
-
-void blt_model_tensor_at(const blt_model* model, size_t index,
-                         const char** name, blt_tensor** tensor) {
+void blt_model_tensor_at(const blt_model *model, size_t index, const char **name, blt_tensor **tensor) {
     static char name_buf[64];
     const size_t L = model->config.encoder_config.num_layers;
     const size_t G = model->config.global_config.num_layers;
@@ -140,40 +136,35 @@ void blt_model_tensor_at(const blt_model* model, size_t index,
         return;
     }
 
-    BLT_FATAL("checkpoint: tensor index %zu out of range (num=%zu)",
-              index, blt_model_num_tensors(model));
+    BLT_FATAL("checkpoint: tensor index %zu out of range (num=%zu)", index, blt_model_num_tensors(model));
 }
 
-static uint32_t tensor_ndim(const blt_tensor* t) {
-    return (uint32_t)t->ndim;
-}
+static uint32_t tensor_ndim(const blt_tensor *t) { return (uint32_t)t->ndim; }
 
 // Host staging for tensor payload I/O: device-resident models cannot fread/
 // fwrite their storage directly. CPU tensors take the memcpy paths inside
 // upload/download, so behavior there is unchanged.
-static void tensor_payload_write(const blt_tensor* t, FILE* f, const char* name,
-                                 const char* path) {
+static void tensor_payload_write(const blt_tensor *t, FILE *f, const char *name, const char *path) {
     if (t->backend == BLT_BACKEND_CPU) {
         if (fwrite(t->data, sizeof(float), t->numel, f) != t->numel)
             BLT_FATAL("checkpoint save: write failed at '%s' (%s)", name, path);
         return;
     }
-    float* stage = (float*)malloc(t->numel * sizeof(float));
+    float *stage = (float *)malloc(t->numel * sizeof(float));
     BLT_REQUIRE(stage != NULL, "checkpoint save: staging alloc failed");
     blt_tensor_download(t, stage, blt_tensor_bytes(t));
     const size_t wrote = fwrite(stage, sizeof(float), t->numel, f);
     free(stage);
-    if (wrote != t->numel)
-        BLT_FATAL("checkpoint save: write failed at '%s' (%s)", name, path);
+    if (wrote != t->numel) BLT_FATAL("checkpoint save: write failed at '%s' (%s)", name, path);
 }
 
-static void tensor_payload_read(blt_tensor* t, FILE* f, const char* name) {
+static void tensor_payload_read(blt_tensor *t, FILE *f, const char *name) {
     if (t->backend == BLT_BACKEND_CPU) {
         if (fread(t->data, sizeof(float), t->numel, f) != t->numel)
             BLT_FATAL("checkpoint load: '%s' truncated payload", name);
         return;
     }
-    float* stage = (float*)malloc(t->numel * sizeof(float));
+    float *stage = (float *)malloc(t->numel * sizeof(float));
     BLT_REQUIRE(stage != NULL, "checkpoint load: staging alloc failed");
     if (fread(stage, sizeof(float), t->numel, f) != t->numel) {
         free(stage);
@@ -183,30 +174,27 @@ static void tensor_payload_read(blt_tensor* t, FILE* f, const char* name) {
     free(stage);
 }
 
-void blt_model_save(const blt_model* model, const char* path) {
-    FILE* f = fopen(path, "wb");
+void blt_model_save(const blt_model *model, const char *path) {
+    FILE *f = fopen(path, "wb");
     if (!f) BLT_FATAL("checkpoint save: cannot open '%s'", path);
 
     const uint32_t version = 1;
     const uint32_t num = (uint32_t)blt_model_num_tensors(model);
 
-    if (fwrite("FBLT", 1, 4, f) != 4 ||
-        fwrite(&version, sizeof(uint32_t), 1, f) != 1 ||
+    if (fwrite("FBLT", 1, 4, f) != 4 || fwrite(&version, sizeof(uint32_t), 1, f) != 1 ||
         fwrite(&num, sizeof(uint32_t), 1, f) != 1) {
         BLT_FATAL("checkpoint save: header write failed (%s)", path);
     }
 
     for (uint32_t i = 0; i < num; i++) {
-        const char* name;
-        blt_tensor* t;
+        const char *name;
+        blt_tensor *t;
         blt_model_tensor_at(model, i, &name, &t);
 
         const uint16_t name_len = (uint16_t)strlen(name);
         const uint32_t ndim = tensor_ndim(t);
-        if (fwrite(&name_len, sizeof(uint16_t), 1, f) != 1 ||
-            fwrite(name, 1, name_len, f) != name_len ||
-            fwrite(&ndim, sizeof(uint32_t), 1, f) != 1 ||
-            fwrite(t->shape, sizeof(size_t), ndim, f) != ndim) {
+        if (fwrite(&name_len, sizeof(uint16_t), 1, f) != 1 || fwrite(name, 1, name_len, f) != name_len ||
+            fwrite(&ndim, sizeof(uint32_t), 1, f) != 1 || fwrite(t->shape, sizeof(size_t), ndim, f) != ndim) {
             BLT_FATAL("checkpoint save: write failed at '%s' (%s)", name, path);
         }
         tensor_payload_write(t, f, name, path);
@@ -215,61 +203,54 @@ void blt_model_save(const blt_model* model, const char* path) {
     fclose(f);
 }
 
-void blt_entropy_lm_save(const blt_entropy_lm* lm, const char* path) {
-    FILE* f = fopen(path, "wb");
+void blt_entropy_lm_save(const blt_entropy_lm *lm, const char *path) {
+    FILE *f = fopen(path, "wb");
     if (!f) BLT_FATAL("entropy lm save: cannot open '%s'", path);
 
     const uint32_t version = 1;
     const uint32_t num = 2 + lm->stack.num_layers * 7;
 
-    if (fwrite("FBLT", 1, 4, f) != 4 ||
-        fwrite(&version, sizeof(uint32_t), 1, f) != 1 ||
+    if (fwrite("FBLT", 1, 4, f) != 4 || fwrite(&version, sizeof(uint32_t), 1, f) != 1 ||
         fwrite(&num, sizeof(uint32_t), 1, f) != 1)
         BLT_FATAL("entropy lm save: header write failed (%s)", path);
 
     for (uint32_t i = 0; i < num; i++) {
-        blt_tensor* t;
+        blt_tensor *t;
         char namebuf[32];
-        const char* name;
+        const char *name;
         if (i == 0) {
             name = "ent.embed";
-            t = (blt_tensor*)&lm->embedding_weight;
+            t = (blt_tensor *)&lm->embedding_weight;
         } else if (i == num - 1) {
             name = "ent.lm_head";
-            t = (blt_tensor*)&lm->lm_head_weight;
+            t = (blt_tensor *)&lm->lm_head_weight;
         } else {
-            static const char* NAMES[] = {
-                "norm1", "attn_qkv", "attn_proj", "norm2",
-                "ffn_up", "ffn_gate", "ffn_down",
+            static const char *NAMES[] = {
+                "norm1", "attn_qkv", "attn_proj", "norm2", "ffn_up", "ffn_gate", "ffn_down",
             };
             const size_t layer = (i - 1) / 7;
-            snprintf(namebuf, sizeof(namebuf), "ent.L%zu.%s", layer,
-                     NAMES[(i - 1) % 7]);
+            snprintf(namebuf, sizeof(namebuf), "ent.L%zu.%s", layer, NAMES[(i - 1) % 7]);
             name = namebuf;
-            blt_transformer_layer_storage* l =
-                (blt_transformer_layer_storage*)&lm->stack.layer_storage[layer];
-            blt_tensor* all[] = {
-                &l->norm1_weight, &l->attn_qkv_w, &l->attn_proj_w,
-                &l->norm2_weight, &l->ffn_up_w, &l->ffn_gate_w,
-                &l->ffn_down_w,
+            blt_transformer_layer_storage *l = (blt_transformer_layer_storage *)&lm->stack.layer_storage[layer];
+            blt_tensor *all[] = {
+                &l->norm1_weight, &l->attn_qkv_w, &l->attn_proj_w, &l->norm2_weight,
+                &l->ffn_up_w,     &l->ffn_gate_w, &l->ffn_down_w,
             };
             t = all[(i - 1) % 7];
         }
 
         const uint16_t name_len = (uint16_t)strlen(name);
         const uint32_t ndim = (uint32_t)t->ndim;
-        if (fwrite(&name_len, sizeof(uint16_t), 1, f) != 1 ||
-            fwrite(name, 1, name_len, f) != name_len ||
-            fwrite(&ndim, sizeof(uint32_t), 1, f) != 1 ||
-            fwrite(t->shape, sizeof(size_t), ndim, f) != ndim)
+        if (fwrite(&name_len, sizeof(uint16_t), 1, f) != 1 || fwrite(name, 1, name_len, f) != name_len ||
+            fwrite(&ndim, sizeof(uint32_t), 1, f) != 1 || fwrite(t->shape, sizeof(size_t), ndim, f) != ndim)
             BLT_FATAL("entropy lm save: write failed at '%s'", name);
         tensor_payload_write(t, f, name, path);
     }
     fclose(f);
 }
 
-void blt_entropy_lm_load(blt_entropy_lm* lm, const char* path) {
-    FILE* f = fopen(path, "rb");
+void blt_entropy_lm_load(blt_entropy_lm *lm, const char *path) {
+    FILE *f = fopen(path, "rb");
     if (!f) BLT_FATAL("entropy lm load: cannot open '%s'", path);
 
     char magic[4];
@@ -283,7 +264,7 @@ void blt_entropy_lm_load(blt_entropy_lm* lm, const char* path) {
         BLT_FATAL("entropy lm load: tensor count %u != %u", num, want);
 
     for (uint32_t i = 0; i < num; i++) {
-        blt_tensor* t;
+        blt_tensor *t;
         char want_name[32];
         if (i == 0) {
             strcpy(want_name, "ent.embed");
@@ -292,18 +273,14 @@ void blt_entropy_lm_load(blt_entropy_lm* lm, const char* path) {
             strcpy(want_name, "ent.lm_head");
             t = &lm->lm_head_weight;
         } else {
-            static const char* NAMES[] = {
-                "norm1", "attn_qkv", "attn_proj", "norm2",
-                "ffn_up", "ffn_gate", "ffn_down",
+            static const char *NAMES[] = {
+                "norm1", "attn_qkv", "attn_proj", "norm2", "ffn_up", "ffn_gate", "ffn_down",
             };
-            snprintf(want_name, sizeof(want_name), "ent.L%zu.%s",
-                     (size_t)(i - 1) / 7, NAMES[(i - 1) % 7]);
-            blt_transformer_layer_storage* l =
-                &lm->stack.layer_storage[(i - 1) / 7];
-            blt_tensor* all[] = {
-                &l->norm1_weight, &l->attn_qkv_w, &l->attn_proj_w,
-                &l->norm2_weight, &l->ffn_up_w, &l->ffn_gate_w,
-                &l->ffn_down_w,
+            snprintf(want_name, sizeof(want_name), "ent.L%zu.%s", (size_t)(i - 1) / 7, NAMES[(i - 1) % 7]);
+            blt_transformer_layer_storage *l = &lm->stack.layer_storage[(i - 1) / 7];
+            blt_tensor *all[] = {
+                &l->norm1_weight, &l->attn_qkv_w, &l->attn_proj_w, &l->norm2_weight,
+                &l->ffn_up_w,     &l->ffn_gate_w, &l->ffn_down_w,
             };
             t = all[(i - 1) % 7];
         }
@@ -311,20 +288,16 @@ void blt_entropy_lm_load(blt_entropy_lm* lm, const char* path) {
         uint16_t name_len = 0;
         char name[256];
         uint32_t ndim = 0;
-        if (fread(&name_len, sizeof(uint16_t), 1, f) != 1 ||
-            fread(name, 1, name_len, f) != name_len ||
+        if (fread(&name_len, sizeof(uint16_t), 1, f) != 1 || fread(name, 1, name_len, f) != name_len ||
             fread(&ndim, sizeof(uint32_t), 1, f) != 1)
             BLT_FATAL("entropy lm load: truncated entry %u", i);
         name[name_len] = '\0';
         if (strcmp(name, want_name) != 0)
-            BLT_FATAL("entropy lm load: entry %u is '%s', expected '%s'",
-                      i, name, want_name);
-        if (ndim != t->ndim || ndim > BLT_MAX_NDIM)
-            BLT_FATAL("entropy lm load: '%s' ndim mismatch", name);
+            BLT_FATAL("entropy lm load: entry %u is '%s', expected '%s'", i, name, want_name);
+        if (ndim != t->ndim || ndim > BLT_MAX_NDIM) BLT_FATAL("entropy lm load: '%s' ndim mismatch", name);
         for (uint32_t d = 0; d < ndim; d++) {
             size_t dim = 0;
-            if (fread(&dim, sizeof(size_t), 1, f) != 1 ||
-                dim != t->shape[d])
+            if (fread(&dim, sizeof(size_t), 1, f) != 1 || dim != t->shape[d])
                 BLT_FATAL("entropy lm load: '%s' shape mismatch", name);
         }
         tensor_payload_read(t, f, name);
@@ -332,8 +305,8 @@ void blt_entropy_lm_load(blt_entropy_lm* lm, const char* path) {
     fclose(f);
 }
 
-void blt_model_load(blt_model* model, const char* path) {
-    FILE* f = fopen(path, "rb");
+void blt_model_load(blt_model *model, const char *path) {
+    FILE *f = fopen(path, "rb");
     if (!f) BLT_FATAL("checkpoint load: cannot open '%s'", path);
 
     char magic[4];
@@ -342,38 +315,33 @@ void blt_model_load(blt_model* model, const char* path) {
         BLT_FATAL("checkpoint load: bad magic in '%s'", path);
     if (fread(&version, sizeof(uint32_t), 1, f) != 1 || version != 1)
         BLT_FATAL("checkpoint load: unsupported version %u in '%s'", version, path);
-    if (fread(&num, sizeof(uint32_t), 1, f) != 1 ||
-        num != (uint32_t)blt_model_num_tensors(model))
-        BLT_FATAL("checkpoint load: tensor count %u != expected %zu ('%s')",
-                  num, blt_model_num_tensors(model), path);
+    if (fread(&num, sizeof(uint32_t), 1, f) != 1 || num != (uint32_t)blt_model_num_tensors(model))
+        BLT_FATAL("checkpoint load: tensor count %u != expected %zu ('%s')", num, blt_model_num_tensors(model), path);
 
     for (uint32_t i = 0; i < num; i++) {
-        const char* want_name;
-        blt_tensor* t;
+        const char *want_name;
+        blt_tensor *t;
         blt_model_tensor_at(model, i, &want_name, &t);
 
         uint16_t name_len = 0;
         char name[65536];
         uint32_t ndim = 0;
-        if (fread(&name_len, sizeof(uint16_t), 1, f) != 1 ||
-            fread(name, 1, name_len, f) != name_len ||
+        if (fread(&name_len, sizeof(uint16_t), 1, f) != 1 || fread(name, 1, name_len, f) != name_len ||
             fread(&ndim, sizeof(uint32_t), 1, f) != 1)
             BLT_FATAL("checkpoint load: truncated entry %u ('%.64s')", i, path);
         name[name_len] = '\0';
 
         if (strcmp(name, want_name) != 0)
-            BLT_FATAL("checkpoint load: entry %u is '%s', expected '%s' ('%.64s')",
-                      i, name, want_name, path);
+            BLT_FATAL("checkpoint load: entry %u is '%s', expected '%s' ('%.64s')", i, name, want_name, path);
         if (ndim != t->ndim || ndim > BLT_MAX_NDIM)
-            BLT_FATAL("checkpoint load: '%s' ndim %u != %u",
-                      name, ndim, (uint32_t)t->ndim);
+            BLT_FATAL("checkpoint load: '%s' ndim %u != %u", name, ndim, (uint32_t)t->ndim);
         for (uint32_t d = 0; d < ndim; d++) {
             size_t dim = 0;
-            if (fread(&dim, sizeof(size_t), 1, f) != 1)
-                BLT_FATAL("checkpoint load: '%s' truncated dims", name);
+            if (fread(&dim, sizeof(size_t), 1, f) != 1) BLT_FATAL("checkpoint load: '%s' truncated dims", name);
             if (dim != t->shape[d])
                 BLT_FATAL("checkpoint load: '%s' dim[%u] %zu != %zu "
-                          "(config mismatch?)", name, d, dim, t->shape[d]);
+                          "(config mismatch?)",
+                          name, d, dim, t->shape[d]);
         }
         tensor_payload_read(t, f, want_name);
     }

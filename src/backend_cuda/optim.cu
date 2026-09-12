@@ -8,7 +8,7 @@
 // correction terms are precomputed on the host so the kernel does a single
 // pass with no cross-element dependencies.
 
-static int blt_cuda_launch_check(const char* what) {
+static int blt_cuda_launch_check(const char *what) {
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         BLT_FATAL("%s failed: %s", what, cudaGetErrorString(err));
@@ -23,7 +23,7 @@ static unsigned blt_cuda_grid(size_t n) {
     return (unsigned)(blocks > 0 ? blocks : 1);
 }
 
-__global__ void blt_sgd_step_kernel(float* p, const float* g, float lr, size_t n) {
+__global__ void blt_sgd_step_kernel(float *p, const float *g, float lr, size_t n) {
     size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     const size_t stride = (size_t)gridDim.x * blockDim.x;
     for (; i < n; i += stride) {
@@ -31,16 +31,14 @@ __global__ void blt_sgd_step_kernel(float* p, const float* g, float lr, size_t n
     }
 }
 
-extern "C" void blt_sgd_step_cuda(blt_tensor* param, const blt_tensor* grad, float lr) {
-    blt_sgd_step_kernel<<<blt_cuda_grid(param->numel), 256>>>(
-        (float*)param->data, (const float*)grad->data, lr, param->numel);
+extern "C" void blt_sgd_step_cuda(blt_tensor *param, const blt_tensor *grad, float lr) {
+    blt_sgd_step_kernel<<<blt_cuda_grid(param->numel), 256>>>((float *)param->data, (const float *)grad->data, lr,
+                                                              param->numel);
     blt_cuda_launch_check("blt_sgd_step");
 }
 
-__global__ void blt_adamw_step_kernel(float* p, const float* g, float* m, float* v,
-                                      size_t n, float b1, float b2,
-                                      float bc1, float bc2,
-                                      float eps, float lr, float wd) {
+__global__ void blt_adamw_step_kernel(float *p, const float *g, float *m, float *v, size_t n, float b1, float b2,
+                                      float bc1, float bc2, float eps, float lr, float wd) {
     size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     const size_t stride = (size_t)gridDim.x * blockDim.x;
     for (; i < n; i += stride) {
@@ -54,13 +52,11 @@ __global__ void blt_adamw_step_kernel(float* p, const float* g, float* m, float*
     }
 }
 
-extern "C" void blt_adamw_step_cuda(blt_tensor* param, const blt_tensor* grad,
-                                    blt_tensor* exp_avg, blt_tensor* exp_avg_sq,
-                                    const blt_adamw_config* config) {
+extern "C" void blt_adamw_step_cuda(blt_tensor *param, const blt_tensor *grad, blt_tensor *exp_avg,
+                                    blt_tensor *exp_avg_sq, const blt_adamw_config *config) {
     BLT_REQUIRE(config != NULL, "blt_adamw_step: config must not be NULL");
     BLT_REQUIRE(config->step >= 1, "blt_adamw_step: step must be >= 1");
-    BLT_REQUIRE(config->beta1 > 0.0f && config->beta1 < 1.0f &&
-                config->beta2 > 0.0f && config->beta2 < 1.0f,
+    BLT_REQUIRE(config->beta1 > 0.0f && config->beta1 < 1.0f && config->beta2 > 0.0f && config->beta2 < 1.0f,
                 "blt_adamw_step: betas must be in (0, 1)");
 
     const float lr = config->lr;
@@ -69,10 +65,7 @@ extern "C" void blt_adamw_step_cuda(blt_tensor* param, const blt_tensor* grad,
     const float bc2 = 1.0f - powf(config->beta2, (float)config->step);
 
     blt_adamw_step_kernel<<<blt_cuda_grid(param->numel), 256>>>(
-        (float*)param->data, (const float*)grad->data,
-        (float*)exp_avg->data, (float*)exp_avg_sq->data,
-        param->numel, config->beta1, config->beta2,
-        bc1, bc2,
-        config->eps, lr, wd);
+        (float *)param->data, (const float *)grad->data, (float *)exp_avg->data, (float *)exp_avg_sq->data,
+        param->numel, config->beta1, config->beta2, bc1, bc2, config->eps, lr, wd);
     blt_cuda_launch_check("blt_adamw_step");
 }

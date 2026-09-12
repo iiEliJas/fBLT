@@ -8,8 +8,8 @@
 #include "blt/models/patcher.h"
 
 // Loader for FP32 tensors
-static int load_binary_tensor(const char* path, blt_arena* arena, blt_tensor* out_tensor) {
-    FILE* fp = fopen(path, "rb");
+static int load_binary_tensor(const char *path, blt_arena *arena, blt_tensor *out_tensor) {
+    FILE *fp = fopen(path, "rb");
     if (!fp) {
         fprintf(stderr, "failed to open %s\n", path);
         return 0;
@@ -42,7 +42,7 @@ static int load_binary_tensor(const char* path, blt_arena* arena, blt_tensor* ou
         return 0;
     }
 
-    float* data = (float*)out_tensor->data;
+    float *data = (float *)out_tensor->data;
     for (size_t i = 0; i < numel; ++i) {
         float value = 0.0f;
         if (fread(&value, sizeof(value), 1, fp) != 1) {
@@ -57,8 +57,8 @@ static int load_binary_tensor(const char* path, blt_arena* arena, blt_tensor* ou
 }
 
 // Loader for UINT8 Tensors (Used for bytes array)
-static int load_binary_tensor_uint8(const char* path, blt_arena* arena, blt_tensor* out_tensor) {
-    FILE* fp = fopen(path, "rb");
+static int load_binary_tensor_uint8(const char *path, blt_arena *arena, blt_tensor *out_tensor) {
+    FILE *fp = fopen(path, "rb");
     if (!fp) {
         fprintf(stderr, "failed to open %s\n", path);
         return 0;
@@ -91,7 +91,7 @@ static int load_binary_tensor_uint8(const char* path, blt_arena* arena, blt_tens
         return 0;
     }
 
-    uint8_t* data = (uint8_t*)out_tensor->data;
+    uint8_t *data = (uint8_t *)out_tensor->data;
     if (fread(data, 1, numel, fp) != numel) {
         fclose(fp);
         return 0;
@@ -102,8 +102,9 @@ static int load_binary_tensor_uint8(const char* path, blt_arena* arena, blt_tens
 }
 
 // Loader for reference boundary logic
-static int load_patch_boundaries(const char* path, size_t* starts, size_t* lengths, size_t max_patches, size_t* out_count) {
-    FILE* fp = fopen(path, "r");
+static int load_patch_boundaries(const char *path, size_t *starts, size_t *lengths, size_t max_patches,
+                                 size_t *out_count) {
+    FILE *fp = fopen(path, "r");
     if (!fp) {
         fprintf(stderr, "failed to open %s\n", path);
         return 0;
@@ -131,10 +132,8 @@ static int load_patch_boundaries(const char* path, size_t* starts, size_t* lengt
     return 1;
 }
 
-
-
 int run_patcher_parity_tests(void) {
-    blt_arena* arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
     if (!arena) {
         fprintf(stderr, "[FAIL] arena creation for patcher tests\n");
         return 0;
@@ -158,7 +157,8 @@ int run_patcher_parity_tests(void) {
         return 0;
     }
 
-    blt_tensor computed_entropy = blt_tensor_create(arena, expected_entropy.shape, expected_entropy.ndim, BLT_DTYPE_FP32);
+    blt_tensor computed_entropy =
+        blt_tensor_create(arena, expected_entropy.shape, expected_entropy.ndim, BLT_DTYPE_FP32);
     blt_entropy_config config = {0};
     config.vocab_size = probs.shape[1];
     config.use_log2 = true;
@@ -172,19 +172,21 @@ int run_patcher_parity_tests(void) {
 
     blt_compute_entropy(&probs, &computed_entropy, &config);
 
-    const float* got_entropy = (const float*)computed_entropy.data;
-    const float* want_entropy = (const float*)expected_entropy.data;
+    const float *got_entropy = (const float *)computed_entropy.data;
+    const float *want_entropy = (const float *)expected_entropy.data;
     for (size_t i = 0; i < computed_entropy.numel; ++i) {
         float diff = fabsf(got_entropy[i] - want_entropy[i]);
         if (diff > 1e-4f) {
-            fprintf(stderr, "[FAIL] entropy mismatch at %zu: got %.6f expected %.6f\n", i, got_entropy[i], want_entropy[i]);
+            fprintf(stderr, "[FAIL] entropy mismatch at %zu: got %.6f expected %.6f\n", i, got_entropy[i],
+                    want_entropy[i]);
             blt_arena_destroy(arena);
             return 0;
         }
     }
 
     size_t max_patches = 1024;
-    blt_patch_info* patches_out = (blt_patch_info*)blt_arena_alloc(arena, sizeof(blt_patch_info) * max_patches, sizeof(void*));
+    blt_patch_info *patches_out =
+        (blt_patch_info *)blt_arena_alloc(arena, sizeof(blt_patch_info) * max_patches, sizeof(void *));
     if (!patches_out) {
         fprintf(stderr, "[FAIL] patch output allocation\n");
         blt_arena_destroy(arena);
@@ -192,9 +194,9 @@ int run_patcher_parity_tests(void) {
     }
 
     // Pass the raw byte array data into segment patches[cite: 7]
-    const uint8_t* raw_bytes = (const uint8_t*)bytes_tensor.data;
+    const uint8_t *raw_bytes = (const uint8_t *)bytes_tensor.data;
     size_t num_patches = blt_segment_patches(&computed_entropy, raw_bytes, patches_out, max_patches, &p_config);
-    
+
     if (num_patches == 0) {
         fprintf(stderr, "[FAIL] patch segmentation produced zero patches\n");
         blt_arena_destroy(arena);
@@ -204,7 +206,8 @@ int run_patcher_parity_tests(void) {
     size_t expected_starts[1024];
     size_t expected_lengths[1024];
     size_t expected_count = 0;
-    if (!load_patch_boundaries("data/patcher_boundaries.txt", expected_starts, expected_lengths, 1024, &expected_count)) {
+    if (!load_patch_boundaries("data/patcher_boundaries.txt", expected_starts, expected_lengths, 1024,
+                               &expected_count)) {
         blt_arena_destroy(arena);
         return 0;
     }
@@ -217,8 +220,8 @@ int run_patcher_parity_tests(void) {
 
     for (size_t i = 0; i < num_patches; ++i) {
         if (patches_out[i].start_idx != expected_starts[i] || patches_out[i].length != expected_lengths[i]) {
-            fprintf(stderr, "[FAIL] patch[%zu] mismatch: got start=%zu length=%zu expected start=%zu length=%zu\n",
-                    i, patches_out[i].start_idx, patches_out[i].length, expected_starts[i], expected_lengths[i]);
+            fprintf(stderr, "[FAIL] patch[%zu] mismatch: got start=%zu length=%zu expected start=%zu length=%zu\n", i,
+                    patches_out[i].start_idx, patches_out[i].length, expected_starts[i], expected_lengths[i]);
             blt_arena_destroy(arena);
             return 0;
         }

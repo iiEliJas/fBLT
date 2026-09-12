@@ -8,8 +8,7 @@
 #include <stdalign.h>
 
 // Avoids rescanning doc_boundaries for every pair of positions.
-static void precompute_doc_ids(const size_t* doc_boundaries, size_t num_docs,
-                                size_t seq_len, size_t* doc_id_out) {
+static void precompute_doc_ids(const size_t *doc_boundaries, size_t num_docs, size_t seq_len, size_t *doc_id_out) {
     size_t doc_id = 0;
     for (size_t pos = 0; pos < seq_len; pos++) {
         while (doc_id + 1 < num_docs && pos >= doc_boundaries[doc_id]) {
@@ -19,10 +18,9 @@ static void precompute_doc_ids(const size_t* doc_boundaries, size_t num_docs,
     }
 }
 
-
-
-void blt_build_attention_mask_cpu(const blt_mask_config* config, blt_tensor* out_mask, blt_arena* arena) {
-    BLT_REQUIRE(arena->backend == BLT_BACKEND_CPU, "blt_build_attention_mask: CPU implementation called with non-CPU arena");
+void blt_build_attention_mask_cpu(const blt_mask_config *config, blt_tensor *out_mask, blt_arena *arena) {
+    BLT_REQUIRE(arena->backend == BLT_BACKEND_CPU,
+                "blt_build_attention_mask: CPU implementation called with non-CPU arena");
     BLT_REQUIRE(config != NULL, "blt_build_attention_mask: config is NULL");
     BLT_REQUIRE(out_mask != NULL, "blt_build_attention_mask: out_mask is NULL");
     BLT_REQUIRE(arena != NULL, "blt_build_attention_mask: arena is NULL");
@@ -36,14 +34,14 @@ void blt_build_attention_mask_cpu(const blt_mask_config* config, blt_tensor* out
 
     size_t shape[2] = {seq_len_q, seq_len_kv};
     *out_mask = blt_tensor_create(arena, shape, 2, BLT_DTYPE_FP32);
-    float* mask_data = (float*)out_mask->data;
+    float *mask_data = (float *)out_mask->data;
     const float neg_inf = -INFINITY;
 
-    size_t* doc_id_q = NULL;
-    size_t* doc_id_kv = NULL;
+    size_t *doc_id_q = NULL;
+    size_t *doc_id_kv = NULL;
     if (has_docs) {
-        doc_id_q = (size_t*)blt_arena_alloc(arena, seq_len_q * sizeof(size_t), alignof(size_t));
-        doc_id_kv = (size_t*)blt_arena_alloc(arena, seq_len_kv * sizeof(size_t), alignof(size_t));
+        doc_id_q = (size_t *)blt_arena_alloc(arena, seq_len_q * sizeof(size_t), alignof(size_t));
+        doc_id_kv = (size_t *)blt_arena_alloc(arena, seq_len_kv * sizeof(size_t), alignof(size_t));
         precompute_doc_ids(config->doc_boundaries, config->num_docs, seq_len_q, doc_id_q);
         precompute_doc_ids(config->doc_boundaries, config->num_docs, seq_len_kv, doc_id_kv);
     }
@@ -96,27 +94,25 @@ void blt_build_attention_mask_cpu(const blt_mask_config* config, blt_tensor* out
     }
 }
 
-
-void blt_build_block_diffusion_mask_cpu(const blt_block_diffusion_config* config,
-                                        blt_tensor* out_mask, blt_arena* arena) {
-    BLT_REQUIRE(arena->backend == BLT_BACKEND_CPU, "blt_build_block_diffusion_mask: CPU implementation called with non-CPU arena");
+void blt_build_block_diffusion_mask_cpu(const blt_block_diffusion_config *config, blt_tensor *out_mask,
+                                        blt_arena *arena) {
+    BLT_REQUIRE(arena->backend == BLT_BACKEND_CPU,
+                "blt_build_block_diffusion_mask: CPU implementation called with non-CPU arena");
     BLT_REQUIRE(config != NULL && out_mask != NULL && arena != NULL,
-        "blt_build_block_diffusion_mask: config, out_mask and arena cannot be NULL");
+                "blt_build_block_diffusion_mask: config, out_mask and arena cannot be NULL");
     const size_t S = config->seq_len;
     const size_t N = config->num_clean;
-    BLT_REQUIRE(S >= 1 && N >= 1 && N <= S,
-        "blt_build_block_diffusion_mask: need 1 <= num_clean <= seq_len");
+    BLT_REQUIRE(S >= 1 && N >= 1 && N <= S, "blt_build_block_diffusion_mask: need 1 <= num_clean <= seq_len");
 
     if (config->mode == BLT_BDM_TRAIN) {
-        BLT_REQUIRE(config->block_size >= 1,
-            "blt_build_block_diffusion_mask: TRAIN mode needs block_size >= 1");
+        BLT_REQUIRE(config->block_size >= 1, "blt_build_block_diffusion_mask: TRAIN mode needs block_size >= 1");
         BLT_REQUIRE((S - N) % config->block_size == 0,
-            "blt_build_block_diffusion_mask: block section must tile exactly (B * (M-1))");
+                    "blt_build_block_diffusion_mask: block section must tile exactly (B * (M-1))");
     }
 
     size_t shape[2] = {S, S};
     *out_mask = blt_tensor_create(arena, shape, 2, BLT_DTYPE_FP32);
-    float* m = (float*)out_mask->data;
+    float *m = (float *)out_mask->data;
     const float neg_inf = -INFINITY;
 
     for (size_t i = 0; i < S; i++) {

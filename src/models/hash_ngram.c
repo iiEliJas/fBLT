@@ -8,13 +8,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-
 // Rolling polynomial hash
 //
 // We precompute prime^n (mod modulus) to allow O(1) rolling updates later.
 // We validate that prime * modulus does not overflow uint64, ensuring all
 // subsequent multiplications remain safe.
-void blt_rolling_hash_init(blt_rolling_hash_state* state, size_t n, uint64_t prime, uint64_t modulus) {
+void blt_rolling_hash_init(blt_rolling_hash_state *state, size_t n, uint64_t prime, uint64_t modulus) {
     BLT_REQUIRE(state != NULL, "blt_rolling_hash_init: state is NULL");
     BLT_REQUIRE(n > 0 && n <= 8, "blt_rolling_hash_init: n must be in [1, 8]");
     BLT_REQUIRE(modulus > 1, "blt_rolling_hash_init: modulus must be > 1");
@@ -42,8 +41,7 @@ void blt_rolling_hash_init(blt_rolling_hash_state* state, size_t n, uint64_t pri
     state->current_hash = 0;
 }
 
-
-uint64_t blt_rolling_hash_update(blt_rolling_hash_state* state, uint8_t new_byte) {
+uint64_t blt_rolling_hash_update(blt_rolling_hash_state *state, uint8_t new_byte) {
     BLT_REQUIRE(state != NULL, "blt_rolling_hash_update: state is NULL");
 
     // Capture the byte about to be evicted before overwriting.
@@ -81,38 +79,33 @@ uint64_t blt_rolling_hash_update(blt_rolling_hash_state* state, uint8_t new_byte
     return state->current_hash;
 }
 
-
 // Byte-id tensors may live on either backend; hashing consumes the ids on
 // the host, so device-resident inputs are staged through a host copy.
-static const uint8_t* bytes_host(const blt_tensor* bytes_in, uint8_t** staging) {
+static const uint8_t *bytes_host(const blt_tensor *bytes_in, uint8_t **staging) {
     if (bytes_in->backend == BLT_BACKEND_CPU) {
         *staging = NULL;
-        return (const uint8_t*)bytes_in->data;
+        return (const uint8_t *)bytes_in->data;
     }
-    *staging = (uint8_t*)malloc(bytes_in->numel);
+    *staging = (uint8_t *)malloc(bytes_in->numel);
     BLT_REQUIRE(*staging != NULL, "bytes_host: staging alloc failed");
     blt_tensor_download(bytes_in, *staging, bytes_in->numel);
     return *staging;
 }
 
-
 // Allocates embedding tables and initializes them with small uniform random values.
 // Uses Uniform(-0.02, 0.02) instead of zero.
-blt_hash_ngram_weights blt_hash_ngram_create(blt_arena* arena, const blt_hash_ngram_config* config) {
+blt_hash_ngram_weights blt_hash_ngram_create(blt_arena *arena, const blt_hash_ngram_config *config) {
     BLT_REQUIRE(arena != NULL, "blt_hash_ngram_create: arena is NULL");
     BLT_REQUIRE(config != NULL, "blt_hash_ngram_create: config is NULL");
-    BLT_REQUIRE(config->num_ngram_sizes <= BLT_MAX_NGRAM_SIZES,
-                "blt_hash_ngram_create: num_ngram_sizes out of range");
+    BLT_REQUIRE(config->num_ngram_sizes <= BLT_MAX_NGRAM_SIZES, "blt_hash_ngram_create: num_ngram_sizes out of range");
     BLT_REQUIRE(config->num_ngram_sizes == 0 || config->per_ngram_vocab > 0,
                 "blt_hash_ngram_create: per_ngram_vocab must be > 0 when tables are used");
-    BLT_REQUIRE(config->embed_dim > 0,
-                "blt_hash_ngram_create: embed_dim must be > 0");
+    BLT_REQUIRE(config->embed_dim > 0, "blt_hash_ngram_create: embed_dim must be > 0");
 
     // num_ngram_sizes == 0 is valid: the module is disabled and contributes
     // nothing (forward/backward loop over zero tables).
     for (size_t i = 0; i < config->num_ngram_sizes; i++) {
-        BLT_REQUIRE(config->ngram_sizes[i] > 0 &&
-                    config->ngram_sizes[i] <= 8,
+        BLT_REQUIRE(config->ngram_sizes[i] > 0 && config->ngram_sizes[i] <= 8,
                     "blt_hash_ngram_create: ngram_sizes entries must be in [1, 8]");
     }
 
@@ -120,7 +113,7 @@ blt_hash_ngram_weights blt_hash_ngram_create(blt_arena* arena, const blt_hash_ng
     memset(&weights, 0, sizeof(weights));
     weights.num_tables = config->num_ngram_sizes;
 
-    const size_t shape[2] = { config->per_ngram_vocab, config->embed_dim };
+    const size_t shape[2] = {config->per_ngram_vocab, config->embed_dim};
     const float bound = 0.02f;
 
     for (size_t t = 0; t < config->num_ngram_sizes; t++) {
@@ -128,33 +121,26 @@ blt_hash_ngram_weights blt_hash_ngram_create(blt_arena* arena, const blt_hash_ng
 
         // Init runs on a host staging buffer: the arena may be device
         // memory, which cannot be written through its host pointer.
-        float* stage = (float*)malloc(weights.tables[t].numel * sizeof(float));
+        float *stage = (float *)malloc(weights.tables[t].numel * sizeof(float));
         BLT_REQUIRE(stage != NULL, "blt_hash_ngram_create: staging alloc failed");
         for (size_t i = 0; i < weights.tables[t].numel; i++) {
             float rand_float = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
             stage[i] = rand_float * bound;
         }
-        blt_tensor_upload(&weights.tables[t], stage,
-                          weights.tables[t].numel * sizeof(float));
+        blt_tensor_upload(&weights.tables[t], stage, weights.tables[t].numel * sizeof(float));
         free(stage);
     }
 
     return weights;
 }
 
-
 // Forward: out_i = byte_emb_i + sum_{n} Table_n[hash(b_{i-n+1...i})]
 // If normalize is true, the entire sum is divided by (K + 1), where K is
 // num_ngram_sizes:
 //   out_i = (1 / (K + 1)) * (byte_emb_i + sum_{n} Table_n[hash(...)])
 // Positions i < n-1 receive no contribution from the size-n table.
-void blt_hash_ngram_forward(
-    const blt_hash_ngram_weights* weights,
-    const blt_hash_ngram_config* config,
-    const blt_tensor* bytes_in,
-    const blt_tensor* byte_emb,
-    blt_tensor* out
-) {
+void blt_hash_ngram_forward(const blt_hash_ngram_weights *weights, const blt_hash_ngram_config *config,
+                            const blt_tensor *bytes_in, const blt_tensor *byte_emb, blt_tensor *out) {
 
     BLT_REQUIRE(weights != NULL, "blt_hash_ngram_forward: weights is NULL");
     BLT_REQUIRE(config != NULL, "blt_hash_ngram_forward: config is NULL");
@@ -167,29 +153,27 @@ void blt_hash_ngram_forward(
 
     const size_t seq_len = bytes_in->shape[0];
     const size_t embed_dim = config->embed_dim;
-    const size_t table_dims[2] = { config->per_ngram_vocab, embed_dim };
+    const size_t table_dims[2] = {config->per_ngram_vocab, embed_dim};
 
     {
-        const size_t dims[2] = { seq_len, embed_dim };
+        const size_t dims[2] = {seq_len, embed_dim};
         blt_check_nd_fp32(byte_emb, 2, dims, "blt_hash_ngram_forward: byte_emb");
         blt_check_nd_fp32(out, 2, dims, "blt_hash_ngram_forward: out");
     }
 
-    uint8_t* bytes_stage = NULL;
-    const uint8_t* bytes = bytes_host(bytes_in, &bytes_stage);
+    uint8_t *bytes_stage = NULL;
+    const uint8_t *bytes = bytes_host(bytes_in, &bytes_stage);
 
     // Copy base byte embeddings into out.
     const size_t total = seq_len * embed_dim;
-    blt_strided_copy(byte_emb->backend,
-                     (float*)out->data, total,
-                     (const float*)byte_emb->data, total, 1, total);
+    blt_strided_copy(byte_emb->backend, (float *)out->data, total, (const float *)byte_emb->data, total, 1, total);
 
     // Add n-gram contributions. Hashing is integer-only host work;
     // bucket indices feed a dispatched accumulate op so tables may live on
     // either backend.
-    uint32_t* idx = NULL;
+    uint32_t *idx = NULL;
     if (config->num_ngram_sizes > 0) {
-        idx = (uint32_t*)malloc(seq_len * sizeof(uint32_t));
+        idx = (uint32_t *)malloc(seq_len * sizeof(uint32_t));
         BLT_REQUIRE(idx != NULL, "blt_hash_ngram_forward: failed to allocate index buffer");
     }
     for (size_t n_idx = 0; n_idx < config->num_ngram_sizes; n_idx++) {
@@ -198,8 +182,7 @@ void blt_hash_ngram_forward(
             continue;
         }
 
-        blt_check_nd_fp32(&weights->tables[n_idx], 2, table_dims,
-                          "blt_hash_ngram_forward: weights->tables");
+        blt_check_nd_fp32(&weights->tables[n_idx], 2, table_dims, "blt_hash_ngram_forward: weights->tables");
 
         blt_rolling_hash_state state;
         blt_rolling_hash_init(&state, n, config->hash_prime, config->per_ngram_vocab);
@@ -220,17 +203,11 @@ void blt_hash_ngram_forward(
     }
 }
 
-
 // Backward: dL/d_byte_emb = (1 / (K + 1)) * dL/d_out
 //            dL/d_Table_n[hash] += (1 / (K + 1)) * dL/d_out_i
 // Same hash bucket can be hit by multiple positions, so scatter-add gradients.
-void blt_hash_ngram_backward(
-    const blt_hash_ngram_config* config,
-    const blt_tensor* bytes_in,
-    const blt_tensor* grad_out,
-    blt_tensor* grad_byte_emb,
-    blt_tensor* grad_tables
-) {
+void blt_hash_ngram_backward(const blt_hash_ngram_config *config, const blt_tensor *bytes_in,
+                             const blt_tensor *grad_out, blt_tensor *grad_byte_emb, blt_tensor *grad_tables) {
 
     BLT_REQUIRE(config != NULL, "blt_hash_ngram_backward: config is NULL");
     BLT_REQUIRE(bytes_in != NULL, "blt_hash_ngram_backward: bytes_in is NULL");
@@ -243,24 +220,24 @@ void blt_hash_ngram_backward(
 
     const size_t seq_len = bytes_in->shape[0];
     const size_t embed_dim = config->embed_dim;
-    const size_t table_dims[2] = { config->per_ngram_vocab, embed_dim };
+    const size_t table_dims[2] = {config->per_ngram_vocab, embed_dim};
 
     {
-        const size_t dims[2] = { seq_len, embed_dim };
+        const size_t dims[2] = {seq_len, embed_dim};
         blt_check_nd_fp32(grad_out, 2, dims, "blt_hash_ngram_backward: grad_out");
         blt_check_nd_fp32(grad_byte_emb, 2, dims, "blt_hash_ngram_backward: grad_byte_emb");
     }
 
-    uint8_t* bytes_stage = NULL;
-    const uint8_t* bytes = bytes_host(bytes_in, &bytes_stage);
+    uint8_t *bytes_stage = NULL;
+    const uint8_t *bytes = bytes_host(bytes_in, &bytes_stage);
 
     float scale = config->normalize ? 1.0f / (float)(config->num_ngram_sizes + 1) : 1.0f;
 
     // Scatter-add scaled grad_out into grad_tables via dispatched ops;
     // hashing stays on the host (integer-only).
-    uint32_t* idx = NULL;
+    uint32_t *idx = NULL;
     if (config->num_ngram_sizes > 0) {
-        idx = (uint32_t*)malloc(seq_len * sizeof(uint32_t));
+        idx = (uint32_t *)malloc(seq_len * sizeof(uint32_t));
         BLT_REQUIRE(idx != NULL, "blt_hash_ngram_backward: failed to allocate index buffer");
     }
     for (size_t n_idx = 0; n_idx < config->num_ngram_sizes; n_idx++) {
@@ -269,8 +246,7 @@ void blt_hash_ngram_backward(
             continue;
         }
 
-        blt_check_nd_fp32(&grad_tables[n_idx], 2, table_dims,
-                          "blt_hash_ngram_backward: grad_tables");
+        blt_check_nd_fp32(&grad_tables[n_idx], 2, table_dims, "blt_hash_ngram_backward: grad_tables");
 
         blt_rolling_hash_state state;
         blt_rolling_hash_init(&state, n, config->hash_prime, config->per_ngram_vocab);

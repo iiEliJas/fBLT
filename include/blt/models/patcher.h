@@ -11,12 +11,7 @@ extern "C" {
 #include "blt/core/tensor.h"
 #include "blt/models/entropy.h"
 
-
-typedef enum {
-    BLT_PATCH_RULE_GLOBAL,
-    BLT_PATCH_RULE_MONOTONIC,
-    BLT_PATCH_RULE_BOTH
-} blt_patch_rule;
+typedef enum { BLT_PATCH_RULE_GLOBAL, BLT_PATCH_RULE_MONOTONIC, BLT_PATCH_RULE_BOTH } blt_patch_rule;
 
 typedef struct {
     size_t start_idx;
@@ -32,12 +27,10 @@ typedef struct {
     bool reset_on_newline;
 } blt_patcher_config;
 
-
 // Segments a byte sequence into patches using entropy thresholds.
 // `entropy`: 1D [seq_len], `patches_out`: caller-allocated array, returns patch count.
-size_t blt_segment_patches( const blt_tensor* entropy, const uint8_t* bytes, blt_patch_info* patches_out,
-                            size_t max_patches, const blt_patcher_config* config
-);
+size_t blt_segment_patches(const blt_tensor *entropy, const uint8_t *bytes, blt_patch_info *patches_out,
+                           size_t max_patches, const blt_patcher_config *config);
 
 #ifdef __cplusplus
 }

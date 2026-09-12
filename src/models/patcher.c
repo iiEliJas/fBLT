@@ -3,10 +3,8 @@
 
 #include <string.h>
 
-static int blt_patch_boundary(size_t i, size_t patch_start, size_t patch_len,
-                               const float* entropy_data, const uint8_t* bytes,
-                               const blt_patcher_config* config)
-{
+static int blt_patch_boundary(size_t i, size_t patch_start, size_t patch_len, const float *entropy_data,
+                              const uint8_t *bytes, const blt_patcher_config *config) {
     // Rule 1: Structural context reset
     if (bytes && config->reset_on_newline && bytes[i] == 0x0A) {
         return 1;
@@ -21,26 +19,23 @@ static int blt_patch_boundary(size_t i, size_t patch_start, size_t patch_len,
     float current_entropy = entropy_data[i];
 
     switch (config->rule) {
-        case BLT_PATCH_RULE_GLOBAL:
-            return current_entropy > config->threshold_global;
+    case BLT_PATCH_RULE_GLOBAL:
+        return current_entropy > config->threshold_global;
 
-        case BLT_PATCH_RULE_MONOTONIC:
-            return (i > patch_start) &&
-                   ((current_entropy - entropy_data[i - 1]) > config->threshold_monotonic);
+    case BLT_PATCH_RULE_MONOTONIC:
+        return (i > patch_start) && ((current_entropy - entropy_data[i - 1]) > config->threshold_monotonic);
 
-        case BLT_PATCH_RULE_BOTH:
-            return (current_entropy > config->threshold_global) ||
-                   ((i > patch_start) &&
-                    ((current_entropy - entropy_data[i - 1]) > config->threshold_monotonic));
+    case BLT_PATCH_RULE_BOTH:
+        return (current_entropy > config->threshold_global) ||
+               ((i > patch_start) && ((current_entropy - entropy_data[i - 1]) > config->threshold_monotonic));
 
-        default:
-            return 0;
+    default:
+        return 0;
     }
 }
 
-static int blt_patch_emit(blt_patch_info* patches_out, size_t max_patches, size_t* patch_count,
-                           size_t start_idx, size_t length, float peak_entropy)
-{
+static int blt_patch_emit(blt_patch_info *patches_out, size_t max_patches, size_t *patch_count, size_t start_idx,
+                          size_t length, float peak_entropy) {
     if (*patch_count >= max_patches) {
         return 0;
     }
@@ -55,8 +50,8 @@ static int blt_patch_emit(blt_patch_info* patches_out, size_t max_patches, size_
 // Boundary at index i if: newline reset, max length, H_i > threshold, or
 // (H_i - H_{i-1}) > monotonic threshold.
 
-size_t blt_segment_patches(const blt_tensor* entropy, const uint8_t* bytes, blt_patch_info* patches_out,
-                            size_t max_patches, const blt_patcher_config* config){
+size_t blt_segment_patches(const blt_tensor *entropy, const uint8_t *bytes, blt_patch_info *patches_out,
+                           size_t max_patches, const blt_patcher_config *config) {
     blt_check_nd_fp32(entropy, 1, (const size_t[]){0}, "Entropy tensor must be 1D");
     BLT_REQUIRE(entropy->numel != 0, "Entropy tensor must not be empty");
     BLT_REQUIRE(config != NULL, "Config must not be null");
@@ -64,7 +59,7 @@ size_t blt_segment_patches(const blt_tensor* entropy, const uint8_t* bytes, blt_
 
     size_t seq_len = entropy->numel;
     size_t patch_count = 0;
-    const float* entropy_data = (const float*)entropy->data;
+    const float *entropy_data = (const float *)entropy->data;
 
     size_t current_patch_start = 0;
     size_t current_patch_len = 1;
@@ -72,8 +67,8 @@ size_t blt_segment_patches(const blt_tensor* entropy, const uint8_t* bytes, blt_
 
     for (size_t i = 1; i < seq_len; ++i) {
         if (blt_patch_boundary(i, current_patch_start, current_patch_len, entropy_data, bytes, config)) {
-            if (!blt_patch_emit(patches_out, max_patches, &patch_count,
-                                 current_patch_start, current_patch_len, current_peak_entropy)) {
+            if (!blt_patch_emit(patches_out, max_patches, &patch_count, current_patch_start, current_patch_len,
+                                current_peak_entropy)) {
                 BLT_WARN("Reached maximum number of patches (%zu)", max_patches);
                 break;
             }
@@ -89,8 +84,8 @@ size_t blt_segment_patches(const blt_tensor* entropy, const uint8_t* bytes, blt_
         }
     }
 
-    if (!blt_patch_emit(patches_out, max_patches, &patch_count,
-                         current_patch_start, current_patch_len, current_peak_entropy)) {
+    if (!blt_patch_emit(patches_out, max_patches, &patch_count, current_patch_start, current_patch_len,
+                        current_peak_entropy)) {
         BLT_WARN("Reached maximum number of patches (%zu) while closing final patch", max_patches);
     }
 

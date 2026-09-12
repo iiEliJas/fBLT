@@ -5,7 +5,7 @@
 #include "test_suite.h"
 
 int run_allocator_core_tests(void) {
-    blt_arena* arena = blt_arena_create(4096, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(4096, BLT_BACKEND_CPU);
     if (!arena) {
         fprintf(stderr, "[FAIL] arena creation\n");
         return 0;
@@ -19,7 +19,7 @@ int run_allocator_core_tests(void) {
     TEST_ASSERT(tensor.shape[1] == 3);
     TEST_ASSERT(tensor.data != NULL);
 
-    ((float*)tensor.data)[0] = 1.0f;
+    ((float *)tensor.data)[0] = 1.0f;
     blt_arena_reset(arena);
     TEST_ASSERT(arena->offset == 0);
 

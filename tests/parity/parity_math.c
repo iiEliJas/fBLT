@@ -7,10 +7,8 @@
 #include "test_helpers.h"
 #include "test_suite.h"
 
-
-
 int run_softmax_parity_test(void) {
-    blt_arena* arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
     blt_tensor input = {0};
     blt_tensor expected = {0};
     blt_tensor output = {0};
@@ -30,13 +28,11 @@ int run_softmax_parity_test(void) {
     return ok;
 }
 
-
-
 // ---------------------------------------------------------------
 // Matmul parity test
-      
+
 int run_matmul_parity_test(void) {
-    blt_arena* arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
     blt_tensor a = {0};
     blt_tensor b = {0};
     blt_tensor out = {0};

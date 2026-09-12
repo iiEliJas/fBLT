@@ -12,7 +12,6 @@
 #include "blt/infer/rope_gather.h"
 #include "blt/ops/rope.h"
 
-
 //----------------------------------------------------------------------
 // Test: rope position gather.
 //
@@ -20,7 +19,7 @@
 // positions, in request order, with correct output shape.
 
 int run_rope_position_gather_test(void) {
-    blt_arena* arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
     TEST_ASSERT(arena != NULL);
 
     const size_t max_seq_len = 16;
@@ -35,7 +34,7 @@ int run_rope_position_gather_test(void) {
     blt_rope_precompute(max_seq_len, &rope_cfg, &cos_cache, &sin_cache);
 
     const size_t n = 4;
-    size_t positions[4] = {5, 0, 15, 5};   // includes repeat + boundaries
+    size_t positions[4] = {5, 0, 15, 5}; // includes repeat + boundaries
 
     blt_tensor cos_out, sin_out;
     blt_rope_position_gather(&cos_cache, &sin_cache, positions, n, &cos_out, &sin_out, arena);
@@ -43,10 +42,10 @@ int run_rope_position_gather_test(void) {
     TEST_ASSERT(cos_out.ndim == 2 && cos_out.shape[0] == n && cos_out.shape[1] == half);
     TEST_ASSERT(sin_out.ndim == 2 && sin_out.shape[0] == n && sin_out.shape[1] == half);
 
-    const float* cos_src = (const float*)cos_cache.data;
-    const float* sin_src = (const float*)sin_cache.data;
-    const float* cos_dst = (const float*)cos_out.data;
-    const float* sin_dst = (const float*)sin_out.data;
+    const float *cos_src = (const float *)cos_cache.data;
+    const float *sin_src = (const float *)sin_cache.data;
+    const float *cos_dst = (const float *)cos_out.data;
+    const float *sin_dst = (const float *)sin_out.data;
 
     for (size_t i = 0; i < n; i++) {
         for (size_t j = 0; j < half; j++) {
@@ -62,7 +61,6 @@ int run_rope_position_gather_test(void) {
     blt_arena_destroy(arena);
     return 1;
 }
-
 
 //----------------------------------------------------------------------
 // Test: infer stats accounting helpers.

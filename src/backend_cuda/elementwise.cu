@@ -8,7 +8,7 @@
 // Grid-stride elementwise kernels; fp32 math mirrors the CPU reference
 // expression-for-expression so results agree to within transcendental ulps.
 
-__global__ void blt_add_kernel(const float* a, const float* b, float* out, size_t n) {
+__global__ void blt_add_kernel(const float *a, const float *b, float *out, size_t n) {
     size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = (size_t)gridDim.x * blockDim.x;
     for (; i < n; i += stride) {
@@ -16,7 +16,7 @@ __global__ void blt_add_kernel(const float* a, const float* b, float* out, size_
     }
 }
 
-__global__ void blt_mul_kernel(const float* a, const float* b, float* out, size_t n) {
+__global__ void blt_mul_kernel(const float *a, const float *b, float *out, size_t n) {
     size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = (size_t)gridDim.x * blockDim.x;
     for (; i < n; i += stride) {
@@ -24,7 +24,7 @@ __global__ void blt_mul_kernel(const float* a, const float* b, float* out, size_
     }
 }
 
-__global__ void blt_scale_kernel(float* t, float scalar, size_t n) {
+__global__ void blt_scale_kernel(float *t, float scalar, size_t n) {
     size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = (size_t)gridDim.x * blockDim.x;
     for (; i < n; i += stride) {
@@ -32,7 +32,7 @@ __global__ void blt_scale_kernel(float* t, float scalar, size_t n) {
     }
 }
 
-__global__ void blt_gelu_forward_kernel(const float* x, float* out, size_t n) {
+__global__ void blt_gelu_forward_kernel(const float *x, float *out, size_t n) {
     size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = (size_t)gridDim.x * blockDim.x;
     for (; i < n; i += stride) {
@@ -43,7 +43,7 @@ __global__ void blt_gelu_forward_kernel(const float* x, float* out, size_t n) {
     }
 }
 
-__global__ void blt_gelu_backward_kernel(const float* grad_out, const float* x, float* grad_x, size_t n) {
+__global__ void blt_gelu_backward_kernel(const float *grad_out, const float *x, float *grad_x, size_t n) {
     size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = (size_t)gridDim.x * blockDim.x;
     const float k0 = 0.7978845608f;
@@ -60,7 +60,7 @@ __global__ void blt_gelu_backward_kernel(const float* grad_out, const float* x, 
     }
 }
 
-__global__ void blt_swiglu_forward_kernel(const float* gate, const float* up, float* out, size_t n) {
+__global__ void blt_swiglu_forward_kernel(const float *gate, const float *up, float *out, size_t n) {
     size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = (size_t)gridDim.x * blockDim.x;
     for (; i < n; i += stride) {
@@ -70,8 +70,8 @@ __global__ void blt_swiglu_forward_kernel(const float* gate, const float* up, fl
     }
 }
 
-__global__ void blt_swiglu_backward_kernel(const float* grad_out, const float* gate, const float* up,
-                                           float* grad_gate, float* grad_up, size_t n) {
+__global__ void blt_swiglu_backward_kernel(const float *grad_out, const float *gate, const float *up, float *grad_gate,
+                                           float *grad_up, size_t n) {
     size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = (size_t)gridDim.x * blockDim.x;
     for (; i < n; i += stride) {
@@ -84,7 +84,7 @@ __global__ void blt_swiglu_backward_kernel(const float* grad_out, const float* g
     }
 }
 
-static int blt_cuda_launch_check(const char* what) {
+static int blt_cuda_launch_check(const char *what) {
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         BLT_FATAL("%s failed: %s", what, cudaGetErrorString(err));
@@ -99,50 +99,49 @@ static unsigned blt_cuda_grid(size_t n) {
     return (unsigned)blocks;
 }
 
-extern "C" void blt_add_cuda(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
-    blt_add_kernel<<<blt_cuda_grid(out->numel), 256>>>(
-        (const float*)a->data, (const float*)b->data, (float*)out->data, out->numel);
+extern "C" void blt_add_cuda(const blt_tensor *a, const blt_tensor *b, blt_tensor *out) {
+    blt_add_kernel<<<blt_cuda_grid(out->numel), 256>>>((const float *)a->data, (const float *)b->data,
+                                                       (float *)out->data, out->numel);
     blt_cuda_launch_check("blt_add");
 }
 
-extern "C" void blt_mul_cuda(const blt_tensor* a, const blt_tensor* b, blt_tensor* out) {
-    blt_mul_kernel<<<blt_cuda_grid(out->numel), 256>>>(
-        (const float*)a->data, (const float*)b->data, (float*)out->data, out->numel);
+extern "C" void blt_mul_cuda(const blt_tensor *a, const blt_tensor *b, blt_tensor *out) {
+    blt_mul_kernel<<<blt_cuda_grid(out->numel), 256>>>((const float *)a->data, (const float *)b->data,
+                                                       (float *)out->data, out->numel);
     blt_cuda_launch_check("blt_mul");
 }
 
-extern "C" void blt_scale_cuda(blt_tensor* t, float scalar) {
-    blt_scale_kernel<<<blt_cuda_grid(t->numel), 256>>>((float*)t->data, scalar, t->numel);
+extern "C" void blt_scale_cuda(blt_tensor *t, float scalar) {
+    blt_scale_kernel<<<blt_cuda_grid(t->numel), 256>>>((float *)t->data, scalar, t->numel);
     blt_cuda_launch_check("blt_scale");
 }
 
-extern "C" void blt_gelu_forward_cuda(const blt_tensor* x, blt_tensor* out) {
-    blt_gelu_forward_kernel<<<blt_cuda_grid(x->numel), 256>>>(
-        (const float*)x->data, (float*)out->data, x->numel);
+extern "C" void blt_gelu_forward_cuda(const blt_tensor *x, blt_tensor *out) {
+    blt_gelu_forward_kernel<<<blt_cuda_grid(x->numel), 256>>>((const float *)x->data, (float *)out->data, x->numel);
     blt_cuda_launch_check("blt_gelu_forward");
 }
 
-extern "C" void blt_gelu_backward_cuda(const blt_tensor* grad_out, const blt_tensor* x, blt_tensor* grad_x) {
-    blt_gelu_backward_kernel<<<blt_cuda_grid(x->numel), 256>>>(
-        (const float*)grad_out->data, (const float*)x->data, (float*)grad_x->data, x->numel);
+extern "C" void blt_gelu_backward_cuda(const blt_tensor *grad_out, const blt_tensor *x, blt_tensor *grad_x) {
+    blt_gelu_backward_kernel<<<blt_cuda_grid(x->numel), 256>>>((const float *)grad_out->data, (const float *)x->data,
+                                                               (float *)grad_x->data, x->numel);
     blt_cuda_launch_check("blt_gelu_backward");
 }
 
-extern "C" void blt_swiglu_forward_cuda(const blt_tensor* gate, const blt_tensor* up, blt_tensor* out) {
-    blt_swiglu_forward_kernel<<<blt_cuda_grid(gate->numel), 256>>>(
-        (const float*)gate->data, (const float*)up->data, (float*)out->data, gate->numel);
+extern "C" void blt_swiglu_forward_cuda(const blt_tensor *gate, const blt_tensor *up, blt_tensor *out) {
+    blt_swiglu_forward_kernel<<<blt_cuda_grid(gate->numel), 256>>>((const float *)gate->data, (const float *)up->data,
+                                                                   (float *)out->data, gate->numel);
     blt_cuda_launch_check("blt_swiglu_forward");
 }
 
-extern "C" void blt_swiglu_backward_cuda(const blt_tensor* grad_out, const blt_tensor* gate,
-                                         const blt_tensor* up, blt_tensor* grad_gate, blt_tensor* grad_up) {
+extern "C" void blt_swiglu_backward_cuda(const blt_tensor *grad_out, const blt_tensor *gate, const blt_tensor *up,
+                                         blt_tensor *grad_gate, blt_tensor *grad_up) {
     blt_swiglu_backward_kernel<<<blt_cuda_grid(gate->numel), 256>>>(
-        (const float*)grad_out->data, (const float*)gate->data, (const float*)up->data,
-        (float*)grad_gate->data, (float*)grad_up->data, gate->numel);
+        (const float *)grad_out->data, (const float *)gate->data, (const float *)up->data, (float *)grad_gate->data,
+        (float *)grad_up->data, gate->numel);
     blt_cuda_launch_check("blt_swiglu_backward");
 }
 
-__global__ void blt_scaled_copy_kernel(float* dst, const float* src, float scalar, size_t n) {
+__global__ void blt_scaled_copy_kernel(float *dst, const float *src, float scalar, size_t n) {
     size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
     size_t stride = (size_t)gridDim.x * blockDim.x;
     for (; i < n; i += stride) {
@@ -150,10 +149,10 @@ __global__ void blt_scaled_copy_kernel(float* dst, const float* src, float scala
     }
 }
 
-extern "C" void blt_scaled_copy_cuda(blt_tensor* dst, const blt_tensor* src, float scalar) {
+extern "C" void blt_scaled_copy_cuda(blt_tensor *dst, const blt_tensor *src, float scalar) {
     BLT_REQUIRE(dst->backend == BLT_BACKEND_CUDA && src->backend == BLT_BACKEND_CUDA,
                 "blt_scaled_copy: CUDA implementation called with non-CUDA tensors");
-    blt_scaled_copy_kernel<<<blt_cuda_grid(dst->numel), 256>>>(
-        (float*)dst->data, (const float*)src->data, scalar, dst->numel);
+    blt_scaled_copy_kernel<<<blt_cuda_grid(dst->numel), 256>>>((float *)dst->data, (const float *)src->data, scalar,
+                                                               dst->numel);
     blt_cuda_launch_check("blt_scaled_copy");
 }

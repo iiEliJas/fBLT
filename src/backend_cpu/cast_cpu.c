@@ -25,13 +25,13 @@ static float bf16_bits_to_fp32(uint16_t h) {
     return result;
 }
 
-void blt_cast_cpu(const blt_tensor* in, blt_tensor* out) {
+void blt_cast_cpu(const blt_tensor *in, blt_tensor *out) {
     BLT_REQUIRE(in != NULL && out != NULL, "blt_cast: in and out must not be NULL");
     BLT_REQUIRE(in->numel == out->numel, "blt_cast: in and out must have the same numel");
 
     if (in->dtype == BLT_DTYPE_FP32 && out->dtype == BLT_DTYPE_BF16) {
-        const float* src = (const float*)in->data;
-        uint16_t* dst = (uint16_t*)out->data;
+        const float *src = (const float *)in->data;
+        uint16_t *dst = (uint16_t *)out->data;
         for (size_t i = 0; i < in->numel; ++i) {
             dst[i] = fp32_to_bf16_bits(src[i]);
         }
@@ -39,8 +39,8 @@ void blt_cast_cpu(const blt_tensor* in, blt_tensor* out) {
     }
 
     if (in->dtype == BLT_DTYPE_BF16 && out->dtype == BLT_DTYPE_FP32) {
-        const uint16_t* src = (const uint16_t*)in->data;
-        float* dst = (float*)out->data;
+        const uint16_t *src = (const uint16_t *)in->data;
+        float *dst = (float *)out->data;
         for (size_t i = 0; i < in->numel; ++i) {
             dst[i] = bf16_bits_to_fp32(src[i]);
         }

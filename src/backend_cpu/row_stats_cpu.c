@@ -3,14 +3,14 @@
 
 #include <math.h>
 
-void blt_entropy_rows_cpu(const blt_tensor* probs, blt_tensor* entropy_out, int use_log2) {
+void blt_entropy_rows_cpu(const blt_tensor *probs, blt_tensor *entropy_out, int use_log2) {
     BLT_REQUIRE(probs->backend == BLT_BACKEND_CPU && entropy_out->backend == BLT_BACKEND_CPU,
                 "blt_entropy_rows: CPU implementation called with non-CPU tensors");
     const size_t rows = probs->shape[0];
     const size_t vocab = probs->shape[1];
 
-    const float* p = (const float*)probs->data;
-    float* out = (float*)entropy_out->data;
+    const float *p = (const float *)probs->data;
+    float *out = (float *)entropy_out->data;
     for (size_t i = 0; i < rows; ++i) {
         float entropy = 0.0f;
         for (size_t j = 0; j < vocab; ++j) {
@@ -27,13 +27,12 @@ void blt_entropy_rows_cpu(const blt_tensor* probs, blt_tensor* entropy_out, int 
     }
 }
 
-void blt_argmax_rows_cpu(const blt_tensor* logits, uint32_t* out_ids_host) {
-    BLT_REQUIRE(logits->backend == BLT_BACKEND_CPU,
-                "blt_argmax_rows: CPU implementation called with non-CPU tensor");
+void blt_argmax_rows_cpu(const blt_tensor *logits, uint32_t *out_ids_host) {
+    BLT_REQUIRE(logits->backend == BLT_BACKEND_CPU, "blt_argmax_rows: CPU implementation called with non-CPU tensor");
     const size_t rows = logits->shape[0];
     const size_t vocab = logits->shape[1];
 
-    const float* l = (const float*)logits->data;
+    const float *l = (const float *)logits->data;
     for (size_t i = 0; i < rows; i++) {
         size_t best = 0;
         float best_val = l[i * vocab];

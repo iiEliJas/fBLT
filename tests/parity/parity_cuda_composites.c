@@ -17,13 +17,11 @@
 
 #ifndef BLT_WITH_CUDA
 
-int run_cuda_parity_composites(void) {
-    return 1;
-}
+int run_cuda_parity_composites(void) { return 1; }
 
 #else
 
-static uint32_t prng_next(uint32_t* state) {
+static uint32_t prng_next(uint32_t *state) {
     uint32_t x = *state;
     x ^= x << 13;
     x ^= x >> 17;
@@ -32,20 +30,20 @@ static uint32_t prng_next(uint32_t* state) {
     return x;
 }
 
-static void fill_random(blt_tensor* t, uint32_t* state) {
-    float* d = (float*)t->data;
+static void fill_random(blt_tensor *t, uint32_t *state) {
+    float *d = (float *)t->data;
     for (size_t i = 0; i < t->numel; i++) {
         d[i] = ((float)(prng_next(state) & 0xFFFF) / 32768.0f - 1.0f);
     }
 }
 
-#define CUDA_PARITY_COMMON \
-    blt_arena* host = blt_arena_create(4 << 20, BLT_BACKEND_CPU); \
-    blt_arena* dev = blt_arena_create(4 << 20, BLT_BACKEND_CUDA); \
+#define CUDA_PARITY_COMMON                                                                                             \
+    blt_arena *host = blt_arena_create(4 << 20, BLT_BACKEND_CPU);                                                      \
+    blt_arena *dev = blt_arena_create(4 << 20, BLT_BACKEND_CUDA);                                                      \
     TEST_ASSERT(host != NULL && dev != NULL);
 
-#define CUDA_PARITY_FINI \
-    blt_arena_destroy(dev); \
+#define CUDA_PARITY_FINI                                                                                               \
+    blt_arena_destroy(dev);                                                                                            \
     blt_arena_destroy(host);
 
 static int check_mask_configs(void) {
@@ -56,7 +54,7 @@ static int check_mask_configs(void) {
     const size_t sq = 19;
     const size_t skv = 23;
 
-    size_t docs[3] = {7, 15, 15};   // last boundary must not split anything
+    size_t docs[3] = {7, 15, 15}; // last boundary must not split anything
     size_t q_groups[19];
     size_t kv_groups[23];
     // Cyclic ids guarantee every group exists on both sides, so no query
@@ -71,15 +69,12 @@ static int check_mask_configs(void) {
         bool use_docs;
         bool use_groups;
         bool bidir;
-        const char* name;
+        const char *name;
     } variants[] = {
-        {true,  0, false, false, false, "causal"},
-        {false, 5, false, false, false, "window"},
-        {true,  4, true,  false, false, "causal+docs"},
-        {false, 0, true,  false, false, "docs"},
-        {true,  0, false, true,  true,  "groups-bidir"},
-        {true,  0, false, true,  false, "groups-causal"},
-        {true,  6, true,  true,  true,  "everything"},
+        {true, 0, false, false, false, "causal"},     {false, 5, false, false, false, "window"},
+        {true, 4, true, false, false, "causal+docs"}, {false, 0, true, false, false, "docs"},
+        {true, 0, false, true, true, "groups-bidir"}, {true, 0, false, true, false, "groups-causal"},
+        {true, 6, true, true, true, "everything"},
     };
 
     for (size_t v = 0; v < sizeof(variants) / sizeof(variants[0]); v++) {
@@ -112,7 +107,7 @@ static int check_mask_configs(void) {
     // ---- block diffusion masks: TRAIN and INFER ----
     const size_t S = 24;
     const size_t N = 12;
-    const size_t B = 2;   // blocks of 2 tile [12, 24) exactly
+    const size_t B = 2; // blocks of 2 tile [12, 24) exactly
 
     blt_block_diffusion_config bcfg;
     memset(&bcfg, 0, sizeof(bcfg));
@@ -149,7 +144,7 @@ static int check_patch_pool(void) {
     size_t shape[2] = {seq_len, embed_dim};
 
     blt_patch_info patches[7];
-    const size_t lengths[7] = {1, 9, 2, 8, 3, 7, 10};   // tiles [0, 40) exactly
+    const size_t lengths[7] = {1, 9, 2, 8, 3, 7, 10}; // tiles [0, 40) exactly
     size_t pos = 0;
     for (size_t j = 0; j < 7; j++) {
         patches[j].start_idx = pos;
@@ -227,7 +222,7 @@ static int check_optimizers(void) {
     cfg.eps = 1e-8f;
     cfg.weight_decay = 0.1f;
 
-    blt_tensor c_m = blt_tensor_create(host, shape, 1, BLT_DTYPE_FP32);   // zeroed
+    blt_tensor c_m = blt_tensor_create(host, shape, 1, BLT_DTYPE_FP32); // zeroed
     blt_tensor c_v = blt_tensor_create(host, shape, 1, BLT_DTYPE_FP32);
     blt_tensor c_p = blt_tensor_create(host, shape, 1, BLT_DTYPE_FP32);
     memcpy(c_p.data, p0.data, blt_tensor_bytes(&c_p));
@@ -242,8 +237,8 @@ static int check_optimizers(void) {
         blt_adamw_step(&d_p, &d_g, &d_m, &d_v, &cfg);
     }
     got_p = blt_tensor_to_host(&d_p, host);
-    const float* a = (const float*)got_p.data;
-    const float* b = (const float*)c_p.data;
+    const float *a = (const float *)got_p.data;
+    const float *b = (const float *)c_p.data;
     for (size_t i = 0; i < n; i++) {
         const float diff = fabsf(a[i] - b[i]);
         if (diff > max_abs_diff) max_abs_diff = diff;

@@ -20,14 +20,12 @@
 
 #ifndef BLT_WITH_CUDA
 
-int run_cuda_parity_elementwise(void) {
-    return 1;
-}
+int run_cuda_parity_elementwise(void) { return 1; }
 
 #else
 
 // xorshift32 PRNG so tests never disturb global rand state.
-static uint32_t prng_next(uint32_t* state) {
+static uint32_t prng_next(uint32_t *state) {
     uint32_t x = *state;
     x ^= x << 13;
     x ^= x >> 17;
@@ -36,24 +34,24 @@ static uint32_t prng_next(uint32_t* state) {
     return x;
 }
 
-static void fill_random(blt_tensor* t, uint32_t* state) {
-    float* d = (float*)t->data;
+static void fill_random(blt_tensor *t, uint32_t *state) {
+    float *d = (float *)t->data;
     for (size_t i = 0; i < t->numel; i++) {
         d[i] = ((float)(prng_next(state) & 0xFFFF) / 32768.0f - 1.0f);
     }
 }
 
-static blt_tensor make_like(blt_arena* arena, const blt_tensor* src) {
+static blt_tensor make_like(blt_arena *arena, const blt_tensor *src) {
     return blt_tensor_create(arena, src->shape, src->ndim, src->dtype);
 }
 
-#define CUDA_PARITY_COMMON \
-    blt_arena* host = blt_arena_create(4 << 20, BLT_BACKEND_CPU); \
-    blt_arena* dev = blt_arena_create(4 << 20, BLT_BACKEND_CUDA); \
+#define CUDA_PARITY_COMMON                                                                                             \
+    blt_arena *host = blt_arena_create(4 << 20, BLT_BACKEND_CPU);                                                      \
+    blt_arena *dev = blt_arena_create(4 << 20, BLT_BACKEND_CUDA);                                                      \
     TEST_ASSERT(host != NULL && dev != NULL);
 
-#define CUDA_PARITY_FINI \
-    blt_arena_destroy(dev); \
+#define CUDA_PARITY_FINI                                                                                               \
+    blt_arena_destroy(dev);                                                                                            \
     blt_arena_destroy(host);
 
 int run_cuda_parity_elementwise(void) {

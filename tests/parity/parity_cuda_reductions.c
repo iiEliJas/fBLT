@@ -18,13 +18,11 @@
 
 #ifndef BLT_WITH_CUDA
 
-int run_cuda_parity_reductions(void) {
-    return 1;
-}
+int run_cuda_parity_reductions(void) { return 1; }
 
 #else
 
-static uint32_t prng_next(uint32_t* state) {
+static uint32_t prng_next(uint32_t *state) {
     uint32_t x = *state;
     x ^= x << 13;
     x ^= x >> 17;
@@ -33,31 +31,31 @@ static uint32_t prng_next(uint32_t* state) {
     return x;
 }
 
-static void fill_random(blt_tensor* t, uint32_t* state) {
-    float* d = (float*)t->data;
+static void fill_random(blt_tensor *t, uint32_t *state) {
+    float *d = (float *)t->data;
     for (size_t i = 0; i < t->numel; i++) {
         d[i] = ((float)(prng_next(state) & 0xFFFF) / 32768.0f - 1.0f);
     }
 }
 
-static blt_tensor make_like(blt_arena* arena, const blt_tensor* src) {
+static blt_tensor make_like(blt_arena *arena, const blt_tensor *src) {
     return blt_tensor_create(arena, src->shape, src->ndim, src->dtype);
 }
 
-#define CUDA_PARITY_COMMON \
-    blt_arena* host = blt_arena_create(4 << 20, BLT_BACKEND_CPU); \
-    blt_arena* dev = blt_arena_create(4 << 20, BLT_BACKEND_CUDA); \
+#define CUDA_PARITY_COMMON                                                                                             \
+    blt_arena *host = blt_arena_create(4 << 20, BLT_BACKEND_CPU);                                                      \
+    blt_arena *dev = blt_arena_create(4 << 20, BLT_BACKEND_CUDA);                                                      \
     TEST_ASSERT(host != NULL && dev != NULL);
 
-#define CUDA_PARITY_FINI \
-    blt_arena_destroy(dev); \
+#define CUDA_PARITY_FINI                                                                                               \
+    blt_arena_destroy(dev);                                                                                            \
     blt_arena_destroy(host);
 
 int run_cuda_parity_reductions(void) {
     CUDA_PARITY_COMMON
 
     const size_t seq_len = 33;
-    const size_t vocab = 256;      // byte vocab keeps every uint8 target in range
+    const size_t vocab = 256; // byte vocab keeps every uint8 target in range
     const size_t embed_dim = 64;
     const size_t heads = 4;
     const size_t head_dim = 16;
@@ -91,7 +89,7 @@ int run_cuda_parity_reductions(void) {
     // ---- cross-entropy forward / backward with uint8 targets ----
     size_t t_shape[1] = {seq_len};
     blt_tensor targets = blt_tensor_create(host, t_shape, 1, BLT_DTYPE_UINT8);
-    unsigned char* td = (unsigned char*)targets.data;
+    unsigned char *td = (unsigned char *)targets.data;
     for (size_t i = 0; i < seq_len; i++) {
         td[i] = (unsigned char)(prng_next(&rng) & 0xFF);
     }
@@ -118,7 +116,7 @@ int run_cuda_parity_reductions(void) {
     size_t table_shape[2] = {seq_len, half_dim};
     blt_tensor cos_cpu = blt_tensor_create(host, table_shape, 2, BLT_DTYPE_FP32);
     blt_tensor sin_cpu = blt_tensor_create(host, table_shape, 2, BLT_DTYPE_FP32);
-    blt_rope_config rope_cfg = { .theta = 10000.0f, .head_dim = head_dim };
+    blt_rope_config rope_cfg = {.theta = 10000.0f, .head_dim = head_dim};
     blt_rope_precompute(seq_len, &rope_cfg, &cos_cpu, &sin_cpu);
 
     blt_tensor cos_dev = blt_tensor_create(dev, table_shape, 2, BLT_DTYPE_FP32);
@@ -173,7 +171,7 @@ int run_cuda_parity_reductions(void) {
     blt_tensor ngrad = make_like(host, &nx);
     fill_random(&ngrad, &rng);
     blt_tensor exp_gx = make_like(host, &nx);
-    blt_tensor exp_gw = blt_tensor_create(host, w_shape, 1, BLT_DTYPE_FP32);   // zeroed by create
+    blt_tensor exp_gw = blt_tensor_create(host, w_shape, 1, BLT_DTYPE_FP32); // zeroed by create
     blt_rmsnorm_backward(&ngrad, &nx, &nw, &exp_gx, &exp_gw);
 
     blt_tensor dngrad = blt_tensor_to_device(&ngrad, dev);

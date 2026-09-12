@@ -12,11 +12,11 @@
 #include <unistd.h>
 #endif
 
-static void* aligned_malloc(size_t size, size_t alignment) {
+static void *aligned_malloc(size_t size, size_t alignment) {
 #if defined(_WIN32)
     return _aligned_malloc(size, alignment);
 #else
-    void* ptr = NULL;
+    void *ptr = NULL;
     if (posix_memalign(&ptr, alignment, size) != 0) {
         return NULL;
     }
@@ -24,7 +24,7 @@ static void* aligned_malloc(size_t size, size_t alignment) {
 #endif
 }
 
-static void aligned_free(void* ptr) {
+static void aligned_free(void *ptr) {
 #if defined(_WIN32)
     _aligned_free(ptr);
 #else
@@ -32,8 +32,8 @@ static void aligned_free(void* ptr) {
 #endif
 }
 
-blt_arena* blt_arena_create(size_t capacity_bytes, blt_backend backend) {
-    blt_arena* arena = (blt_arena*)calloc(1, sizeof(*arena));
+blt_arena *blt_arena_create(size_t capacity_bytes, blt_backend backend) {
+    blt_arena *arena = (blt_arena *)calloc(1, sizeof(*arena));
     if (!arena) {
         BLT_FATAL("failed to allocate arena struct");
     }
@@ -63,7 +63,7 @@ blt_arena* blt_arena_create(size_t capacity_bytes, blt_backend backend) {
     return arena;
 }
 
-void blt_arena_destroy(blt_arena* arena) {
+void blt_arena_destroy(blt_arena *arena) {
     if (!arena) {
         return;
     }
@@ -77,14 +77,14 @@ void blt_arena_destroy(blt_arena* arena) {
     free(arena);
 }
 
-void blt_arena_reset(blt_arena* arena) {
+void blt_arena_reset(blt_arena *arena) {
     if (!arena) {
         return;
     }
     arena->offset = 0;
 }
 
-void* blt_arena_alloc(blt_arena* arena, size_t bytes, size_t alignment) {
+void *blt_arena_alloc(blt_arena *arena, size_t bytes, size_t alignment) {
     if (!arena || !arena->buffer) {
         BLT_FATAL("invalid arena");
     }
@@ -101,12 +101,12 @@ void* blt_arena_alloc(blt_arena* arena, size_t bytes, size_t alignment) {
                   bytes, aligned, current, arena->capacity);
     }
 
-    void* ptr = (char*)arena->buffer + aligned;
+    void *ptr = (char *)arena->buffer + aligned;
     arena->offset = aligned + bytes;
     return ptr;
 }
 
-blt_tensor blt_tensor_create(blt_arena* arena, const size_t* shape, size_t ndim, blt_dtype dtype) {
+blt_tensor blt_tensor_create(blt_arena *arena, const size_t *shape, size_t ndim, blt_dtype dtype) {
     blt_tensor tensor;
     memset(&tensor, 0, sizeof(tensor));
 

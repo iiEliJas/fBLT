@@ -20,22 +20,22 @@
 //----------------------------------------------------------------------
 // Helpers (mirrors unit_model.c / unit_model_stages.c conventions)
 
-static void fill_small_uniform(blt_tensor* t, float scale) {
-    float* data = (float*)t->data;
+static void fill_small_uniform(blt_tensor *t, float scale) {
+    float *data = (float *)t->data;
     for (size_t i = 0; i < t->numel; i++) {
         float r = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
         data[i] = r * scale;
     }
 }
 
-static void fill_constant(blt_tensor* t, float value) {
-    float* data = (float*)t->data;
+static void fill_constant(blt_tensor *t, float value) {
+    float *data = (float *)t->data;
     for (size_t i = 0; i < t->numel; i++) {
         data[i] = value;
     }
 }
 
-static void make_small_model_config(blt_model_config* config) {
+static void make_small_model_config(blt_model_config *config) {
     const size_t embed_dim = 16;
     const size_t hidden_dim = 32;
     const size_t max_seq_len = 64;
@@ -81,13 +81,13 @@ static void make_small_model_config(blt_model_config* config) {
     config->decoder_config.vocab_size = 256;
 }
 
-static void random_init_entropy_lm(blt_entropy_lm* lm, float scale) {
-    float* emb = (float*)lm->embedding_weight.data;
+static void random_init_entropy_lm(blt_entropy_lm *lm, float scale) {
+    float *emb = (float *)lm->embedding_weight.data;
     for (size_t i = 0; i < lm->embedding_weight.numel; i++) {
         emb[i] = (((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f) * scale;
     }
     for (size_t i = 0; i < lm->stack.num_layers; i++) {
-        blt_transformer_layer_storage* l = &lm->stack.layer_storage[i];
+        blt_transformer_layer_storage *l = &lm->stack.layer_storage[i];
         fill_constant(&l->norm1_weight, 1.0f);
         fill_small_uniform(&l->attn_qkv_w, scale);
         fill_small_uniform(&l->attn_proj_w, scale);
@@ -102,10 +102,10 @@ static void random_init_entropy_lm(blt_entropy_lm* lm, float scale) {
 // Randomizes encoder + global; leaves the DECODER untouched (zero weights).
 // With a zero LM head every model prediction is byte 0, making verification
 // outcomes fully predictable for directed tests.
-static void random_init_enc_glob_only(blt_model* model, float scale) {
+static void random_init_enc_glob_only(blt_model *model, float scale) {
     fill_small_uniform(&model->encoder->byte_embedding_weight, scale);
     for (size_t i = 0; i < model->encoder->config.num_layers; i++) {
-        blt_local_layer_storage* l = &model->encoder->layers[i];
+        blt_local_layer_storage *l = &model->encoder->layers[i];
         fill_constant(&l->norm1_weight, 1.0f);
         fill_small_uniform(&l->attn_qkv_w, scale);
         fill_small_uniform(&l->attn_proj_w, scale);
@@ -120,7 +120,7 @@ static void random_init_enc_glob_only(blt_model* model, float scale) {
         fill_small_uniform(&l->cross_weight_proj, scale);
     }
     for (size_t i = 0; i < model->global->stack.num_layers; i++) {
-        blt_transformer_layer_storage* l = &model->global->stack.layer_storage[i];
+        blt_transformer_layer_storage *l = &model->global->stack.layer_storage[i];
         fill_constant(&l->norm1_weight, 1.0f);
         fill_small_uniform(&l->attn_qkv_w, scale);
         fill_small_uniform(&l->attn_proj_w, scale);
@@ -131,10 +131,10 @@ static void random_init_enc_glob_only(blt_model* model, float scale) {
     }
 }
 
-static void random_init_model_full(blt_model* model, float scale) {
+static void random_init_model_full(blt_model *model, float scale) {
     random_init_enc_glob_only(model, scale);
     for (size_t i = 0; i < model->decoder->config.num_layers; i++) {
-        blt_local_layer_storage* l = &model->decoder->layers[i];
+        blt_local_layer_storage *l = &model->decoder->layers[i];
         fill_constant(&l->cross_norm_weight, 1.0f);
         fill_small_uniform(&l->cross_weight_q, scale);
         fill_small_uniform(&l->cross_weight_k, scale);
@@ -151,7 +151,7 @@ static void random_init_model_full(blt_model* model, float scale) {
     fill_small_uniform(&model->decoder->lm_head_weight, scale);
 }
 
-static void make_patcher_cfg(blt_patcher_config* cfg) {
+static void make_patcher_cfg(blt_patcher_config *cfg) {
     memset(cfg, 0, sizeof(*cfg));
     cfg->threshold_global = 1.0f;
     cfg->threshold_monotonic = 0.5f;
@@ -160,7 +160,7 @@ static void make_patcher_cfg(blt_patcher_config* cfg) {
     cfg->reset_on_newline = false;
 }
 
-static void make_entropy_cfg(blt_entropy_lm_config* cfg) {
+static void make_entropy_cfg(blt_entropy_lm_config *cfg) {
     memset(cfg, 0, sizeof(*cfg));
     cfg->embed_dim = 16;
     cfg->num_layers = 1;
@@ -170,7 +170,6 @@ static void make_entropy_cfg(blt_entropy_lm_config* cfg) {
     cfg->rope_theta = 10000.0f;
 }
 
-
 //----------------------------------------------------------------------
 // Test 1: directed blt_verify_draft against a degenerate zero-decoder
 // model. All predictions are byte 0, so every Algorithm 2 branch has a
@@ -179,19 +178,23 @@ static void make_entropy_cfg(blt_entropy_lm_config* cfg) {
 int run_verify_draft_directed(void) {
     srand(21);
 
-    blt_arena* model_arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
-    blt_arena* scratch = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *model_arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *scratch = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
     TEST_ASSERT(model_arena && scratch);
 
     blt_model_config config;
     make_small_model_config(&config);
-    blt_model* model = blt_model_create(model_arena, &config);
+    blt_model *model = blt_model_create(model_arena, &config);
     TEST_ASSERT(model != NULL);
-    random_init_enc_glob_only(model, 0.1f);   // decoder stays ZERO
+    random_init_enc_glob_only(model, 0.1f); // decoder stays ZERO
 
-    blt_entropy_lm* entropy_model = blt_entropy_lm_create(model_arena,
-        &(blt_entropy_lm_config){ .embed_dim = 16, .num_layers = 1, .hidden_dim = 32,
-                                  .num_heads = 2, .max_seq_len = 64, .rope_theta = 10000.0f });
+    blt_entropy_lm *entropy_model =
+        blt_entropy_lm_create(model_arena, &(blt_entropy_lm_config){.embed_dim = 16,
+                                                                    .num_layers = 1,
+                                                                    .hidden_dim = 32,
+                                                                    .num_heads = 2,
+                                                                    .max_seq_len = 64,
+                                                                    .rope_theta = 10000.0f});
     // zero-init entropy LM is fine (deterministic)
     TEST_ASSERT(entropy_model != NULL);
 
@@ -205,8 +208,8 @@ int run_verify_draft_directed(void) {
     {
         uint8_t x[16] = {7, 7, 5, 5};
         blt_infer_stats_reset(&stats);
-        size_t new_len = blt_verify_draft(model, entropy_model, &pcfg,
-            x, /*l=*/2, /*r=*/2, /*target_len=*/16, &stats, scratch);
+        size_t new_len =
+            blt_verify_draft(model, entropy_model, &pcfg, x, /*l=*/2, /*r=*/2, /*target_len=*/16, &stats, scratch);
         TEST_ASSERT(new_len == 3);
         TEST_ASSERT(x[0] == 7 && x[1] == 7 && x[2] == 0);
         TEST_ASSERT(stats.bytes_accepted == 0);
@@ -217,8 +220,8 @@ int run_verify_draft_directed(void) {
     {
         uint8_t x[16] = {7, 7, 0, 0, 0};
         blt_infer_stats_reset(&stats);
-        size_t new_len = blt_verify_draft(model, entropy_model, &pcfg,
-            x, /*l=*/2, /*r=*/2, /*target_len=*/16, &stats, scratch);
+        size_t new_len =
+            blt_verify_draft(model, entropy_model, &pcfg, x, /*l=*/2, /*r=*/2, /*target_len=*/16, &stats, scratch);
         TEST_ASSERT(new_len == 5);
         TEST_ASSERT(x[0] == 7 && x[1] == 7 && x[2] == 0 && x[3] == 0 && x[4] == 0);
         TEST_ASSERT(stats.bytes_accepted == 2);
@@ -228,8 +231,8 @@ int run_verify_draft_directed(void) {
     {
         uint8_t x[16] = {7, 7, 0, 0};
         blt_infer_stats_reset(&stats);
-        size_t new_len = blt_verify_draft(model, entropy_model, &pcfg,
-            x, /*l=*/2, /*r=*/2, /*target_len=*/4, &stats, scratch);
+        size_t new_len =
+            blt_verify_draft(model, entropy_model, &pcfg, x, /*l=*/2, /*r=*/2, /*target_len=*/4, &stats, scratch);
         TEST_ASSERT(new_len == 4);
         TEST_ASSERT(stats.bytes_accepted == 2);
     }
@@ -239,10 +242,10 @@ int run_verify_draft_directed(void) {
     {
         uint8_t x[16] = {9, 9, 0, 5, 5};
         blt_infer_stats_reset(&stats);
-        size_t new_len = blt_verify_draft(model, entropy_model, &pcfg,
-            x, /*l=*/2, /*r=*/3, /*target_len=*/16, &stats, scratch);
+        size_t new_len =
+            blt_verify_draft(model, entropy_model, &pcfg, x, /*l=*/2, /*r=*/3, /*target_len=*/16, &stats, scratch);
         TEST_ASSERT(new_len == 4);
-        TEST_ASSERT(x[2] == 0 && x[3] == 0);   // accepted, then replaced
+        TEST_ASSERT(x[2] == 0 && x[3] == 0); // accepted, then replaced
         TEST_ASSERT(stats.bytes_accepted == 1);
     }
 
@@ -250,7 +253,6 @@ int run_verify_draft_directed(void) {
     blt_arena_destroy(model_arena);
     return 1;
 }
-
 
 //----------------------------------------------------------------------
 // Test 2: structural invariants of the full BLT-S loop on random models
@@ -260,39 +262,36 @@ int run_verify_draft_directed(void) {
 // model in run_selfspec_equivalence_trained).
 
 typedef struct {
-    const char* prompt;
+    const char *prompt;
     size_t max_new;
 } gen_case;
 
-static int fill_output_like_baseline(const blt_model* model, const blt_entropy_lm* lm,
-                                     const blt_patcher_config* pcfg,
-                                     const char* prompt, size_t max_new,
-                                     blt_d0_mode mode, size_t k,
-                                     uint8_t* out, blt_infer_stats* stats,
-                                     blt_arena* scratch) {
-    blt_self_spec_config cfg = { .window_k = k, .d0_mode = mode };
+static int fill_output_like_baseline(const blt_model *model, const blt_entropy_lm *lm, const blt_patcher_config *pcfg,
+                                     const char *prompt, size_t max_new, blt_d0_mode mode, size_t k, uint8_t *out,
+                                     blt_infer_stats *stats, blt_arena *scratch) {
+    blt_self_spec_config cfg = {.window_k = k, .d0_mode = mode};
     blt_arena_reset(scratch);
-    blt_generate_greedy_selfspec(model, lm, pcfg,
-        (const uint8_t*)prompt, strlen(prompt), max_new, out, &cfg, stats, scratch);
+    blt_generate_greedy_selfspec(model, lm, pcfg, (const uint8_t *)prompt, strlen(prompt), max_new, out, &cfg, stats,
+                                 scratch);
     return 1;
 }
 
 int run_selfspec_structural_random(void) {
     srand(22);
 
-    blt_arena* model_arena = blt_arena_create(2 * 1024 * 1024, BLT_BACKEND_CPU);
-    blt_arena* scratch = blt_arena_create(8 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *model_arena = blt_arena_create(2 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *scratch = blt_arena_create(8 * 1024 * 1024, BLT_BACKEND_CPU);
     TEST_ASSERT(model_arena && scratch);
 
     blt_model_config config;
     make_small_model_config(&config);
-    blt_model* model = blt_model_create(model_arena, &config);
+    blt_model *model = blt_model_create(model_arena, &config);
     TEST_ASSERT(model != NULL);
     random_init_model_full(model, 0.1f);
 
     blt_entropy_lm_config ecfg;
     make_entropy_cfg(&ecfg);
-    blt_entropy_lm* lm = blt_entropy_lm_create(model_arena, &ecfg);
+    blt_entropy_lm *lm = blt_entropy_lm_create(model_arena, &ecfg);
     TEST_ASSERT(lm != NULL);
     random_init_entropy_lm(lm, 0.1f);
 
@@ -300,12 +299,9 @@ int run_selfspec_structural_random(void) {
     make_patcher_cfg(&pcfg);
 
     const gen_case cases[] = {
-        {"ab", 1},     // r_eff == 0 shortcut
-        {"ab", 2},
-        {"xy", 5},
-        {"int ", 17},  // forces window capping + multiple rounds
-        {"q9z!", 13},
-        {"for(", 24},
+        {"ab", 1},                                // r_eff == 0 shortcut
+        {"ab", 2},    {"xy", 5},    {"int ", 17}, // forces window capping + multiple rounds
+        {"q9z!", 13}, {"for(", 24},
     };
     const size_t num_cases = sizeof(cases) / sizeof(cases[0]);
     const blt_d0_mode modes[] = {BLT_D0_ZEROS, BLT_D0_LEARNED};
@@ -321,8 +317,8 @@ int run_selfspec_structural_random(void) {
 
                 TEST_ASSERT(out_len <= 128);
                 blt_infer_stats_reset(&stats);
-                fill_output_like_baseline(model, lm, &pcfg, cases[c].prompt,
-                    cases[c].max_new, modes[mi], ks[ki], out, &stats, scratch);
+                fill_output_like_baseline(model, lm, &pcfg, cases[c].prompt, cases[c].max_new, modes[mi], ks[ki], out,
+                                          &stats, scratch);
 
                 // NFE bookkeeping sane: at least one round happened, and
                 // the expensive tier stayed within 2 encodes per generated
@@ -335,8 +331,8 @@ int run_selfspec_structural_random(void) {
                 // determinism: identical rerun
                 blt_infer_stats stats2;
                 blt_infer_stats_reset(&stats2);
-                fill_output_like_baseline(model, lm, &pcfg, cases[c].prompt,
-                    cases[c].max_new, modes[mi], ks[ki], out_rerun, &stats2, scratch);
+                fill_output_like_baseline(model, lm, &pcfg, cases[c].prompt, cases[c].max_new, modes[mi], ks[ki],
+                                          out_rerun, &stats2, scratch);
                 TEST_ASSERT(memcmp(out, out_rerun, out_len) == 0);
             }
         }
@@ -347,18 +343,16 @@ int run_selfspec_structural_random(void) {
     return 1;
 }
 
-
 //----------------------------------------------------------------------
 // Test 3: THE equivalence gate -- on a model overfit to fixed snippets,
 // greedy BLT-S output must be byte-identical to plain greedy BLT
 // generation (Fast-BLT Figure 2 guarantee), and encoder/global NFEs must
 // drop strictly below the one-full-forward-per-byte baseline.
 
-static void apply_sgd_step_all(blt_model* model, blt_model_grad* grad, float lr);
+static void apply_sgd_step_all(blt_model *model, blt_model_grad *grad, float lr);
 
-static void train_snippets(blt_model* model, blt_model_grad* grad,
-                           blt_arena* scratch, const char** snippets, size_t num_snippets,
-                           size_t steps) {
+static void train_snippets(blt_model *model, blt_model_grad *grad, blt_arena *scratch, const char **snippets,
+                           size_t num_snippets, size_t steps) {
     const size_t patch_len = 4;
     const float lr = 0.1f;
 
@@ -388,16 +382,14 @@ static void train_snippets(blt_model* model, blt_model_grad* grad,
             size_t scalar_shape[1] = {1};
             blt_tensor loss = blt_tensor_create(scratch, scalar_shape, 1, BLT_DTYPE_FP32);
 
-            blt_model_forward(model, &bytes_in, patches, num_patches,
-                NULL, 0, &logits, &loss, scratch);
+            blt_model_forward(model, &bytes_in, patches, num_patches, NULL, 0, &logits, &loss, scratch);
 
             // zero scatter-add grads before backward
             zero_tensor(&grad->encoder_grad->embedding_grad);
             for (size_t i = 0; i < model->encoder->ngram_weights.num_tables; i++) {
                 zero_tensor(&grad->encoder_grad->ngram_grads.tables[i]);
             }
-            blt_model_backward(model, &bytes_in, patches, num_patches,
-                NULL, 0, grad, scratch);
+            blt_model_backward(model, &bytes_in, patches, num_patches, NULL, 0, grad, scratch);
 
             // plain SGD over all weights (no clipping: toy memorization task)
             apply_sgd_step_all(model, grad, lr);
@@ -406,16 +398,16 @@ static void train_snippets(blt_model* model, blt_model_grad* grad,
 }
 
 // Minimal SGD application (subset of unit_model.c's helper, local copy).
-static void apply_sgd_step_all(blt_model* model, blt_model_grad* grad, float lr) {
-    blt_local_encoder* enc = model->encoder;
-    blt_local_encoder_grad* eg = grad->encoder_grad;
+static void apply_sgd_step_all(blt_model *model, blt_model_grad *grad, float lr) {
+    blt_local_encoder *enc = model->encoder;
+    blt_local_encoder_grad *eg = grad->encoder_grad;
     blt_sgd_step(&enc->byte_embedding_weight, &eg->embedding_grad, lr);
     for (size_t i = 0; i < enc->ngram_weights.num_tables; i++) {
         blt_sgd_step(&enc->ngram_weights.tables[i], &eg->ngram_grads.tables[i], lr);
     }
     for (size_t i = 0; i < enc->config.num_layers; i++) {
-        blt_local_layer_storage* w = &enc->layers[i];
-        blt_local_layer_grad* g = &eg->layer_grads[i];
+        blt_local_layer_storage *w = &enc->layers[i];
+        blt_local_layer_grad *g = &eg->layer_grads[i];
         blt_sgd_step(&w->norm1_weight, &g->norm1_weight, lr);
         blt_sgd_step(&w->attn_qkv_w, &g->attn_qkv_w, lr);
         blt_sgd_step(&w->attn_proj_w, &g->attn_proj_w, lr);
@@ -430,8 +422,8 @@ static void apply_sgd_step_all(blt_model* model, blt_model_grad* grad, float lr)
         blt_sgd_step(&w->cross_weight_proj, &g->cross_weight_proj, lr);
     }
     for (size_t i = 0; i < model->global->stack.num_layers; i++) {
-        blt_transformer_layer_storage* w = &model->global->stack.layer_storage[i];
-        blt_transformer_layer_grad* g = &grad->global_grad->stack_grad->layer_grads[i];
+        blt_transformer_layer_storage *w = &model->global->stack.layer_storage[i];
+        blt_transformer_layer_grad *g = &grad->global_grad->stack_grad->layer_grads[i];
         blt_sgd_step(&w->norm1_weight, &g->norm1_weight, lr);
         blt_sgd_step(&w->attn_qkv_w, &g->attn_qkv_w, lr);
         blt_sgd_step(&w->attn_proj_w, &g->attn_proj_w, lr);
@@ -441,8 +433,8 @@ static void apply_sgd_step_all(blt_model* model, blt_model_grad* grad, float lr)
         blt_sgd_step(&w->ffn_down_w, &g->ffn_down_w, lr);
     }
     for (size_t i = 0; i < model->decoder->config.num_layers; i++) {
-        blt_local_layer_storage* w = &model->decoder->layers[i];
-        blt_local_layer_grad* g = &grad->decoder_grad->layer_grads[i];
+        blt_local_layer_storage *w = &model->decoder->layers[i];
+        blt_local_layer_grad *g = &grad->decoder_grad->layer_grads[i];
         blt_sgd_step(&w->cross_norm_weight, &g->cross_norm_weight, lr);
         blt_sgd_step(&w->cross_weight_q, &g->cross_weight_q, lr);
         blt_sgd_step(&w->cross_weight_k, &g->cross_weight_k, lr);
@@ -463,18 +455,18 @@ static void apply_sgd_step_all(blt_model* model, blt_model_grad* grad, float lr)
 int run_selfspec_equivalence_trained(void) {
     srand(23);
 
-    blt_arena* model_arena = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
-    blt_arena* scratch = blt_arena_create(8 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *model_arena = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *scratch = blt_arena_create(8 * 1024 * 1024, BLT_BACKEND_CPU);
     TEST_ASSERT(model_arena && scratch);
 
     blt_model_config config;
     make_small_model_config(&config);
-    blt_model* model = blt_model_create(model_arena, &config);
-    blt_model_grad* grad = blt_model_grad_create(model_arena, model);
+    blt_model *model = blt_model_create(model_arena, &config);
+    blt_model_grad *grad = blt_model_grad_create(model_arena, model);
     TEST_ASSERT(model != NULL && grad != NULL);
     random_init_model_full(model, 0.1f);
 
-    const char* snippets[] = {
+    const char *snippets[] = {
         "int x=1;\n",
         "return 0;\n",
         "for(;;){}\n",
@@ -487,7 +479,7 @@ int run_selfspec_equivalence_trained(void) {
 
     blt_entropy_lm_config ecfg;
     make_entropy_cfg(&ecfg);
-    blt_entropy_lm* lm = blt_entropy_lm_create(model_arena, &ecfg);
+    blt_entropy_lm *lm = blt_entropy_lm_create(model_arena, &ecfg);
     TEST_ASSERT(lm != NULL);
     random_init_entropy_lm(lm, 0.1f);
 
@@ -497,11 +489,9 @@ int run_selfspec_equivalence_trained(void) {
     // Prompt corpus: prefixes and interior slices of the trained snippets,
     // exercising multi-round generation, window capping and the r_eff == 0
     // tail path.
-    const char* prompts[] = {
-        "in", "int", "int ", "int x", "nt x=1;\n",
-        "re", "ret", "return", "return ", "eturn 0;\n",
-        "fo", "for", "for(", "for(;", "(;;){}\n",
-        "x=", "=1;", ";\n", "0;\n", "{}\n",
+    const char *prompts[] = {
+        "in", "int", "int ", "int x", "nt x=1;\n", "re", "ret", "return", "return ", "eturn 0;\n",
+        "fo", "for", "for(", "for(;", "(;;){}\n",  "x=", "=1;", ";\n",    "0;\n",    "{}\n",
     };
     const size_t num_prompts = sizeof(prompts) / sizeof(prompts[0]);
     const size_t max_new = 14;
@@ -524,23 +514,22 @@ int run_selfspec_equivalence_trained(void) {
         uint8_t spec[128];
 
         blt_arena_reset(scratch);
-        blt_generate_greedy(model, lm, &pcfg, (const uint8_t*)prompts[p],
-            prompt_len, max_new, baseline, scratch);
-        total_baseline_enc_nfe += max_new;   // baseline: one full forward per byte
+        blt_generate_greedy(model, lm, &pcfg, (const uint8_t *)prompts[p], prompt_len, max_new, baseline, scratch);
+        total_baseline_enc_nfe += max_new; // baseline: one full forward per byte
 
         for (size_t ki = 0; ki < num_k; ki++) {
             for (size_t mi = 0; mi < num_m; mi++) {
-                blt_self_spec_config cfg = { .window_k = ks[ki], .d0_mode = modes[mi] };
+                blt_self_spec_config cfg = {.window_k = ks[ki], .d0_mode = modes[mi]};
                 blt_infer_stats stats;
                 blt_infer_stats_reset(&stats);
 
                 blt_arena_reset(scratch);
-                blt_generate_greedy_selfspec(model, lm, &pcfg,
-                    (const uint8_t*)prompts[p], prompt_len, max_new, spec, &cfg, &stats, scratch);
+                blt_generate_greedy_selfspec(model, lm, &pcfg, (const uint8_t *)prompts[p], prompt_len, max_new, spec,
+                                             &cfg, &stats, scratch);
 
                 if (memcmp(baseline, spec, out_len) != 0) {
-                    fprintf(stderr, "  EQUIVALENCE BREAK: prompt=\"%s\" k=%zu mode=%d\n",
-                        prompts[p], ks[ki], (int)modes[mi]);
+                    fprintf(stderr, "  EQUIVALENCE BREAK: prompt=\"%s\" k=%zu mode=%d\n", prompts[p], ks[ki],
+                            (int)modes[mi]);
                     fprintf(stderr, "    baseline: \"");
                     for (size_t i = 0; i < out_len; i++) fputc(isprint(baseline[i]) ? baseline[i] : '.', stderr);
                     fprintf(stderr, "\"\n    selfspec: \"");
@@ -557,18 +546,16 @@ int run_selfspec_equivalence_trained(void) {
         }
     }
 
-    printf("    equivalence gate: %zu prompts x %zu configs byte-identical\n",
-        num_prompts, num_k * num_m);
+    printf("    equivalence gate: %zu prompts x %zu configs byte-identical\n", num_prompts, num_k * num_m);
     size_t agg_enc = 0, agg_dec = 0, agg_draf = 0, agg_acc = 0;
     int any_accepted = 0;
     for (size_t ki = 0; ki < num_k; ki++) {
         for (size_t mi = 0; mi < num_m; mi++) {
             printf("    k=%-2zu mode=%s: enc/glob NFEs=%zu vs baseline=%zu (%.1f%%), "
                    "acceptance=%.1f%%\n",
-                ks[ki], modes[mi] == BLT_D0_ZEROS ? "ZEROS  " : "LEARNED",
-                enc_nfe_per_config[ki][mi], total_baseline_enc_nfe,
-                100.0 * (double)enc_nfe_per_config[ki][mi] / (double)total_baseline_enc_nfe,
-                100.0 * (double)accepted_per_config[ki][mi] / (double)drafted_per_config[ki][mi]);
+                   ks[ki], modes[mi] == BLT_D0_ZEROS ? "ZEROS  " : "LEARNED", enc_nfe_per_config[ki][mi],
+                   total_baseline_enc_nfe, 100.0 * (double)enc_nfe_per_config[ki][mi] / (double)total_baseline_enc_nfe,
+                   100.0 * (double)accepted_per_config[ki][mi] / (double)drafted_per_config[ki][mi]);
             agg_enc += enc_nfe_per_config[ki][mi];
             agg_dec += dec_nfe_per_config[ki][mi];
             agg_draf += drafted_per_config[ki][mi];

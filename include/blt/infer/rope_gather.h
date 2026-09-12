@@ -9,7 +9,6 @@ extern "C" {
 #include "blt/core/tensor.h"
 #include "blt/core/allocator.h"
 
-
 // Gathers RoPE cos/sin rows for arbitrary position ids.
 //
 // The decoder applies RoPE by row index == position, which is correct for
@@ -21,15 +20,8 @@ extern "C" {
 // Input:  cos_cache / sin_cache [max_seq_len, head_dim/2] FP32 (as produced
 //         by blt_rope_precompute), positions[n] with each entry < max_seq_len.
 // Output: cos_out / sin_out created as [n, head_dim/2] FP32 tensors in arena.
-void blt_rope_position_gather(
-    const blt_tensor* cos_cache,
-    const blt_tensor* sin_cache,
-    const size_t* positions,
-    size_t n,
-    blt_tensor* cos_out,
-    blt_tensor* sin_out,
-    blt_arena* arena
-);
+void blt_rope_position_gather(const blt_tensor *cos_cache, const blt_tensor *sin_cache, const size_t *positions,
+                              size_t n, blt_tensor *cos_out, blt_tensor *sin_out, blt_arena *arena);
 
 #ifdef __cplusplus
 }

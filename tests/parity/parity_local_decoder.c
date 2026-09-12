@@ -2,22 +2,26 @@
 #include "test_suite.h"
 #include "blt/models/local_decoder.h"
 
-
-
-static int load_binary_tensor_uint8(const char* path, blt_arena* arena, blt_tensor* out_tensor) {
-    FILE* fp = fopen(path, "rb");
+static int load_binary_tensor_uint8(const char *path, blt_arena *arena, blt_tensor *out_tensor) {
+    FILE *fp = fopen(path, "rb");
     if (!fp) {
         fprintf(stderr, "failed to open %s\n", path);
         return 0;
     }
 
     uint32_t ndim = 0;
-    if (fread(&ndim, sizeof(ndim), 1, fp) != 1) { fclose(fp); return 0; }
+    if (fread(&ndim, sizeof(ndim), 1, fp) != 1) {
+        fclose(fp);
+        return 0;
+    }
 
     size_t shape[BLT_MAX_NDIM] = {0};
     for (uint32_t i = 0; i < ndim; ++i) {
         uint32_t dim = 0;
-        if (fread(&dim, sizeof(dim), 1, fp) != 1) { fclose(fp); return 0; }
+        if (fread(&dim, sizeof(dim), 1, fp) != 1) {
+            fclose(fp);
+            return 0;
+        }
         shape[i] = dim;
     }
 
@@ -25,16 +29,20 @@ static int load_binary_tensor_uint8(const char* path, blt_arena* arena, blt_tens
     for (uint32_t i = 0; i < ndim; ++i) numel *= shape[i];
 
     *out_tensor = blt_tensor_create(arena, shape, ndim, BLT_DTYPE_UINT8);
-    if (!out_tensor->data) { fclose(fp); return 0; }
+    if (!out_tensor->data) {
+        fclose(fp);
+        return 0;
+    }
 
-    if (fread(out_tensor->data, 1, numel, fp) != numel) { fclose(fp); return 0; }
+    if (fread(out_tensor->data, 1, numel, fp) != numel) {
+        fclose(fp);
+        return 0;
+    }
     fclose(fp);
     return 1;
 }
 
-
-
-static void build_decoder_parity_patches(blt_patch_info* patches, size_t* num_patches) {
+static void build_decoder_parity_patches(blt_patch_info *patches, size_t *num_patches) {
     size_t starts[] = {0, 4, 9, 13, 18};
     size_t n = sizeof(starts) / sizeof(starts[0]);
     for (size_t i = 0; i < n; i++) {
@@ -45,14 +53,12 @@ static void build_decoder_parity_patches(blt_patch_info* patches, size_t* num_pa
     *num_patches = n;
 }
 
-
-
-static int load_decoder_reference_weights(blt_local_decoder* model, const char* dir, blt_arena* arena) {
+static int load_decoder_reference_weights(blt_local_decoder *model, const char *dir, blt_arena *arena) {
     char path[512];
-    const blt_local_decoder_config* cfg = &model->config;
+    const blt_local_decoder_config *cfg = &model->config;
 
     for (size_t l = 0; l < cfg->num_layers; l++) {
-        blt_local_decoder_layer_storage* ls = &model->layers[l];
+        blt_local_decoder_layer_storage *ls = &model->layers[l];
 
         snprintf(path, sizeof(path), "%s/layer_%zu_norm1_weight.bin", dir, l);
         TEST_ASSERT(blt_test_load_binary_tensor(path, arena, &ls->norm1_weight));
@@ -96,13 +102,11 @@ static int load_decoder_reference_weights(blt_local_decoder* model, const char* 
     return 1;
 }
 
-
-
 static int run_local_decoder_parity_case(bool cross_attn_all_layers) {
-    blt_arena* arena = blt_arena_create(16 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *arena = blt_arena_create(16 * 1024 * 1024, BLT_BACKEND_CPU);
     if (!arena) return 0;
 
-    const char* suffix = cross_attn_all_layers ? "all_layers" : "final_layer";
+    const char *suffix = cross_attn_all_layers ? "all_layers" : "final_layer";
     char path_hidden_in[256], path_patch_in[256], path_bytes[256];
     char path_logits[256], path_loss[256];
     char path_grad_hidden[256], path_grad_patch[256], weights_dir[256];
@@ -148,11 +152,11 @@ static int run_local_decoder_parity_case(bool cross_attn_all_layers) {
     cfg.max_seq_len = 64;
     cfg.vocab_size = 256;
 
-    blt_local_decoder* model = blt_local_decoder_create(arena, &cfg);
+    blt_local_decoder *model = blt_local_decoder_create(arena, &cfg);
     TEST_ASSERT(model != NULL);
     TEST_ASSERT(load_decoder_reference_weights(model, weights_dir, arena));
 
-    blt_local_decoder_grad* grad = blt_local_decoder_grad_create(arena, model);
+    blt_local_decoder_grad *grad = blt_local_decoder_grad_create(arena, model);
     TEST_ASSERT(grad != NULL);
 
     blt_tensor logits_out = blt_tensor_create(arena, expected_logits.shape, expected_logits.ndim, BLT_DTYPE_FP32);
@@ -160,18 +164,18 @@ static int run_local_decoder_parity_case(bool cross_attn_all_layers) {
     size_t loss_shape[1] = {1};
     blt_tensor loss_out = blt_tensor_create(arena, loss_shape, 1, BLT_DTYPE_FP32);
 
-    blt_local_decoder_forward(model, &byte_hidden_in, &patch_in, patches, num_patches,
-                               &bytes_in, NULL, 0, &logits_out, &loss_out, arena);
+    blt_local_decoder_forward(model, &byte_hidden_in, &patch_in, patches, num_patches, &bytes_in, NULL, 0, &logits_out,
+                              &loss_out, arena);
 
     TEST_ASSERT_CLOSE(&logits_out, &expected_logits, 1e-3f);
     TEST_ASSERT_CLOSE(&loss_out, &expected_loss, 1e-3f);
 
-    blt_tensor grad_byte_hidden_in = blt_tensor_create(arena, byte_hidden_in.shape, byte_hidden_in.ndim, BLT_DTYPE_FP32);
+    blt_tensor grad_byte_hidden_in =
+        blt_tensor_create(arena, byte_hidden_in.shape, byte_hidden_in.ndim, BLT_DTYPE_FP32);
     blt_tensor grad_patch_in = blt_tensor_create(arena, patch_in.shape, patch_in.ndim, BLT_DTYPE_FP32);
 
-    blt_local_decoder_backward(model, &byte_hidden_in, &patch_in, patches, num_patches,
-                                &bytes_in, NULL, 0,
-                                &grad_byte_hidden_in, &grad_patch_in, grad, arena);
+    blt_local_decoder_backward(model, &byte_hidden_in, &patch_in, patches, num_patches, &bytes_in, NULL, 0,
+                               &grad_byte_hidden_in, &grad_patch_in, grad, arena);
 
     TEST_ASSERT_CLOSE(&grad_byte_hidden_in, &expected_grad_hidden, 1e-3f);
     TEST_ASSERT_CLOSE(&grad_patch_in, &expected_grad_patch, 1e-3f);
@@ -180,8 +184,4 @@ static int run_local_decoder_parity_case(bool cross_attn_all_layers) {
     return 1;
 }
 
-
-
-int run_local_decoder_parity(void) {
-    return run_local_decoder_parity_case(false);
-}
+int run_local_decoder_parity(void) { return run_local_decoder_parity_case(false); }
