@@ -133,3 +133,42 @@ jobs:
             exit 1
           fi
           echo "All CUDA files pass syntax check."
+
+  format-check:
+    name: clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install clang-format
+        run: sudo apt-get update && sudo apt-get install -y clang-format
+      - name: Check C/CUDA formatting
+        run: |
+          find src include tests run tools bench -name '*.c' -o -name '*.h' -o -name '*.cu' | \
+            xargs clang-format --dry-run --Werror
+
+  spellcheck:
+    name: Spellcheck (docs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Install typos
+        run: cargo install typos-cli || true
+      - name: Run typos on docs
+        run: typos *.md docs/ CONTRIBUTING.md CHANGELOG.md
+
+  # ====================================================================
+  # Windows build — DISABLED
+  # ====================================================================
+  # MinGW cross-compilation needs testing.  Re-enable once the Makefile
+  # handles Windows paths and the CI runner has the toolchain.
+  #
+  # windows-build:
+  #   runs-on: windows-latest
+  #   steps:
+  #     - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+  #     - uses: msys2/setup-msys2@v2
+  #       with:
+  #         msystem: UCRT64
+  #         install: make mingw-w64-ucrt-x86_64-gcc
+  #     - shell: msys2 {0}
+  #       run: make CC=gcc test
