@@ -108,7 +108,7 @@ jobs:
         with:
           cuda: '12.6.2'
           method: network
-          sub-packages: '["nvcc"]'
+          sub-packages: '["nvcc", "cudart", "cublas"]'
       - name: Syntax-check CUDA sources
         run: |
           FAILURES=0
