@@ -177,6 +177,29 @@ Full tables, raw numbers, and production config: [ABLATIONS.md](docs/ABLATIONS.m
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for branch policy, code style, and PR guidelines.
 
+## References
+
+If you build on this work, please consider citing the foundational Meta papers:
+
+```bibtex
+@misc{pagnoni2024bytelatenttransformerpatches,
+      title={Byte Latent Transformer: Patches Scale Better Than Tokens}, 
+      author={Alessandro Pagnoni and Ramakanth Pasunuru and Pedro Rodriguez and others},
+      year={2024},
+      eprint={2412.09871},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL}
+}
+
+@misc{kallini2026fastbytelatenttransformer,
+      title={Fast Byte Latent Transformer}, 
+      author={Julie Kallini and Artidoro Pagnoni and Tomasz Limisiewicz and Gargi Ghosh and Luke Zettlemoyer and Christopher Potts and Xiaochuang Han and Srinivasan Iyer},
+      year={2026},
+      eprint={2605.08044},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL}
+}
+
 ## License
 
 [Apache 2.0](LICENSE)
