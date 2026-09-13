@@ -1,0 +1,164 @@
+# CI workflow for fBLT — Fast Byte Latent Transformer
+# Runs on every push to main and on pull requests targeting main.
+# Jobs: Linux build+test, macOS build+test, sanitizer (ASan+UBSan),
+#       CUDA syntax check (compile-only, no GPU required).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# ── Permissions ──────────────────────────────────────────────────────
+# Minimal permissions: read-only checkout.  No write, no secrets.
+permissions:
+  contents: read
+
+# ── Concurrency ──────────────────────────────────────────────────────
+# Cancel in-progress runs for the same PR / branch.  Keeps CI snappy
+# when pushing rapid-fire commits.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ====================================================================
+  # 1. Linux build + test (gcc, default C99 flags)
+  # ====================================================================
+  # Verifies the baseline build and test suite on the primary platform.
+  linux-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Show build config
+        run: make info
+
+      - name: Build and run tests
+        run: make test
+
+      - name: Clean build artifacts
+        if: always()
+        run: make clean
+
+  # ====================================================================
+  # 2. macOS build + test — DISABLED
+  # ====================================================================
+  # The Makefile has no OpenMP detection (no -fopenmp in CFLAGS) and
+  # Apple Clang doesn't ship libomp.  Even with brew install libomp,
+  # the linker needs -L$(brew --prefix libomp)/lib and the preprocessor
+  # needs -Xpreprocessor -fopenmp -I$(brew --prefix libomp)/include.
+  # Re-enable once the Makefile supports macOS properly.
+  #
+  # macos-test:
+  #   runs-on: macos-latest
+  #   steps:
+  #     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+  #     - run: brew install libomp
+  #     - run: make CC=clang LDLIBS="-lm -lomp" test
+
+  # ====================================================================
+  # 3. Sanitizer job (ASan + UBSan)
+  # ====================================================================
+  # Compiles the full codebase and test suite with AddressSanitizer and
+  # UndefinedBehaviorSanitizer enabled, then runs the test suite.
+  # Catches out-of-bounds access, use-after-free, integer overflow,
+  # null-pointer dereferences, and other UB at runtime.
+  sanitizer:
+    name: Sanitizers (ASan + UBSan)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Build and run tests with sanitizers
+        run: |
+          make CC=gcc \
+            CFLAGS="-O1 -g -std=c99 -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer -Icsrc -Itests -D_POSIX_C_SOURCE=200809L" \
+            LDLIBS="-lm" \
+            test
+        env:
+          ASAN_OPTIONS: detect_leaks=0
+          UBSAN_OPTIONS: print_stacktrace=1
+
+      - name: Clean build artifacts
+        if: always()
+        run: make clean
+
+  cuda-syntax:
+    name: CUDA syntax check (compile-only, no GPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install CUDA toolkit (compiler only)
+        uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
+        with:
+          cuda: '12.6.2'
+          method: network
+          sub-packages: '["nvcc"]'
+      - name: Install cuBLAS headers
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y libcublas-dev-12-6
+      - name: Syntax-check CUDA sources
+        run: |
+          FAILURES=0
+          for cu_file in csrc/ops/*.cu; do
+            echo "  checking: $cu_file"
+            if nvcc -O2 -std=c++17 -arch=sm_89 -c "$cu_file" -o /dev/null \
+                -Icsrc -DBLT_WITH_CUDA -Xcompiler=-Wall,-Wextra; then
+              echo "    OK"
+            else
+              echo "    FAILED"
+              FAILURES=$((FAILURES + 1))
+            fi
+          done
+          if [ "$FAILURES" -ne 0 ]; then
+            echo "CUDA syntax check failed in $FAILURES file(s)."
+            exit 1
+          fi
+          echo "All CUDA files pass syntax check."
+
+  format-check:
+    name: clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install clang-format
+        run: pip install clang-format==23.1.1
+      - name: Check C/CUDA formatting
+        run: |
+          find csrc tests run bench fblt -name '*.c' -o -name '*.h' -o -name '*.cu' | \
+            xargs clang-format --dry-run --Werror
+
+  # ====================================================================
+  # Windows build — DISABLED
+  # ====================================================================
+  # MinGW cross-compilation needs testing.  Re-enable once the Makefile
+  # handles Windows paths and the CI runner has the toolchain.
+  #
+  # windows-build:
+  #   runs-on: windows-latest
+  #   steps:
+  #     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+  #     - uses: msys2/setup-msys2@v2
+  #       with:
+  #         msystem: UCRT64
+  #         install: make mingw-w64-ucrt-x86_64-gcc
+  #     - shell: msys2 {0}
+  #       run: make CC=gcc test
