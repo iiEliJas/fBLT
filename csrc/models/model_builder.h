@@ -23,11 +23,8 @@ extern "C" {
 //   dec_layers   — decoder layer count
 //   max_seq_len  — max sequence length (typically 512)
 //   cross_last   — if true, cross-attention only after final local layer
-void blt_model_config_defaults(blt_model_config *cfg,
-                               size_t embed, size_t hidden,
-                               size_t enc_layers, size_t glob_layers,
-                               size_t dec_layers, size_t max_seq_len,
-                               int cross_last);
+void blt_model_config_defaults(blt_model_config *cfg, size_t embed, size_t hidden, size_t enc_layers,
+                               size_t glob_layers, size_t dec_layers, size_t max_seq_len, int cross_last);
 
 // Create a standard entropy-LM with random weights (seeded by `seed`).
 // If load_path is non-NULL, loads pretrained weights from that file.
@@ -37,8 +34,7 @@ void blt_model_config_defaults(blt_model_config *cfg,
 //   ms        — max_seq_len for the entropy LM config (typically 512)
 //   load_path — optional path to pretrained weights (NULL = skip)
 //   seed      — RNG seed for random weight initialization
-blt_entropy_lm *blt_make_entropy_lm(blt_arena *arena, size_t ms,
-                                    const char *load_path, uint64_t seed);
+blt_entropy_lm *blt_make_entropy_lm(blt_arena *arena, size_t ms, const char *load_path, uint64_t seed);
 
 // Fill blt_patcher_config with standard defaults.
 //
@@ -48,10 +44,7 @@ blt_entropy_lm *blt_make_entropy_lm(blt_arena *arena, size_t ms,
 //   threshold_global   — global entropy threshold (use 2.5f for standard, 1e9f for fixed)
 //   threshold_monotonic — monotonic threshold (use 1.0f for standard, 1e9f for fixed)
 //   max_patch_length   — max patch size (use 16 for standard, 4 for fixed)
-void blt_make_patcher_cfg(blt_patcher_config *pcfg,
-                          int fixed,
-                          float threshold_global,
-                          float threshold_monotonic,
+void blt_make_patcher_cfg(blt_patcher_config *pcfg, int fixed, float threshold_global, float threshold_monotonic,
                           size_t max_patch_length);
 
 // Fill a tensor with uniform random values in [-scale, +scale].

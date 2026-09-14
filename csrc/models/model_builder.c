@@ -4,11 +4,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-void blt_model_config_defaults(blt_model_config *cfg,
-                               size_t embed, size_t hidden,
-                               size_t enc_layers, size_t glob_layers,
-                               size_t dec_layers, size_t max_seq_len,
-                               int cross_last) {
+void blt_model_config_defaults(blt_model_config *cfg, size_t embed, size_t hidden, size_t enc_layers,
+                               size_t glob_layers, size_t dec_layers, size_t max_seq_len, int cross_last) {
     memset(cfg, 0, sizeof(*cfg));
 
     // Encoder
@@ -61,8 +58,7 @@ void blt_fill_small_uniform(blt_tensor *t, float scale) {
     }
 }
 
-blt_entropy_lm *blt_make_entropy_lm(blt_arena *arena, size_t ms,
-                                    const char *load_path, uint64_t seed) {
+blt_entropy_lm *blt_make_entropy_lm(blt_arena *arena, size_t ms, const char *load_path, uint64_t seed) {
     blt_entropy_lm_config ecfg;
     memset(&ecfg, 0, sizeof(ecfg));
     ecfg.embed_dim = 32;
@@ -92,10 +88,7 @@ blt_entropy_lm *blt_make_entropy_lm(blt_arena *arena, size_t ms,
     return lm;
 }
 
-void blt_make_patcher_cfg(blt_patcher_config *pcfg,
-                          int fixed,
-                          float threshold_global,
-                          float threshold_monotonic,
+void blt_make_patcher_cfg(blt_patcher_config *pcfg, int fixed, float threshold_global, float threshold_monotonic,
                           size_t max_patch_length) {
     memset(pcfg, 0, sizeof(*pcfg));
     if (fixed) {

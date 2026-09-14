@@ -118,7 +118,8 @@ static int run_local_decoder_parity_case(bool cross_attn_all_layers) {
     snprintf(path_loss, sizeof(path_loss), "%s/local_decoder_loss_out_%s.bin", g_test_data_dir, suffix);
     snprintf(path_grad_hidden, sizeof(path_grad_hidden), "%s/local_decoder_grad_byte_hidden_in_%s.bin", g_test_data_dir,
              suffix);
-    snprintf(path_grad_patch, sizeof(path_grad_patch), "%s/local_decoder_grad_patch_in_%s.bin", g_test_data_dir, suffix);
+    snprintf(path_grad_patch, sizeof(path_grad_patch), "%s/local_decoder_grad_patch_in_%s.bin", g_test_data_dir,
+             suffix);
     snprintf(weights_dir, sizeof(weights_dir), "%s/local_decoder_weights_%s", g_test_data_dir, suffix);
 
     blt_tensor byte_hidden_in = {0};
