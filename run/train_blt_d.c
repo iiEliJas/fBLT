@@ -30,6 +30,7 @@
 #include "models/checkpoint.h"
 #include "models/entropy_lm.h"
 #include "models/patcher.h"
+#include "models/model_builder.h"
 #include "models/entropy.h"
 #include "ops/softmax.h"
 #include "models/local_encoder.h"
@@ -732,47 +733,8 @@ static size_t fixed_stride(size_t seq_len, size_t patch_len, blt_patch_info *out
     return np;
 }
 
-// Entropy LM used for --entropy-patches. Initialization mirrors
-// bench/infer_bench.c make_entropy_lm exactly (srand(11), same fill
-// order) so training and inference segment identically.
-static blt_entropy_lm *make_train_entropy_lm(blt_arena *arena, size_t ms) {
-    blt_entropy_lm_config ecfg;
-    memset(&ecfg, 0, sizeof(ecfg));
-    ecfg.embed_dim = 32;
-    ecfg.num_layers = 1;
-    ecfg.num_heads = 2;
-    ecfg.hidden_dim = 64;
-    ecfg.max_seq_len = ms;
-    ecfg.rope_theta = 10000.0f;
-    blt_entropy_lm *lm = blt_entropy_lm_create(arena, &ecfg);
-
-    srand(11);
-    float *emb = (float *)lm->embedding_weight.data;
-    for (size_t i = 0; i < lm->embedding_weight.numel; i++)
-        emb[i] = (((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f) * 0.1f;
-    for (size_t i = 0; i < lm->stack.num_layers; i++) {
-        blt_transformer_layer_storage *l = &lm->stack.layer_storage[i];
-        float *d;
-        d = (float *)l->attn_qkv_w.data;
-        for (size_t j = 0; j < l->attn_qkv_w.numel; j++)
-            d[j] = (((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f) * 0.1f;
-        d = (float *)l->attn_proj_w.data;
-        for (size_t j = 0; j < l->attn_proj_w.numel; j++)
-            d[j] = (((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f) * 0.1f;
-        d = (float *)l->ffn_up_w.data;
-        for (size_t j = 0; j < l->ffn_up_w.numel; j++) d[j] = (((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f) * 0.1f;
-        d = (float *)l->ffn_gate_w.data;
-        for (size_t j = 0; j < l->ffn_gate_w.numel; j++)
-            d[j] = (((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f) * 0.1f;
-        d = (float *)l->ffn_down_w.data;
-        for (size_t j = 0; j < l->ffn_down_w.numel; j++)
-            d[j] = (((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f) * 0.1f;
-    }
-    float *d = (float *)lm->lm_head_weight.data;
-    for (size_t j = 0; j < lm->lm_head_weight.numel; j++)
-        d[j] = (((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f) * 0.1f;
-    return lm;
-}
+// Entropy LM used for --entropy-patches. Delegates to the shared
+// blt_make_entropy_lm with the same config as bench/infer_bench.c.
 
 // Entropy-LM patching (same numerics as the inference controllers).
 // The patcher is host-only, so under a device backend the byte ids are
@@ -799,12 +761,7 @@ static size_t entropy_segment(blt_arena *arena, blt_entropy_lm *lm, const uint8_
     blt_compute_entropy(&probs, &vals, &ecfg);
 
     blt_patcher_config pcfg;
-    memset(&pcfg, 0, sizeof(pcfg));
-    pcfg.threshold_global = 2.5f;
-    pcfg.threshold_monotonic = 1.0f;
-    pcfg.max_patch_length = 16;
-    pcfg.rule = BLT_PATCH_RULE_GLOBAL;
-    pcfg.reset_on_newline = false;
+    blt_make_patcher_cfg(&pcfg, 0, 2.5f, 1.0f, 16);
 
     if (vals.backend == BLT_BACKEND_CPU) {
         return blt_segment_patches(&vals, bytes, out, max_patches, &pcfg);
@@ -1200,43 +1157,7 @@ int main(int argc, char **argv) {
     if (a.dec_layers == 0) a.dec_layers = a.layers;
 
     blt_model_config cfg;
-    memset(&cfg, 0, sizeof(cfg));
-    cfg.encoder_config.embed_dim = a.embed;
-    cfg.encoder_config.patch_dim = 0;
-    cfg.encoder_config.num_layers = a.enc_layers;
-    cfg.encoder_config.hidden_dim = a.hidden;
-    cfg.encoder_config.num_heads = 4;
-    cfg.encoder_config.cross_attn_heads = 4;
-    cfg.encoder_config.local_window = 0;
-    cfg.encoder_config.cross_attn_all_layers = !a.cross_last;
-    cfg.encoder_config.pool_type = BLT_POOL_MEAN;
-    cfg.encoder_config.rope_theta = 500000.0f;
-    cfg.encoder_config.max_seq_len = MS;
-    cfg.encoder_config.ngram_config.ngram_sizes[0] = 3;
-    cfg.encoder_config.ngram_config.ngram_sizes[1] = 4;
-    cfg.encoder_config.ngram_config.num_ngram_sizes = 2;
-    cfg.encoder_config.ngram_config.per_ngram_vocab = 50;
-    cfg.encoder_config.ngram_config.hash_prime = 1000000007ULL;
-    cfg.encoder_config.ngram_config.normalize = true;
-    cfg.encoder_config.ngram_config.embed_dim = a.embed;
-    cfg.encoder_config.pool_type = BLT_POOL_MEAN;
-    cfg.global_config.embed_dim = a.embed;
-    cfg.global_config.num_layers = a.glob_layers;
-    cfg.global_config.hidden_dim = a.hidden;
-    cfg.global_config.num_heads = 4;
-    cfg.global_config.rope_theta = 500000.0f;
-    cfg.global_config.max_seq_len = MS;
-    cfg.decoder_config.embed_dim = a.embed;
-    cfg.decoder_config.patch_dim = 0;
-    cfg.decoder_config.num_layers = a.dec_layers;
-    cfg.decoder_config.hidden_dim = a.hidden;
-    cfg.decoder_config.num_heads = 4;
-    cfg.decoder_config.cross_attn_heads = 4;
-    cfg.decoder_config.local_window = 0;
-    cfg.decoder_config.cross_attn_all_layers = !a.cross_last;
-    cfg.decoder_config.rope_theta = 500000.0f;
-    cfg.decoder_config.max_seq_len = MS;
-    cfg.decoder_config.vocab_size = 256;
+    blt_model_config_defaults(&cfg, a.embed, a.hidden, a.enc_layers, a.glob_layers, a.dec_layers, MS, a.cross_last);
 
     blt_model *model = blt_model_create(model_arena, &cfg);
     if (a.load_path) {
@@ -1244,7 +1165,7 @@ int main(int argc, char **argv) {
         printf("[CKPT] loaded weights from %s\n", a.load_path);
     }
     blt_model_grad *grad = blt_model_grad_create(model_arena, model);
-    blt_entropy_lm *train_lm = a.entropy_patches ? make_train_entropy_lm(host_lm_arena, MS) : NULL;
+    blt_entropy_lm *train_lm = a.entropy_patches ? blt_make_entropy_lm(host_lm_arena, MS, NULL, 11) : NULL;
     if (train_lm && a.entropy_lm) {
         blt_entropy_lm_load(train_lm, a.entropy_lm);
         printf("[TRAIN] entropy-patch segmentation (trained LM: %s)\n", a.entropy_lm);
@@ -1256,7 +1177,7 @@ int main(int argc, char **argv) {
     // windows, SGD+clip, then save. Skips the main model entirely.
     if (a.train_entlm) {
         const size_t num_windows_ = (size_t)fsize / a.window;
-        blt_entropy_lm *lm0 = make_train_entropy_lm(model_arena, MS);
+        blt_entropy_lm *lm0 = blt_make_entropy_lm(model_arena, MS, NULL, 11);
         if (a.entropy_lm) blt_entropy_lm_load(lm0, a.entropy_lm);
         blt_entropy_lm_grad *lm_grad = blt_entropy_lm_grad_create(model_arena, lm0);
         printf("[ENTLM] training entropy LM -> %s\n", a.train_entlm);

@@ -34,6 +34,7 @@
 #include "infer/block_generation.h"
 #include "infer/self_speculation.h"
 #include "core/generate_greedy.h"
+#include "models/model_builder.h"
 
 typedef struct {
     const char *ckpt_plain;
@@ -81,103 +82,6 @@ static const bench_args DEFAULTS = {
     .no_hetv = 0,
     .dv_gate = 0.90,
 };
-
-//----------------------------------------------------------------------
-// Shared setup
-//----------------------------------------------------------------------
-
-static void build_model_config(blt_model_config *cfg, const bench_args *a, size_t MS) {
-    const size_t E = a->embed, HID = a->hidden;
-    memset(cfg, 0, sizeof(*cfg));
-    cfg->encoder_config.embed_dim = E;
-    cfg->encoder_config.patch_dim = 0;
-    cfg->encoder_config.num_layers = a->enc_layers;
-    cfg->encoder_config.hidden_dim = HID;
-    cfg->encoder_config.num_heads = 4;
-    cfg->encoder_config.cross_attn_heads = 4;
-    cfg->encoder_config.local_window = 0;
-    cfg->encoder_config.cross_attn_all_layers = !a->cross_last;
-    cfg->encoder_config.pool_type = BLT_POOL_MEAN;
-    cfg->encoder_config.rope_theta = 500000.0f;
-    cfg->encoder_config.max_seq_len = MS;
-    cfg->encoder_config.ngram_config.ngram_sizes[0] = 3;
-    cfg->encoder_config.ngram_config.ngram_sizes[1] = 4;
-    cfg->encoder_config.ngram_config.num_ngram_sizes = 2;
-    cfg->encoder_config.ngram_config.per_ngram_vocab = 50;
-    cfg->encoder_config.ngram_config.hash_prime = 1000000007ULL;
-    cfg->encoder_config.ngram_config.normalize = true;
-    cfg->encoder_config.ngram_config.embed_dim = E;
-    cfg->global_config.embed_dim = E;
-    cfg->global_config.num_layers = a->glob_layers;
-    cfg->global_config.hidden_dim = HID;
-    cfg->global_config.num_heads = 4;
-    cfg->global_config.rope_theta = 500000.0f;
-    cfg->global_config.max_seq_len = MS;
-    cfg->decoder_config.embed_dim = E;
-    cfg->decoder_config.patch_dim = 0;
-    cfg->decoder_config.num_layers = a->dec_layers;
-    cfg->decoder_config.hidden_dim = HID;
-    cfg->decoder_config.num_heads = 4;
-    cfg->decoder_config.cross_attn_heads = 4;
-    cfg->decoder_config.local_window = 0;
-    cfg->decoder_config.cross_attn_all_layers = !a->cross_last;
-    cfg->decoder_config.rope_theta = 500000.0f;
-    cfg->decoder_config.max_seq_len = MS;
-    cfg->decoder_config.vocab_size = 256;
-}
-
-static void fill_small_uniform(blt_tensor *t, float scale) {
-    float *data = (float *)t->data;
-    for (size_t i = 0; i < t->numel; i++) {
-        float r = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
-        data[i] = r * scale;
-    }
-}
-
-static blt_entropy_lm *make_entropy_lm(blt_arena *arena, size_t MS, const char *load_path) {
-    blt_entropy_lm_config ecfg;
-    memset(&ecfg, 0, sizeof(ecfg));
-    ecfg.embed_dim = 32;
-    ecfg.num_layers = 1;
-    ecfg.num_heads = 2;
-    ecfg.hidden_dim = 64;
-    ecfg.max_seq_len = MS;
-    ecfg.rope_theta = 10000.0f;
-    blt_entropy_lm *lm = blt_entropy_lm_create(arena, &ecfg);
-    srand(11);
-    fill_small_uniform(&lm->embedding_weight, 0.1f);
-    for (size_t i = 0; i < lm->stack.num_layers; i++) {
-        blt_transformer_layer_storage *l = &lm->stack.layer_storage[i];
-        fill_small_uniform(&l->attn_qkv_w, 0.1f);
-        fill_small_uniform(&l->attn_proj_w, 0.1f);
-        fill_small_uniform(&l->ffn_up_w, 0.1f);
-        fill_small_uniform(&l->ffn_gate_w, 0.1f);
-        fill_small_uniform(&l->ffn_down_w, 0.1f);
-    }
-    fill_small_uniform(&lm->lm_head_weight, 0.1f);
-    if (load_path) {
-        blt_entropy_lm_load(lm, load_path);
-        printf("[INFER-BENCH] entropy LM loaded from %s\n", load_path);
-    }
-    return lm;
-}
-
-static void make_patcher_cfg(blt_patcher_config *pcfg, int fixed) {
-    memset(pcfg, 0, sizeof(*pcfg));
-    if (fixed) {
-        // Disables entropy boundaries: every patch is exactly 4 bytes --
-        // the segmentation the checkpoints were trained with.
-        pcfg->threshold_global = 1e9f;
-        pcfg->threshold_monotonic = 1e9f;
-        pcfg->max_patch_length = 4;
-    } else {
-        pcfg->threshold_global = 2.5f;
-        pcfg->threshold_monotonic = 1.0f;
-        pcfg->max_patch_length = 16;
-    }
-    pcfg->rule = BLT_PATCH_RULE_GLOBAL;
-    pcfg->reset_on_newline = false;
-}
 
 //----------------------------------------------------------------------
 // Backend placement
@@ -453,7 +357,7 @@ int main(int argc, char **argv) {
     blt_arena *scratch = blt_arena_create(256 * 1024 * 1024, a.use_cuda ? BLT_BACKEND_CUDA : BLT_BACKEND_CPU);
 
     blt_model_config cfg;
-    build_model_config(&cfg, &a, MS);
+    blt_model_config_defaults(&cfg, a.embed, a.hidden, a.enc_layers, a.glob_layers, a.dec_layers, MS, a.cross_last);
 
     blt_model *plain;
     blt_model *bltd;
@@ -472,7 +376,8 @@ int main(int argc, char **argv) {
         upload_model_weights(plain, plain_h);
         upload_model_weights(bltd, bltd_h);
 
-        lm = make_entropy_lm(host_arena, MS, a.entropy_lm);
+        lm = blt_make_entropy_lm(host_arena, MS, a.entropy_lm, 11);
+        if (a.entropy_lm) printf("[INFER-BENCH] entropy LM loaded from %s\n", a.entropy_lm);
         blt_entropy_lm *lm_d = blt_entropy_lm_create(arena, &lm->config);
         upload_entropy_lm_weights(lm_d, lm);
         lm = lm_d;
@@ -484,11 +389,12 @@ int main(int argc, char **argv) {
         bltd = blt_model_create(arena, &cfg);
         blt_model_load(plain, a.ckpt_plain);
         blt_model_load(bltd, a.ckpt_bltd);
-        lm = make_entropy_lm(arena, MS, a.entropy_lm);
+        lm = blt_make_entropy_lm(arena, MS, a.entropy_lm, 11);
+        if (a.entropy_lm) printf("[INFER-BENCH] entropy LM loaded from %s\n", a.entropy_lm);
     }
     printf("[INFER-BENCH] loaded %s + %s [%s]\n", a.ckpt_plain, a.ckpt_bltd, a.use_cuda ? "cuda" : "cpu");
     blt_patcher_config pcfg;
-    make_patcher_cfg(&pcfg, a.fixed_patches);
+    blt_make_patcher_cfg(&pcfg, a.fixed_patches, 2.5f, 1.0f, 16);
     printf("[INFER-BENCH] patcher: %s\n", a.fixed_patches ? "fixed-stride-4" : "entropy (thr 2.5/1.0, max 16)");
 
     // Held-out prompts at deep offsets.

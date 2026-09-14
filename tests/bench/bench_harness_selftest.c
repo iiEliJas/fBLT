@@ -5,7 +5,7 @@
 #include <math.h>
 
 // ============================================================================
-// Harness self-test — exit criteria from docs/Plan:
+// Harness self-test:
 //
 //   1. Running the same fixed config twice produces latency stats whose means
 //      agree within ~2%.
@@ -61,7 +61,7 @@ int main(int argc, char **argv) {
     printf("  workload: fixed FMA sweep, %d iterations x%d runs (warmup %d, cold pass discarded)\n", ITERATIONS, 2,
            WARMUP);
 
-    // ---- Criterion 1: two runs of the same config agree within 2% ----
+    // two runs of the same config agree within 2%
     bench_stats run1;
     bench_stats run2;
     measure_once(&run1);
@@ -94,7 +94,7 @@ int main(int argc, char **argv) {
         pass = 0;
     }
 
-    // ---- Criterion 2: emit two dummy JSONL entries for bench_report.py ----
+    // emit two dummy JSONL entries for bench_report.py
     bench_result r1;
     bench_result_init(&r1, "selftest_workload", "dummy_a", "harness_selftest");
     r1.latency = run1;

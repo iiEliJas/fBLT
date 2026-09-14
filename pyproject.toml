@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fblt"
+version = "0.1.0"
+description = "Fast Byte Latent Transformer"
+requires-python = ">=3.9"
+dependencies = ["pyyaml"]
+
+[tool.setuptools.packages.find]
+include = ["fblt*"]
+
+[project.scripts]
+fblt-train = "fblt.train:main"
+fblt-infer = "fblt.infer:main"

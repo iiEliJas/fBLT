@@ -36,6 +36,7 @@ extern "C" {
 #include "models/entropy_lm.h"
 #include "models/entropy.h"
 #include "models/hash_ngram.h"
+#include "models/model_builder.h"
 #include "models/patcher.h"
 #include "models/transformer.h"
 

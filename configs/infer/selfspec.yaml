@@ -1,0 +1,6 @@
+method: selfspec
+new-bytes: 64
+seed: 11
+k: 8
+fixed-patches: true
+cross-attn: all

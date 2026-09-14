@@ -79,6 +79,7 @@ CORE_SRCS := \
 	$(SRC_DIR)/models/block_diffusion.c \
 	$(SRC_DIR)/models/global_transformer.c \
 	$(SRC_DIR)/models/model.c \
+	$(SRC_DIR)/models/model_builder.c \
 	$(SRC_DIR)/models/checkpoint.c \
 	$(SRC_DIR)/infer/stats.c \
 	$(SRC_DIR)/infer/rope_gather.c \
@@ -147,7 +148,7 @@ TEST_OBJS := $(addprefix $(OBJ_DIR)/,$(TEST_SRCS:.c=.o)) $(CORE_OBJS)
 # ============================================================================
 # TARGETS
 # ============================================================================
-.PHONY: all test main bench bench-harness bench-cuda sandbox e2e-dv bench-infer sweep cuda-smoke cuda-sanitize clean info help
+.PHONY: all test main bench bench-harness bench-cuda sandbox e2e-dv bench-infer sweep cuda-smoke cuda-sanitize infer clean info help
 
 all: test
 
@@ -300,7 +301,32 @@ $(BIN_DIR)/cuda_smoke$(EXE_EXT): $(RUN_DIR)/cuda_smoke.c $(CORE_OBJS) $(CUDA_SMO
 train-blt-d: $(BIN_DIR)/train_blt_d$(EXE_EXT)
 	@echo [TRAIN] Built successfully: $(BIN_DIR)/train_blt_d$(EXE_EXT)
 
+# Link inference binary
+$(BIN_DIR)/infer$(EXE_EXT): $(RUN_DIR)/infer.c $(CORE_OBJS)
+	@mkdir -p $(BIN_DIR)
+	@echo "[CC] $< -> $@"
+	@$(CC) $(CFLAGS) $(RUN_DIR)/infer.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
+infer: $(BIN_DIR)/infer$(EXE_EXT)
+	@echo [INFER] Built successfully: $(BIN_DIR)/infer$(EXE_EXT)
+
+# Link end-to-end driver
+$(BIN_DIR)/e2e_blt_dv$(EXE_EXT): $(RUN_DIR)/e2e_blt_dv.c $(CORE_OBJS)
+	@mkdir -p $(BIN_DIR)
+	@$(CC) $(CFLAGS) $(RUN_DIR)/e2e_blt_dv.c $(CORE_OBJS) -o $@ $(LDLIBS)
+
+# Link inference benchmark
+$(BIN_DIR)/infer_bench$(EXE_EXT): bench/infer_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJS)
+	@mkdir -p $(BIN_DIR)
+	@echo "[CC] $< -> $@"
+	@$(CC) $(CFLAGS) -I$(BENCH_DIR) bench/infer_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)
+
+$(BIN_DIR)/cuda_bench$(EXE_EXT): bench/cuda_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJS)
+	@mkdir -p $(BIN_DIR)
+	@echo "[CC] $< -> $@"
+	@$(CC) $(CFLAGS) -I$(BENCH_DIR) bench/cuda_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)
+
+	
 # ============================================================================
 # CLEAN
 # ============================================================================
@@ -325,6 +351,8 @@ help:
 	@echo -  make main       - Build main exe
 	@echo -  make bench       - Build benchmark exe
 	@echo -  make bench-harness - Build + run benchmark harness self-test
+	@echo -  make infer      - Build inference binary
+	@echo -  make train-blt-d - Build BLT-D trainer
 	@echo -  make all        - Same as 'make test'
 	@echo -  make clean      - Remove all generated files
 	@echo -  make info       - Display build config
@@ -337,18 +365,4 @@ help:
 -include $(shell find obj obj-cuda -name '*.d' 2>/dev/null)
 
 
-# Link end-to-end driver
-$(BIN_DIR)/e2e_blt_dv$(EXE_EXT): $(RUN_DIR)/e2e_blt_dv.c $(CORE_OBJS)
-	@mkdir -p $(BIN_DIR)
-	@$(CC) $(CFLAGS) $(RUN_DIR)/e2e_blt_dv.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
-# Link inference benchmark
-$(BIN_DIR)/infer_bench$(EXE_EXT): bench/infer_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJS)
-	@mkdir -p $(BIN_DIR)
-	@echo "[CC] $< -> $@"
-	@$(CC) $(CFLAGS) -I$(BENCH_DIR) bench/infer_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)
-
-$(BIN_DIR)/cuda_bench$(EXE_EXT): bench/cuda_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJS)
-	@mkdir -p $(BIN_DIR)
-	@echo "[CC] $< -> $@"
-	@$(CC) $(CFLAGS) -I$(BENCH_DIR) bench/cuda_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)

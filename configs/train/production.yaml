@@ -1,0 +1,19 @@
+# 2.97M-parameter BLT-D training
+corpus: data/corpus.bin
+embed: 192
+hidden: 384
+layers: 2
+steps: 40000
+lr: 0.05
+lr-decay: 1
+optimizer: sgd
+diffusion: 1
+block-size: 4
+window: 48
+t-min: 0.1
+t-warmup-hi: 0.25
+t-hi-start: 0.8
+mask-warmup: 33200
+mask-scale: 0.3
+cross-attn: all
+save-weights: runs/my_checkpoint.fblt

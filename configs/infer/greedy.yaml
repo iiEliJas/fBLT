@@ -1,0 +1,5 @@
+method: greedy
+new-bytes: 64
+seed: 11
+fixed-patches: true
+cross-attn: all

@@ -8,7 +8,7 @@ All commands assume the repo root as working directory. CUDA builds output to `b
 
 | Command | Description |
 |---------|-------------|
-| `make test` | Build + run full test suite (68 tests, ~4s) |
+| `make test` | Build + run full C test suite (69 tests, ~4s) |
 | `make CUDA=1 test` | Same, CUDA backend |
 | `make main` | Build minimal main (linking stub) |
 | `make CUDA=1 main` | Same, CUDA |
@@ -16,6 +16,62 @@ All commands assume the repo root as working directory. CUDA builds output to `b
 | `make sandbox` | Build + run scratch playground (`run/sandbox.c`) |
 | `make cuda-smoke` | Device sanity check (H2D → kernel → D2H) |
 | `make cuda-sanitize` | Run tests under `compute-sanitizer` (native Linux) |
+| `python3 tests/test_config.py` | Python config tests (93 tests — round-trip, YAML, overrides, C drift protection) |
+| `python3 tests/test_entrypoints.py` | Python entry-point tests (41 tests — run-dir, resolved_config, auto-shape, defaults) |
+
+---
+
+## Python Wrapper: `fblt-train`
+
+Installed via `pip install -e .`. Wraps `train_blt_d` with YAML config loading and run-directory management.
+
+```
+fblt-train --backend cpu|cuda [--config FILE] [--override key=value ...] [--run-name NAME]
+```
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--backend {cpu,cuda}` | yes | Compute backend (never in YAML) |
+| `--config FILE` | no | YAML config file (see `configs/train/`) |
+| `--override key=value` | no | Override any config field (repeatable) |
+| `--run-name NAME` | no | Run directory name (default: `{config}-{timestamp}`) |
+
+The wrapper creates `runs/<run-name>/` with `resolved_config.yaml` containing the full effective config. All `train_blt_d` flags can be set via YAML or `--override`. The `--backend` flag must always be passed on the command line.
+
+```bash
+fblt-train --config configs/train/production.yaml --backend cuda
+fblt-train --config configs/train/debug.yaml --backend cpu --override steps=100
+```
+
+---
+
+## Python Wrapper: `fblt-infer`
+
+Installed via `pip install -e .`. Wraps `infer` with YAML config loading and auto shape-matching.
+
+```
+fblt-infer --backend cpu|cuda --checkpoint FILE [--config FILE] [--override key=value ...]
+           [--prompt TEXT | --prompt-file FILE] [--output FILE]
+```
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--backend {cpu,cuda}` | yes | Compute backend (never in YAML) |
+| `--checkpoint FILE` | yes | Model checkpoint (.fblt) |
+| `--config FILE` | no | YAML config file (see `configs/infer/`) |
+| `--override key=value` | no | Override any config field (repeatable) |
+| `--prompt TEXT` | no | Prompt text (mutually exclusive with --prompt-file) |
+| `--prompt-file FILE` | no | Prompt file (mutually exclusive with --prompt) |
+| `--output FILE` | no | Output file (default: stdout) |
+
+If no `--prompt` or `--prompt-file`, reads from stdin. Auto-detects model dimensions from `resolved_config.yaml` next to the checkpoint (when produced by `fblt-train`).
+
+```bash
+fblt-infer --checkpoint runs/debug_checkpoint.fblt --backend cpu --prompt "int main"
+fblt-infer --checkpoint my_model.fblt --backend cpu \
+  --override embed=192 --override hidden=384 \
+  --override enc-layers=2 --override glob-layers=2 --override dec-layers=2
+```
 
 ---
 
@@ -119,7 +175,122 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 
 ---
 
+## bin/infer — Production inference
+
+> **Note:** For most use cases, prefer `fblt-infer` (Python wrapper above) which handles config loading and shape auto-detection. Use the raw `bin/infer` binary directly only when you need to skip the wrapper or debug it.
+
+Single-checkpoint, single-prompt, one-shot generation tool.
+
+```
+bin/infer --checkpoint FILE --embed E --hidden H --enc-layers N --glob-layers N --dec-layers N --backend cpu|cuda [options]
+```
+
+### Required
+
+| Flag | Description |
+|------|-------------|
+| `--checkpoint FILE` | Model checkpoint (.fblt) |
+| `--embed E` | Model embed dim (must match checkpoint) |
+| `--hidden H` | Model hidden dim (must match checkpoint) |
+| `--enc-layers N` | Encoder layers (must match checkpoint) |
+| `--glob-layers N` | Global transformer layers (must match checkpoint) |
+| `--dec-layers N` | Decoder layers (must match checkpoint) |
+| `--backend cpu\|cuda` | Compute backend |
+
+### Prompt Source
+
+Exactly one required.
+
+| Flag | Description |
+|------|-------------|
+| `--prompt TEXT` | Raw bytes to use as prompt |
+| `--prompt-file FILE` | Read prompt from file (raw bytes) |
+| (stdin) | Read raw bytes from stdin until EOF |
+
+### Generation Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--new-bytes N` | 64 | Number of bytes to generate |
+| `--method MODE` | greedy | `greedy`, `selfspec`, `blockdiff`, `blockdv` |
+| `--seed N` | 11 | RNG seed (for random-init entropy LM) |
+
+### Self-Speculation Options
+
+Used with `--method selfspec`.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--k N` | 8 | Speculative draft window size |
+
+### Block Diffusion Options
+
+Used with `--method blockdiff` or `blockdv`.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--block-size B` | 8 | Diffusion block size |
+| `--unmask STRAT` | confidence | `confidence` or `eb` (entropy-bounded) |
+| `--threshold F` | 0.7/1.0 | Alpha (confidence) or gamma (eb) |
+| `--boundary-aligned` | off | Commit only at patch boundaries |
+| `--adaptive` | off | Adaptive block size |
+| `--b-min N` | 4 | Adaptive lower bound |
+| `--b-max N` | 16 | Adaptive upper bound |
+| `--accept-target F` | 0.5 | Rolling acceptance target |
+| `--adapt-window N` | 8 | Rounds per rolling average |
+
+### Model Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--cross-attn MODE` | all | `all` or `last` cross-attention placement |
+
+### Patcher Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--fixed-patches` | off | Fixed-stride-4 patching (matches training) |
+| `--patch-threshold-global F` | 2.5 | Global entropy threshold |
+| `--patch-threshold-monotonic F` | 1.0 | Monotonic threshold |
+| `--max-patch-length N` | 16 | Maximum patch size |
+| `--entropy-lm FILE` | (none) | Trained entropy-LM weights |
+
+### I/O Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--output FILE` | stdout | Write generated bytes to file |
+
+### Examples
+
+```bash
+# Greedy generation with fixed patches (matches training)
+bin/infer --checkpoint runs/my_model.fblt \
+  --embed 192 --hidden 384 --enc-layers 2 --glob-layers 2 --dec-layers 2 \
+  --backend cpu --fixed-patches --prompt "int main()" --new-bytes 64
+
+# BLT-DV with entropy patching
+bin/infer --checkpoint runs/my_model.fblt \
+  --embed 192 --hidden 384 --enc-layers 2 --glob-layers 2 --dec-layers 2 \
+  --backend cpu --method blockdv --block-size 8 --threshold 0.7 \
+  --entropy-lm runs/entlm.bin --prompt "def " --new-bytes 128
+
+# CUDA inference with output to file
+bin-cuda/infer --checkpoint runs/my_model.fblt \
+  --embed 192 --hidden 384 --enc-layers 2 --glob-layers 2 --dec-layers 2 \
+  --backend cuda --fixed-patches --prompt-file prompt.bin \
+  --new-bytes 256 --output generated.bin
+```
+
+Generated bytes go to stdout (or `--output` file) as raw bytes. All diagnostics and stats go to stderr.
+
+Exit codes: 0 on success, 1 on error.
+
+---
+
 ## Inference Benchmark: `infer_bench`
+
+> **Note:** `infer_bench` is a research/benchmarking tool for comparing methods against paired checkpoints. For generating text from a single checkpoint, use `fblt-infer` or `bin/infer` instead.
 
 **Binary**: `bin/infer_bench` (CPU) / `bin-cuda/infer_bench` (CUDA)
 

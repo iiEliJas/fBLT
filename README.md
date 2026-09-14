@@ -23,15 +23,34 @@ Five-stage pipeline:
 
 5. **Local Decoder**: tiny transformer that expands patches back to bytes, with optional self-speculation
 
+## Quickstart
+
+```bash
+pip install -e .                    # install fblt package + entry points
+make CUDA=1 train-blt-d infer       # build C binaries (drop CUDA=1 for CPU-only)
+
+# Train a tiny model (debug config, ~10 steps)
+fblt-train --config configs/train/debug.yaml --backend cpu
+
+# Generate text from the trained checkpoint (auto-shapes from resolved_config.yaml)
+CKPT=$(ls runs/debug-*/checkpoint.fblt | head -1)
+fblt-infer --checkpoint "$CKPT" --backend cpu --prompt "int main"
+```
+
+The debug config trains a small model in seconds. For production training, use `configs/train/production.yaml` with CUDA.
+
 ## Build
 
 ```bash
-make test         # build + run tests
-make train-blt-d  # build train_blt_d executable to train
+make test         # build + run C test suite
+make train-blt-d  # build train_blt_d executable for training
 make main         # build main executable
 make info         # show build config
 make clean        # remove obj/, bin/
 make help         # show all targets
+
+python3 tests/test_config.py        # Python config tests
+python3 tests/test_entrypoints.py   # Python entry-point tests
 ```
 
 Default is `gcc -O2 -std=c99 -Wall -Wextra`. Change it:
@@ -42,6 +61,14 @@ make CC=clang CFLAGS="-O3 -std=c99 -Wall"
 
 CUDA: `make CUDA=1 <target>` compiles `.cu` files with nvcc, outputs to `obj-cuda/` and `bin-cuda/`.
 
+### Python setup
+
+```bash
+pip install -e .    # installs fblt package + fblt-train / fblt-infer entry points
+```
+
+Requires Python >= 3.9.
+
 ## Layout
 
 ```
@@ -51,19 +78,37 @@ csrc/
   models/             Model components
   infer/              Inference: KV cache, speculation, block generation
 
-fblt/
-  scripts/            Python utilities
+fblt/                 Python package
+  __init__.py
+  train.py            Training entry point (fblt-train)
+  infer.py            Inference entry point (fblt-infer)
+  _binary.py          Binary path resolution
+  _config.py          TrainConfig / InferConfig dataclasses, YAML loader
+  _runner.py          Subprocess runner with live streaming
+  scripts/            Utilities (bench_plots, bench_report, gen_configs, prep_corpus)
 
-tests/                Test suite
+configs/
+  train/              Training YAML configs (production, debug)
+  infer/              Inference YAML configs (greedy, selfspec, blockdiff, blockdv)
+  ablations/          Ablation sweep configs (JSON)
+
+tests/                Test suite (C + Python)
 bench/                Benchmarks
-run/                  Entry points
-configs/              Model configs (JSON)
+run/                  C entry points (train_blt_d.c, infer.c, etc.)
 data/                 Sample data (tests, training, etc.)
 ```
 
 ## Training configuration
 
 The production config for 2.97M-parameter BLT-D training (embed=192, hidden=384, 2/2/2 layers):
+
+```bash
+fblt-train --config configs/train/production.yaml --backend cuda
+```
+
+The wrapper creates a run directory under `runs/`, writes a `resolved_config.yaml` with the full config, and calls `train_blt_d`. All `--override key=value` flags are passed through, and `--backend` is always required on the command line (never in YAML).
+
+The underlying C binary can still be called directly:
 
 ```bash
 ./bin-cuda/train_blt_d --backend cuda \
@@ -75,6 +120,8 @@ The production config for 2.97M-parameter BLT-D training (embed=192, hidden=384,
   --diffusion 1 --block-size 4 --window 48 \
   --save-weights runs/my_checkpoint.fblt
 ```
+
+This is what `fblt-train` actually calls. Use it when you need to skip the wrapper or debug the binary directly.
 
 **What was tested and found** (see [ABLATIONS.md](docs/ABLATIONS.md) for details):
 
@@ -91,14 +138,10 @@ The production config for 2.97M-parameter BLT-D training (embed=192, hidden=384,
 CUDA delivers **76x training speedup** and **34x generation speedup** over CPU at production config (E=192, H=384, 2.97M params). CPU baseline is single-threaded naive loops. Matmul fp32 hits **6.4 TFLOP/s** on the desktop RTX 4060 (**42.4% MFU** against the 15.11 TFLOP/s spec peak). BF16 mixed-precision matmuls reach **~20 TFLOP/s** (~3x the fp32 rate).
 
 ```bash
-# Training
+# Raw binary (same as fblt-train above)
 ./bin-cuda/train_blt_d --backend cuda --embed 192 --hidden 384 \
   --steps 40000 --lr 0.05 --mask-scale 0.3 \
   --t-warmup-hi 0.25 --t-hi-start 0.8
-
-# Inference
-./bin-cuda/infer_bench --backend cuda --plain runs/my_checkpoint.fblt \
-  --bltd runs/my_checkpoint.fblt --prompts 8 --new-bytes 64
 ```
 
 Full results: [BENCHMARKS.md](docs/BENCHMARKS.md).
@@ -106,6 +149,35 @@ Full results: [BENCHMARKS.md](docs/BENCHMARKS.md).
 **OPEN items:** Seed-dependent non-determinism from CUDA atomics. Acceptance-rate root cause at this scale is unknown.
 
 ## Inference
+
+### Generating text from a checkpoint
+
+Use `fblt-infer` to generate text from a trained model:
+
+```bash
+fblt-infer --checkpoint runs/debug_checkpoint.fblt --backend cpu \
+  --config configs/infer/greedy.yaml --prompt "int main"
+```
+
+If the checkpoint was produced by `fblt-train`, the wrapper auto-detects model dimensions from `resolved_config.yaml`. So no need to pass `--embed`, `--hidden`, etc. manually. For checkpoints not produced by the wrapper, pass shape flags via `--override`:
+
+```bash
+fblt-infer --checkpoint my_model.fblt --backend cpu \
+  --override embed=192 --override hidden=384 \
+  --override enc-layers=2 --override glob-layers=2 --override dec-layers=2 \
+  --prompt "def "
+```
+
+Inference methods: `greedy` (default), `selfspec`, `blockdiff`, `blockdv`. See `configs/infer/` for example YAML configs for each method.
+
+### Benchmarking (research tool)
+
+`infer_bench` is a separate research/benchmarking tool that compares inference methods and writes metrics to `bench/results.jsonl`.
+
+```bash
+make bench-infer                       # needs runs/*_40k.fblt checkpoints
+python3 fblt/scripts/bench_plots.py    # writes graphs/*.png
+```
 
 Three inference modes, benchmarked on the 2.97M-param checkpoint:
 
@@ -116,15 +188,10 @@ Three inference modes, benchmarked on the 2.97M-param checkpoint:
 **Headline finding:** At 2.97M params, all verified inference methods (BLT-S, BLT-DV) cost *more* memory bandwidth than greedy. BLT-DV acceptance rates (1.6-5.2%) are 18-42x lower than the paper's 3B results. Root cause likely because of the 340x scale gap. See [BENCHMARKS.md](docs/BENCHMARKS.md) for full results.
 
 ![Speculative acceptance rates by method](graphs/acceptance.png)
-*Drafted-byte acceptance rate by method, 2.97M-param checkpoint. BLT-S k=4 leads at 31%, declining sharply with k. BLT-DV variants cluster at 2–25%.*
+*Drafted-byte acceptance rate by method, 2.97M-param checkpoint. BLT-S k=4 leads at 31%, declining sharply with k. BLT-DV variants cluster at 2-25%.*
 
 ![Mean wall-clock latency per prompt](graphs/latency.png)
 *Mean wall-clock ms per prompt (64 new bytes). KV-cache usage differs between inference paths, so these are rough wall-clock numbers, not a clean comparison.*
-
-```bash
-make bench-infer                       # needs runs/*_40k.fblt checkpoints
-python3 fblt/scripts/bench_plots.py           # writes graphs/*.png
-```
 
 ## Ablation sweeps
 
@@ -159,6 +226,11 @@ Full tables, raw numbers, and production config: [ABLATIONS.md](docs/ABLATIONS.m
 - CUDA backend
 - Training configuration validation (2.97M params, 40k steps)
 - Inference re-verification (acceptance rates, bandwidth analysis)
+- Python wrapper scripts (fblt-train, fblt-infer) with YAML config loading
+- Config dataclasses (TrainConfig, InferConfig) with CLI override merging
+- Auto shape-matching from resolved_config.yaml
+- Run-directory management with resolved config snapshots
+- YAML configs for training and inference
 
 **Todo:**
 - Multi-GPU / larger-scale training runs

@@ -1,0 +1,7 @@
+method: blockdiff
+new-bytes: 64
+seed: 11
+block-size: 8
+unmask: confidence
+threshold: 0.7
+cross-attn: all

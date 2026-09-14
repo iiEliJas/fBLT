@@ -1,0 +1,12 @@
+# Quick smoke test config
+corpus: data/train.bin
+embed: 32
+hidden: 64
+layers: 1
+steps: 10
+lr: 0.05
+optimizer: sgd
+diffusion: 1
+block-size: 4
+window: 16
+report-every: 5

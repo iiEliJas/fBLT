@@ -15,6 +15,7 @@ obj-cuda/
 # Python
 __pycache__/
 *.pyc
+*.egg-info/
 .venv/
 .cache/
 
