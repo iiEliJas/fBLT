@@ -5,9 +5,25 @@
 
 Fast Byte Latent Transformer in pure C and CUDA. A byte-level language model with no tokenizer, built for code completion and small LLMs.
 
-Based on two papers from Meta:
+Based on two papers from Meta FAIR (with Stanford and University of Washington collaborators):
 - [Byte Latent Transformer](https://arxiv.org/abs/2412.09871) - Byte modeling with entropy-based dynamic patching. Matches token-based LLM scaling, no vocabulary needed.
 - [Fast Byte Latent Transformer](https://arxiv.org/abs/2605.08044) - Faster inference with diffusion decoding and self-speculation.
+
+## Table of contents
+
+- [How it works](#how-it-works)
+- [Prerequisites](#prerequisites)
+- [Quickstart](#quickstart)
+- [Build](#build)
+- [Layout](#layout)
+- [Training configuration](#training-configuration)
+- [Inference](#inference)
+- [Ablation sweeps](#ablation-sweeps)
+- [TODO](#todo)
+- [Docs](#docs)
+- [Contributing](#contributing)
+- [References](#references)
+- [License](#license)
 
 ## How it works
 
@@ -22,6 +38,12 @@ Five-stage pipeline:
 4. **Patch Transformer**: the main model. Block-causal attention over patches.
 
 5. **Local Decoder**: tiny transformer that expands patches back to bytes, with optional self-speculation
+
+## Prerequisites
+
+- C compiler (`gcc` or `clang`), C99-compatible
+- Python >= 3.9
+- (Optional, for GPU training/inference) CUDA toolkit with `nvcc`
 
 ## Quickstart
 
@@ -99,7 +121,7 @@ ruff format --check .                 # format check
 For the C test suite parity tests, generate golden data first:
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cpu numpy
+pip install torch numpy
 make parity-data                      # or just python tests/py/parity_generate.py
 make test                             # build + run C tests
 ```
@@ -156,32 +178,18 @@ The underlying C binary can still be called directly:
   --save-weights runs/my_checkpoint.fblt
 ```
 
-This is what `fblt-train` actually calls. Use it when you need to skip the wrapper or debug the binary directly.
-
-**What was tested and found** (see [ABLATIONS.md](docs/ABLATIONS.md) for details):
-
-| Setting | Value | Finding |
-|---|---|---|
-| Step budget | 40k | Safe convergence floor; masked acc > 0.99 across seeds |
-| Mask-warmup | 83% of steps | 95% is a minor improvement, not required |
-| Decoder depth | 2 layers | Deeper decoder (3-4 layers) doesn't help |
-| Encoder depth | 2 layers | Deeper encoder shows instability |
-| Cross-attn | all or last | xlast is ~15% faster, quality indistinguishable |
-| High-t warmup | on | -0.33 BPB improvement, no instability |
-| Mask-late | off | No benefit found |
+Use it when you need to skip the wrapper or debug the binary directly.
 
 CUDA delivers **76x training speedup** and **34x generation speedup** over CPU at production config (E=192, H=384, 2.97M params). CPU baseline is single-threaded naive loops. Matmul fp32 hits **6.4 TFLOP/s** on the desktop RTX 4060 (**42.4% MFU** against the 15.11 TFLOP/s spec peak). BF16 mixed-precision matmuls reach **~20 TFLOP/s** (~3x the fp32 rate).
 
-```bash
-# Raw binary (same as fblt-train above)
-./bin-cuda/train_blt_d --backend cuda --embed 192 --hidden 384 \
-  --steps 40000 --lr 0.05 --mask-scale 0.3 \
-  --t-warmup-hi 0.25 --t-hi-start 0.8
-```
+For the full table of settings tested (step budget, decoder/encoder depth, cross-attn, warmup schedules), see [Ablation sweeps](#ablation-sweeps) below.
 
 Full results: [BENCHMARKS.md](docs/BENCHMARKS.md).
 
-**OPEN items:** Seed-dependent non-determinism from CUDA atomics. Acceptance-rate root cause at this scale is unknown.
+### Known issues
+
+- Seed-dependent non-determinism from CUDA atomics.
+- Acceptance-rate root cause at this scale is unknown.
 
 ## Inference
 
@@ -232,14 +240,15 @@ Three inference modes, benchmarked on the 2.97M-param checkpoint:
 
 Architecture and schedule ablations at 2.97M parameters (embed=192, hidden=384, 2/2/2 layers) on ~67 MB of C source code. Each axis tested with 3-6 seeds at 40k steps.
 
-| Axis | Finding |
-|---|---|
-| Decoder depth | Deeper decoder (3-4 layers) doesn't help so 2/2/2 is optimal |
-| Encoder depth | Deeper encoder (3/2/2) is harmful so 2 layers is best |
-| Cross-attn | base (all) and xlast (last) tied at 83% warmup - xlast ~15% faster |
-| High-t warmup | Improves BPB by 0.33 (2.7x noise floor), no instability |
-| Mask-late | No benefit found |
-| Step budget | 40k is safe convergence floor (cliff sits somewhere at 25k-35k) |
+| Setting | Value | Finding |
+|---|---|---|
+| Step budget | 40k | Safe convergence floor; masked acc > 0.99 across seeds (cliff sits somewhere at 25k-35k) |
+| Mask-warmup | 83% of steps | 95% is a minor improvement, not required |
+| Decoder depth | 2 layers | Deeper decoder (3-4 layers) doesn't help — 2/2/2 is optimal |
+| Encoder depth | 2 layers | Deeper encoder (3/2/2) is harmful — 2 layers is best |
+| Cross-attn | all or last | base (all) and xlast (last) tied at 83% warmup — xlast ~15% faster |
+| High-t warmup | on | Improves BPB by 0.33 (2.7x noise floor), no instability |
+| Mask-late | off | No benefit found |
 
 Full tables, raw numbers, and production config: [ABLATIONS.md](docs/ABLATIONS.md).
 
@@ -289,22 +298,27 @@ If you build on this work, please consider citing the foundational Meta papers:
 
 ```bibtex
 @misc{pagnoni2024bytelatenttransformerpatches,
-      title={Byte Latent Transformer: Patches Scale Better Than Tokens}, 
-      author={Alessandro Pagnoni and Ramakanth Pasunuru and Pedro Rodriguez and others},
+      title={Byte Latent Transformer: Patches Scale Better Than Tokens},
+      author={Artidoro Pagnoni and Ramakanth Pasunuru and Pedro Rodriguez and John Nguyen and
+              Benjamin Muller and Margaret Li and Chunting Zhou and Lili Yu and Jason Weston and
+              Luke Zettlemoyer and Gargi Ghosh and Mike Lewis and Ari Holtzman and Srinivasan Iyer},
       year={2024},
       eprint={2412.09871},
       archivePrefix={arXiv},
-      primaryClass={cs.CL}
+      primaryClass={cs.CL},
+      doi={10.48550/arXiv.2412.09871}
 }
 
 @misc{kallini2026fastbytelatenttransformer,
-      title={Fast Byte Latent Transformer}, 
-      author={Julie Kallini and Artidoro Pagnoni and Tomasz Limisiewicz and Gargi Ghosh and Luke Zettlemoyer and Christopher Potts and Xiaochuang Han and Srinivasan Iyer},
+      title={Fast Byte Latent Transformer},
+      author={Julie Kallini and Artidoro Pagnoni and Tomasz Limisiewicz and Gargi Ghosh and
+              Luke Zettlemoyer and Christopher Potts and Xiaochuang Han and Srinivasan Iyer},
       year={2026},
       eprint={2605.08044},
       archivePrefix={arXiv},
       primaryClass={cs.CL}
 }
+```
 
 ## License
 
