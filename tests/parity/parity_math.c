@@ -13,9 +13,10 @@ int run_softmax_parity_test(void) {
     blt_tensor expected = {0};
     blt_tensor output = {0};
 
+    char p[512];
     int ok = 0;
-    if (!load_binary_tensor("data/math_softmax_in.bin", arena, &input) ||
-        !load_binary_tensor("data/math_softmax_out.bin", arena, &expected)) {
+    if (!load_binary_tensor(blt_test_data_path(p, sizeof(p), "math_softmax_in.bin"), arena, &input) ||
+        !load_binary_tensor(blt_test_data_path(p, sizeof(p), "math_softmax_out.bin"), arena, &expected)) {
         blt_arena_destroy(arena);
         return ok;
     }
@@ -38,10 +39,11 @@ int run_matmul_parity_test(void) {
     blt_tensor out = {0};
     blt_tensor expected = {0};
 
+    char p[512];
     int ok = 0;
-    if (!load_binary_tensor("data/math_matmul_a.bin", arena, &a) ||
-        !load_binary_tensor("data/math_matmul_b.bin", arena, &b) ||
-        !load_binary_tensor("data/math_matmul_out.bin", arena, &expected)) {
+    if (!load_binary_tensor(blt_test_data_path(p, sizeof(p), "math_matmul_a.bin"), arena, &a) ||
+        !load_binary_tensor(blt_test_data_path(p, sizeof(p), "math_matmul_b.bin"), arena, &b) ||
+        !load_binary_tensor(blt_test_data_path(p, sizeof(p), "math_matmul_out.bin"), arena, &expected)) {
         blt_arena_destroy(arena);
         return ok;
     }

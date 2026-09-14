@@ -91,6 +91,6 @@ def get_output_dir(args) -> Path:
 def create_parser(description: str = "Generate golden test data") -> argparse.ArgumentParser:
     """Create a basic argument parser."""
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--output-dir", type=Path, default=Path("data"), 
+    parser.add_argument("--output-dir", type=Path, default=Path("data/tests"), 
                        help="Directory to write reference files")
     return parser

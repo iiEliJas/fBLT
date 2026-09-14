@@ -141,7 +141,7 @@ def init_weights(model, seed=1234):
                 p.fill_(1.0)  # RMSNorm weights
 
 
-def generate_data(output_dir="data"):
+def generate_data(output_dir="data/tests"):
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     weights_dir = out_path / "global_transformer_weights"
@@ -190,8 +190,11 @@ def generate_data(output_dir="data"):
         write_tensor_fp32(weights_dir / f"grad_layer_{l}_ffn_down_w.bin", layer.ffn_down_w.grad)
 
 
-if __name__ == "__main__":
+def main_global_transformer():
     parser = create_parser("Generate global transformer golden files and weights")
     args = parser.parse_args()
     generate_data(args.output_dir)
     print("Successfully generated global transformer golden files and weights.")
+
+if __name__ == "__main__":
+    main_global_transformer()

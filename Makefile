@@ -17,7 +17,6 @@ CUDA ?= 0
 SRC_DIR := csrc
 TESTS_DIR := tests
 TOOLS_DIR := csrc/core
-RUN_DIR := run
 OBJ_DIR := obj
 BIN_DIR := bin
 BENCH_DIR := bench
@@ -148,7 +147,7 @@ TEST_OBJS := $(addprefix $(OBJ_DIR)/,$(TEST_SRCS:.c=.o)) $(CORE_OBJS)
 # ============================================================================
 # TARGETS
 # ============================================================================
-.PHONY: all test main bench bench-harness bench-cuda sandbox e2e-dv bench-infer sweep cuda-smoke cuda-sanitize infer clean info help
+.PHONY: all test main bench bench-harness bench-cuda sandbox e2e-dv bench-infer sweep cuda-smoke cuda-sanitize parity-data infer clean info help
 
 all: test
 
@@ -163,7 +162,15 @@ info:
 	@echo BIN_DIR: $(BIN_DIR)
 	@echo ================================
 
-test: $(BIN_DIR)/test_main$(EXE_EXT)
+parity-data:
+	@if [ ! -d data/tests ]; then \
+		echo [PARITY] Generating golden test data...; \
+		python3 tests/py/parity_generate.py; \
+	else \
+		echo [PARITY] Golden test data already exists, skipping...; \
+	fi
+
+test: $(BIN_DIR)/test_main$(EXE_EXT) parity-data
 	@echo [TEST] Running tests...
 	@./$(BIN_DIR)/test_main$(EXE_EXT)
 
@@ -207,6 +214,12 @@ cuda-smoke: $(BIN_DIR)/cuda_smoke$(EXE_EXT)
 	@echo [CUDA] Built successfully: $(BIN_DIR)/cuda_smoke$(EXE_EXT)
 	@./$(BIN_DIR)/cuda_smoke$(EXE_EXT)
 
+infer: $(BIN_DIR)/infer$(EXE_EXT)
+	@echo [INFER] Built successfully: $(BIN_DIR)/infer$(EXE_EXT)
+
+train-blt-d: $(BIN_DIR)/train_blt_d$(EXE_EXT)
+	@echo [TRAIN] Built successfully: $(BIN_DIR)/train_blt_d$(EXE_EXT)
+	
 # sanitizer gate: run the full CUDA test suite (includes the
 # training-step parity) under compute-sanitizer. Requires a native Linux
 # box: WSL2/dxg devices are rejected by the sanitizer ("Device not
@@ -257,10 +270,10 @@ $(BIN_DIR)/test_main$(EXE_EXT): $(TEST_OBJS)
 	@$(CC) $(CFLAGS) $(TEST_OBJS) -o $@ $(LDLIBS)
 
 # Link main exe
-$(BIN_DIR)/main$(EXE_EXT): $(RUN_DIR)/main.c $(CORE_OBJS)
+$(BIN_DIR)/main$(EXE_EXT): $(SRC_DIR)/main.c $(CORE_OBJS)
 	@echo [LD] Linking main executable: $@
 	$(MKDIR_BIN)
-	@$(CC) $(CFLAGS) $(RUN_DIR)/main.c $(CORE_OBJS) -o $@ $(LDLIBS)
+	@$(CC) $(CFLAGS) $(SRC_DIR)/main.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
 # Link bench exe
 $(BIN_DIR)/bench_patcher$(EXE_EXT): $(TESTS_DIR)/bench/bench_patcher.c $(CORE_OBJS)
@@ -275,10 +288,10 @@ $(BIN_DIR)/bench_harness_selftest$(EXE_EXT): $(TESTS_DIR)/bench/bench_harness_se
 	@$(CC) $(CFLAGS) -I. $(TESTS_DIR)/bench/bench_harness_selftest.c $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)
 
 # Link sandbox exe
-$(BIN_DIR)/sandbox$(EXE_EXT): $(RUN_DIR)/sandbox.c $(CORE_OBJS) $(TOOLS_OBJS)
+$(BIN_DIR)/sandbox$(EXE_EXT): $(SRC_DIR)/sandbox.c $(CORE_OBJS) $(TOOLS_OBJS)
 	@echo [LD] Linking main executable: $@
 	$(MKDIR_BIN)
-	@$(CC) $(CFLAGS) $(RUN_DIR)/sandbox.c $(CORE_OBJS) -o $@ $(LDLIBS)
+	@$(CC) $(CFLAGS) $(SRC_DIR)/sandbox.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
 # Link sweep trainer exe
 $(BIN_DIR)/train_sweep$(EXE_EXT): $(SRC_DIR)/core/train_sweep.c $(CORE_OBJS) $(BENCH_LIB_OBJS)
@@ -287,33 +300,27 @@ $(BIN_DIR)/train_sweep$(EXE_EXT): $(SRC_DIR)/core/train_sweep.c $(CORE_OBJS) $(B
 	@$(CC) $(CFLAGS) -I$(BENCH_DIR) $(SRC_DIR)/core/train_sweep.c $(CORE_OBJS) $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)
 
 # Link BLT-D trainer exe
-$(BIN_DIR)/train_blt_d$(EXE_EXT): $(RUN_DIR)/train_blt_d.c $(CORE_OBJS)
+$(BIN_DIR)/train_blt_d$(EXE_EXT): $(SRC_DIR)/train_blt_d.c $(CORE_OBJS)
 	@echo [LD] Linking BLT-D trainer executable: $@
 	$(MKDIR_BIN)
-	@$(CC) $(CFLAGS) $(RUN_DIR)/train_blt_d.c $(CORE_OBJS) -o $@ $(LDLIBS)
+	@$(CC) $(CFLAGS) $(SRC_DIR)/train_blt_d.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
 # Link CUDA smoke test (CUDA=1 only)
-$(BIN_DIR)/cuda_smoke$(EXE_EXT): $(RUN_DIR)/cuda_smoke.c $(CORE_OBJS) $(CUDA_SMOKE_OBJS)
+$(BIN_DIR)/cuda_smoke$(EXE_EXT): $(SRC_DIR)/cuda_smoke.c $(CORE_OBJS) $(CUDA_SMOKE_OBJS)
 	@echo [LD] Linking CUDA smoke executable: $@
 	$(MKDIR_BIN)
-	@$(CC) $(CFLAGS) $(RUN_DIR)/cuda_smoke.c $(CORE_OBJS) $(CUDA_SMOKE_OBJS) -o $@ $(LDLIBS)
-
-train-blt-d: $(BIN_DIR)/train_blt_d$(EXE_EXT)
-	@echo [TRAIN] Built successfully: $(BIN_DIR)/train_blt_d$(EXE_EXT)
+	@$(CC) $(CFLAGS) $(SRC_DIR)/cuda_smoke.c $(CORE_OBJS) $(CUDA_SMOKE_OBJS) -o $@ $(LDLIBS)
 
 # Link inference binary
-$(BIN_DIR)/infer$(EXE_EXT): $(RUN_DIR)/infer.c $(CORE_OBJS)
+$(BIN_DIR)/infer$(EXE_EXT): $(SRC_DIR)/infer.c $(CORE_OBJS)
 	@mkdir -p $(BIN_DIR)
 	@echo "[CC] $< -> $@"
-	@$(CC) $(CFLAGS) $(RUN_DIR)/infer.c $(CORE_OBJS) -o $@ $(LDLIBS)
-
-infer: $(BIN_DIR)/infer$(EXE_EXT)
-	@echo [INFER] Built successfully: $(BIN_DIR)/infer$(EXE_EXT)
+	@$(CC) $(CFLAGS) $(SRC_DIR)/infer.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
 # Link end-to-end driver
-$(BIN_DIR)/e2e_blt_dv$(EXE_EXT): $(RUN_DIR)/e2e_blt_dv.c $(CORE_OBJS)
+$(BIN_DIR)/e2e_blt_dv$(EXE_EXT): $(SRC_DIR)/e2e_blt_dv.c $(CORE_OBJS)
 	@mkdir -p $(BIN_DIR)
-	@$(CC) $(CFLAGS) $(RUN_DIR)/e2e_blt_dv.c $(CORE_OBJS) -o $@ $(LDLIBS)
+	@$(CC) $(CFLAGS) $(SRC_DIR)/e2e_blt_dv.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
 # Link inference benchmark
 $(BIN_DIR)/infer_bench$(EXE_EXT): bench/infer_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJS)
@@ -348,6 +355,7 @@ help:
 	@echo --- BLT Project Makefile ---
 	@echo - Available targets:
 	@echo -  make test       - Build and run test exe
+	@echo -  make parity-data - Generate golden test data (if missing)
 	@echo -  make main       - Build main exe
 	@echo -  make bench       - Build benchmark exe
 	@echo -  make bench-harness - Build + run benchmark harness self-test

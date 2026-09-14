@@ -1,6 +1,6 @@
 # CLI Reference
 
-All commands assume the repo root as working directory. CUDA builds output to `bin-cuda/` and `obj-cuda/`; CPU builds to `bin/` and `obj/`.
+All commands assume the repo root as working directory. CUDA builds output to `bin-cuda/` and `obj-cuda/`. CPU builds to `bin/` and `obj/`.
 
 ---
 
@@ -177,7 +177,7 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 
 ## bin/infer — Production inference
 
-> **Note:** For most use cases, prefer `fblt-infer` (Python wrapper above) which handles config loading and shape auto-detection. Use the raw `bin/infer` binary directly only when you need to skip the wrapper or debug it.
+**Note:** For most use cases, prefer `fblt-infer` (Python wrapper above) which handles config loading and shape auto-detection. Use the raw `bin/infer` binary directly only when you need to skip the wrapper or debug it.
 
 Single-checkpoint, single-prompt, one-shot generation tool.
 

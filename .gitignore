@@ -24,6 +24,7 @@ __pycache__/
 *.log
 data/dummy_entropy.bin
 data/raw/
+data/tests/
 data/train.bin
 data/heldout.bin
 data/heldout_c.bin
@@ -54,6 +55,6 @@ omo/
 # macOS
 .DS_Store
 
-# Papers (not part of the distribution)
+# Papers
 docs/bltransformerPAPER.md
 docs/fast_bltPAPER.md

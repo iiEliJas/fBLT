@@ -1,4 +1,4 @@
-import torch as torch_patcher
+import torch
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
@@ -57,7 +57,7 @@ def build_patches(entropy, bytes_array, args):
     return patch_starts, patch_lengths, patch_peak_entropies
 
 
-def generate_golden_patcher_files(output_dir: str = "data", 
+def generate_golden_patcher_files(output_dir: str = "data/tests", 
                                    threshold_global: float = 0.6,
                                    threshold_monotonic: float = 0.4,
                                    max_patch_length: int = 5,
@@ -65,13 +65,13 @@ def generate_golden_patcher_files(output_dir: str = "data",
                                    reset_on_newline: bool = True,
                                    seed: int = 0) -> None:
     """Generate golden files for patcher."""
-    torch_patcher.manual_seed(seed)
+    torch.manual_seed(seed)
     
-    probs = torch_patcher.softmax(torch_patcher.randn(512, 256, dtype=torch_patcher.float32), dim=-1)
-    entropy = -torch_patcher.sum(probs * torch_patcher.log2(probs + 1e-9), dim=-1)
+    probs = torch.softmax(torch.randn(512, 256, dtype=torch.float32), dim=-1)
+    entropy = -torch.sum(probs * torch.log2(probs + 1e-9), dim=-1)
     
-    bytes_array = torch_patcher.randint(0, 256, (512,), dtype=torch_patcher.uint8)
-    newline_indices = torch_patcher.randint(1, 511, (15,))
+    bytes_array = torch.randint(0, 256, (512,), dtype=torch.uint8)
+    newline_indices = torch.randint(1, 511, (15,))
     bytes_array[newline_indices] = 0x0A
 
     class Args:
@@ -115,3 +115,6 @@ def main_patcher():
         reset_on_newline=args.reset_on_newline,
         seed=args.seed
     )
+
+if __name__ == "__main__":
+    main_patcher()

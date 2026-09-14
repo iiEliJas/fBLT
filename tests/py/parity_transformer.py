@@ -185,7 +185,7 @@ def transformer_block(x, weights, num_heads, is_causal, eps, use_rope=False, rop
     return attn_residual + ffn_out
 
 
-def generate_golden_transformer_files(outdir: str = "data", use_rope: bool = False) -> None:
+def generate_golden_transformer_files(outdir: str = "data/tests", use_rope: bool = False) -> None:
     os.makedirs(outdir, exist_ok=True)
     rng = np.random.default_rng(SEED)
 
@@ -246,3 +246,6 @@ def main_transformer():
     parser.add_argument("--use-rope", action="store_true", help="Enable RoPE in reference math")
     args = parser.parse_args()
     generate_golden_transformer_files(str(args.output_dir), use_rope=args.use_rope)
+
+if __name__ == "__main__":
+    main_transformer()

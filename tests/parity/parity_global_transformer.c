@@ -42,10 +42,15 @@ int run_global_transformer_parity(void) {
     blt_tensor grad_patch_out_seed = {0};
     blt_tensor expected_grad_patch_in = {0};
 
-    TEST_ASSERT(load_binary_tensor("data/global_transformer_patch_in.bin", arena, &patch_in));
-    TEST_ASSERT(load_binary_tensor("data/global_transformer_patch_out.bin", arena, &expected_patch_out));
-    TEST_ASSERT(load_binary_tensor("data/global_transformer_grad_patch_out.bin", arena, &grad_patch_out_seed));
-    TEST_ASSERT(load_binary_tensor("data/global_transformer_grad_patch_in.bin", arena, &expected_grad_patch_in));
+    char p[512];
+    TEST_ASSERT(load_binary_tensor(blt_test_data_path(p, sizeof(p), "global_transformer_patch_in.bin"), arena,
+                                   &patch_in));
+    TEST_ASSERT(load_binary_tensor(blt_test_data_path(p, sizeof(p), "global_transformer_patch_out.bin"), arena,
+                                   &expected_patch_out));
+    TEST_ASSERT(load_binary_tensor(blt_test_data_path(p, sizeof(p), "global_transformer_grad_patch_out.bin"), arena,
+                                   &grad_patch_out_seed));
+    TEST_ASSERT(load_binary_tensor(blt_test_data_path(p, sizeof(p), "global_transformer_grad_patch_in.bin"), arena,
+                                   &expected_grad_patch_in));
 
     blt_global_transformer_config cfg = {0};
     cfg.num_layers = 3;
@@ -57,7 +62,9 @@ int run_global_transformer_parity(void) {
 
     blt_global_transformer *model = blt_global_transformer_create(arena, &cfg);
     TEST_ASSERT(model != NULL);
-    TEST_ASSERT(load_global_transformer_reference_weights(model, "data/global_transformer_weights", arena));
+    char weights_dir[512];
+    blt_test_data_path(weights_dir, sizeof(weights_dir), "global_transformer_weights");
+    TEST_ASSERT(load_global_transformer_reference_weights(model, weights_dir, arena));
 
     blt_global_transformer_grad *grad = blt_global_transformer_grad_create(arena, model);
     TEST_ASSERT(grad != NULL);
@@ -80,31 +87,37 @@ int run_global_transformer_parity(void) {
         const blt_transformer_layer_grad *lg = &grad->stack_grad->layer_grads[l];
         blt_tensor expected = {0};
 
-        snprintf(path, sizeof(path), "data/global_transformer_weights/grad_layer_%zu_norm1_weight.bin", l);
+        snprintf(path, sizeof(path), "%s/global_transformer_weights/grad_layer_%zu_norm1_weight.bin", g_test_data_dir,
+                 l);
         TEST_ASSERT(load_binary_tensor(path, arena, &expected));
         TEST_ASSERT_CLOSE(&lg->norm1_weight, &expected, 1e-4f);
 
-        snprintf(path, sizeof(path), "data/global_transformer_weights/grad_layer_%zu_attn_qkv_w.bin", l);
+        snprintf(path, sizeof(path), "%s/global_transformer_weights/grad_layer_%zu_attn_qkv_w.bin", g_test_data_dir,
+                 l);
         TEST_ASSERT(load_binary_tensor(path, arena, &expected));
         TEST_ASSERT_CLOSE(&lg->attn_qkv_w, &expected, 1e-4f);
 
-        snprintf(path, sizeof(path), "data/global_transformer_weights/grad_layer_%zu_attn_proj_w.bin", l);
+        snprintf(path, sizeof(path), "%s/global_transformer_weights/grad_layer_%zu_attn_proj_w.bin", g_test_data_dir,
+                 l);
         TEST_ASSERT(load_binary_tensor(path, arena, &expected));
         TEST_ASSERT_CLOSE(&lg->attn_proj_w, &expected, 1e-4f);
 
-        snprintf(path, sizeof(path), "data/global_transformer_weights/grad_layer_%zu_norm2_weight.bin", l);
+        snprintf(path, sizeof(path), "%s/global_transformer_weights/grad_layer_%zu_norm2_weight.bin", g_test_data_dir,
+                 l);
         TEST_ASSERT(load_binary_tensor(path, arena, &expected));
         TEST_ASSERT_CLOSE(&lg->norm2_weight, &expected, 1e-4f);
 
-        snprintf(path, sizeof(path), "data/global_transformer_weights/grad_layer_%zu_ffn_up_w.bin", l);
+        snprintf(path, sizeof(path), "%s/global_transformer_weights/grad_layer_%zu_ffn_up_w.bin", g_test_data_dir, l);
         TEST_ASSERT(load_binary_tensor(path, arena, &expected));
         TEST_ASSERT_CLOSE(&lg->ffn_up_w, &expected, 1e-4f);
 
-        snprintf(path, sizeof(path), "data/global_transformer_weights/grad_layer_%zu_ffn_gate_w.bin", l);
+        snprintf(path, sizeof(path), "%s/global_transformer_weights/grad_layer_%zu_ffn_gate_w.bin", g_test_data_dir,
+                 l);
         TEST_ASSERT(load_binary_tensor(path, arena, &expected));
         TEST_ASSERT_CLOSE(&lg->ffn_gate_w, &expected, 1e-4f);
 
-        snprintf(path, sizeof(path), "data/global_transformer_weights/grad_layer_%zu_ffn_down_w.bin", l);
+        snprintf(path, sizeof(path), "%s/global_transformer_weights/grad_layer_%zu_ffn_down_w.bin", g_test_data_dir,
+                 l);
         TEST_ASSERT(load_binary_tensor(path, arena, &expected));
         TEST_ASSERT_CLOSE(&lg->ffn_down_w, &expected, 1e-4f);
     }

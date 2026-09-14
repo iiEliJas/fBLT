@@ -34,7 +34,7 @@ def _softmax(values):
 
 
 
-def generate_golden_math_files(output_dir: str = "data") -> None:
+def generate_golden_math_files(output_dir: str = "data/tests") -> None:
     """Generate golden files for math operations (matmul, softmax)."""
     if torch is not None:
         a = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32)
@@ -68,3 +68,5 @@ def main_math():
     args = parser.parse_args()
     generate_golden_math_files(str(args.output_dir))
 
+if __name__ == "__main__":
+    main_math()

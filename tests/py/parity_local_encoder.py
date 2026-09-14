@@ -259,7 +259,7 @@ def export_reference_weights(model, weights_dir):
         write_tensor_fp32(out_path / f"layer_{l}_cross_weight_proj.bin", layer.cross_attn.weight_proj.detach())
 
 
-def generate_data(output_dir="data", cross_attn_all_layers=True):
+def generate_data(output_dir="data/tests", cross_attn_all_layers=True):
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
@@ -282,10 +282,13 @@ def generate_data(output_dir="data", cross_attn_all_layers=True):
     export_reference_weights(model, out_path / f"local_encoder_weights_{suffix}")
 
 
-if __name__ == "__main__":
+def main_local_encoder():
     parser = create_parser("Generate local encoder golden files and weights")
     args = parser.parse_args()
 
     generate_data(args.output_dir, cross_attn_all_layers=True)
     generate_data(args.output_dir, cross_attn_all_layers=False)
-    print("Successfully generated golden files and reference weights.")
+    print("Successfully generated local encoder golden files and reference weights.")
+
+if __name__ == "__main__":
+    main_local_encoder()

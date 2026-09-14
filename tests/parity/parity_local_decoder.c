@@ -111,14 +111,15 @@ static int run_local_decoder_parity_case(bool cross_attn_all_layers) {
     char path_logits[256], path_loss[256];
     char path_grad_hidden[256], path_grad_patch[256], weights_dir[256];
 
-    snprintf(path_hidden_in, sizeof(path_hidden_in), "data/local_decoder_byte_hidden_in.bin");
-    snprintf(path_patch_in, sizeof(path_patch_in), "data/local_decoder_patch_in.bin");
-    snprintf(path_bytes, sizeof(path_bytes), "data/local_decoder_bytes_in.bin");
-    snprintf(path_logits, sizeof(path_logits), "data/local_decoder_logits_out_%s.bin", suffix);
-    snprintf(path_loss, sizeof(path_loss), "data/local_decoder_loss_out_%s.bin", suffix);
-    snprintf(path_grad_hidden, sizeof(path_grad_hidden), "data/local_decoder_grad_byte_hidden_in_%s.bin", suffix);
-    snprintf(path_grad_patch, sizeof(path_grad_patch), "data/local_decoder_grad_patch_in_%s.bin", suffix);
-    snprintf(weights_dir, sizeof(weights_dir), "data/local_decoder_weights_%s", suffix);
+    snprintf(path_hidden_in, sizeof(path_hidden_in), "%s/local_decoder_byte_hidden_in.bin", g_test_data_dir);
+    snprintf(path_patch_in, sizeof(path_patch_in), "%s/local_decoder_patch_in.bin", g_test_data_dir);
+    snprintf(path_bytes, sizeof(path_bytes), "%s/local_decoder_bytes_in.bin", g_test_data_dir);
+    snprintf(path_logits, sizeof(path_logits), "%s/local_decoder_logits_out_%s.bin", g_test_data_dir, suffix);
+    snprintf(path_loss, sizeof(path_loss), "%s/local_decoder_loss_out_%s.bin", g_test_data_dir, suffix);
+    snprintf(path_grad_hidden, sizeof(path_grad_hidden), "%s/local_decoder_grad_byte_hidden_in_%s.bin", g_test_data_dir,
+             suffix);
+    snprintf(path_grad_patch, sizeof(path_grad_patch), "%s/local_decoder_grad_patch_in_%s.bin", g_test_data_dir, suffix);
+    snprintf(weights_dir, sizeof(weights_dir), "%s/local_decoder_weights_%s", g_test_data_dir, suffix);
 
     blt_tensor byte_hidden_in = {0};
     blt_tensor patch_in = {0};

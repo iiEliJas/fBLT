@@ -3,6 +3,11 @@
 #include <stdint.h>
 #include "test_helpers.h"
 
+char *blt_test_data_path(char *buf, size_t bufsz, const char *subpath) {
+    snprintf(buf, bufsz, "%s/%s", g_test_data_dir, subpath);
+    return buf;
+}
+
 int blt_test_load_binary_tensor(const char *path, blt_arena *arena, blt_tensor *out_tensor) {
     FILE *fp = fopen(path, "rb");
     if (!fp) {

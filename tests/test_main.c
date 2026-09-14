@@ -9,6 +9,8 @@
 #include "test_helpers.h"
 #include "test_suite.h"
 
+const char *g_test_data_dir = "data/tests";
+
 typedef struct {
     const char *name;
     int (*fn)(void);

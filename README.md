@@ -49,8 +49,8 @@ make info         # show build config
 make clean        # remove obj/, bin/
 make help         # show all targets
 
-python3 tests/test_config.py        # Python config tests
-python3 tests/test_entrypoints.py   # Python entry-point tests
+python3 tests/py/test_config.py        # Python config tests
+python3 tests/py/test_entrypoints.py   # Python entry-point tests
 ```
 
 Default is `gcc -O2 -std=c99 -Wall -Wextra`. Change it:

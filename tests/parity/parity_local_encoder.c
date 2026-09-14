@@ -118,10 +118,10 @@ static int run_local_encoder_parity_case(bool cross_attn_all_layers) {
 
     const char *suffix = cross_attn_all_layers ? "all_layers" : "final_layer";
     char path_bytes[256], path_patch[256], path_hidden[256], weights_dir[256];
-    snprintf(path_bytes, sizeof(path_bytes), "data/local_encoder_bytes_in.bin");
-    snprintf(path_patch, sizeof(path_patch), "data/local_encoder_patch_out_%s.bin", suffix);
-    snprintf(path_hidden, sizeof(path_hidden), "data/local_encoder_byte_hidden_out_%s.bin", suffix);
-    snprintf(weights_dir, sizeof(weights_dir), "data/local_encoder_weights_%s", suffix);
+    snprintf(path_bytes, sizeof(path_bytes), "%s/local_encoder_bytes_in.bin", g_test_data_dir);
+    snprintf(path_patch, sizeof(path_patch), "%s/local_encoder_patch_out_%s.bin", g_test_data_dir, suffix);
+    snprintf(path_hidden, sizeof(path_hidden), "%s/local_encoder_byte_hidden_out_%s.bin", g_test_data_dir, suffix);
+    snprintf(weights_dir, sizeof(weights_dir), "%s/local_encoder_weights_%s", g_test_data_dir, suffix);
 
     blt_tensor bytes_in = {0};
     blt_tensor expected_patch = {0};

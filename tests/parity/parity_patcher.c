@@ -7,6 +7,9 @@
 #include "models/entropy.h"
 #include "models/patcher.h"
 
+extern const char *g_test_data_dir;
+char *blt_test_data_path(char *buf, size_t bufsz, const char *subpath);
+
 // Loader for FP32 tensors
 static int load_binary_tensor(const char *path, blt_arena *arena, blt_tensor *out_tensor) {
     FILE *fp = fopen(path, "rb");
@@ -143,10 +146,12 @@ int run_patcher_parity_tests(void) {
     blt_tensor expected_entropy = {0};
     blt_tensor bytes_tensor = {0};
 
-    // Load probabilities, entropy, AND the generated uint8 byte stream
-    if (!load_binary_tensor("data/patcher_probs.bin", arena, &probs) ||
-        !load_binary_tensor("data/patcher_entropy.bin", arena, &expected_entropy) ||
-        !load_binary_tensor_uint8("data/patcher_bytes.bin", arena, &bytes_tensor)) {
+    char path_buf[512];
+    if (!load_binary_tensor(blt_test_data_path(path_buf, sizeof(path_buf), "patcher_probs.bin"), arena, &probs) ||
+        !load_binary_tensor(blt_test_data_path(path_buf, sizeof(path_buf), "patcher_entropy.bin"), arena,
+                            &expected_entropy) ||
+        !load_binary_tensor_uint8(blt_test_data_path(path_buf, sizeof(path_buf), "patcher_bytes.bin"), arena,
+                                  &bytes_tensor)) {
         blt_arena_destroy(arena);
         return 0;
     }
@@ -206,8 +211,8 @@ int run_patcher_parity_tests(void) {
     size_t expected_starts[1024];
     size_t expected_lengths[1024];
     size_t expected_count = 0;
-    if (!load_patch_boundaries("data/patcher_boundaries.txt", expected_starts, expected_lengths, 1024,
-                               &expected_count)) {
+    if (!load_patch_boundaries(blt_test_data_path(path_buf, sizeof(path_buf), "patcher_boundaries.txt"),
+                               expected_starts, expected_lengths, 1024, &expected_count)) {
         blt_arena_destroy(arena);
         return 0;
     }

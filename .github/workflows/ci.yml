@@ -39,6 +39,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python deps for parity generation
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu numpy
+
+      - name: Generate parity test data
+        run: python tests/py/parity_generate.py
+
       - name: Show build config
         run: make info
 
@@ -83,6 +94,17 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python deps for parity generation
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu numpy
+
+      - name: Generate parity test data
+        run: python tests/py/parity_generate.py
 
       - name: Build and run tests with sanitizers
         run: |

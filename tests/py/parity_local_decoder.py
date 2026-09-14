@@ -157,7 +157,7 @@ class ReferenceLocalDecoder(nn.Module):
         return logits, loss
 
 
-def generate_data(output_dir="data", cross_attn_all_layers=True):
+def generate_data(output_dir="data/tests", cross_attn_all_layers=True):
     out_path = Path(output_dir)
     suffix = "all_layers" if cross_attn_all_layers else "final_layer"
     weights_dir = out_path / f"local_decoder_weights_{suffix}"
@@ -210,8 +210,13 @@ def generate_data(output_dir="data", cross_attn_all_layers=True):
         write_tensor_fp32(weights_dir / f"layer_{l}_cross_weight_v.bin", layer.cross_attn.weight_v)
         write_tensor_fp32(weights_dir / f"layer_{l}_cross_weight_proj.bin", layer.cross_attn.weight_proj)
 
-if __name__ == "__main__":
-    parser = create_parser()
+def main_local_decoder():
+    parser = create_parser("Generate local decoder golden files and weights")
     args = parser.parse_args()
     generate_data(args.output_dir, True)
     generate_data(args.output_dir, False)
+    print("Successfully generated local decoder golden files and weights.")
+
+
+if __name__ == "__main__":
+    main_local_decoder()

@@ -13,6 +13,8 @@ Run the lightweight checks locally before submitting:
 
 ```sh
 make test
+python3 tests/py/test_config.py
+python3 tests/py/test_entrypoints.py
 ```
 
 This builds the project and runs the full test suite (unit + integration tests). It requires `gcc` and `make`. No CUDA needed for the default CPU path.
