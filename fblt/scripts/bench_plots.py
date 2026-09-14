@@ -24,6 +24,7 @@ import re
 from collections import defaultdict
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -50,26 +51,26 @@ PRETTY = {
 
 ARM_COLORS = {
     "plain": "#4477aa",
-    "base":  "#55aadd",
-    "dec1":  "#77ccee",
-    "dec3":  "#99ddff",
+    "base": "#55aadd",
+    "dec1": "#77ccee",
+    "dec3": "#99ddff",
     "xlast": "#bbeeff",
-    "late":  "#ee6677",
-    "hit":   "#ee9988",
-    "entp":  "#cc4455",
-    "e256":  "#aaaaaa",
+    "late": "#ee6677",
+    "hit": "#ee9988",
+    "entp": "#cc4455",
+    "e256": "#aaaaaa",
 }
 ARM_ORDER = ["plain", "late", "hit", "dec1", "base", "xlast", "dec3", "entp", "e256"]
 ARM_LABELS = {
     "plain": "plain (no diff.)",
-    "base":  "baseline 2/2/2",
-    "dec1":  "dec-layers=1",
-    "dec3":  "dec-layers=3",
+    "base": "baseline 2/2/2",
+    "dec1": "dec-layers=1",
+    "dec3": "dec-layers=3",
     "xlast": "cross-attn=last",
-    "late":  "mask-late-step 14k",
-    "hit":   "t-hi-start 0.8",
-    "entp":  "entropy patches",
-    "e256":  "E=256 H=512 10k",
+    "late": "mask-late-step 14k",
+    "hit": "t-hi-start 0.8",
+    "entp": "entropy patches",
+    "e256": "E=256 H=512 10k",
 }
 
 
@@ -82,6 +83,7 @@ def parse_args(argv=None):
 
 
 # ── Toy-scale parsers ────────────────────────────────────────────────
+
 
 def load_rows(path, phase):
     rows = []
@@ -110,8 +112,9 @@ def split_tag(tag):
         model, _, rest = tag.partition("_")
     parts = rest.split("_")
     method = parts[0]
-    is_eb = "eb" in parts[1:] or any(p.startswith("g") and p[1:].replace(".","").isdigit()
-                                     for p in parts[1:])
+    is_eb = "eb" in parts[1:] or any(
+        p.startswith("g") and p[1:].replace(".", "").isdigit() for p in parts[1:]
+    )
     k = B = None
     thresh = None
     for part in parts[1:]:
@@ -163,11 +166,18 @@ def pretty_name(model, method, suffix, k, B, thresh):
 # Fixed method order from BLTD_CFGS_ALL in infer_bench.c.
 BLTD_METHODS = [
     "greedy",
-    "selfspec_k4", "selfspec_k8", "selfspec_k16",
-    "blockdiff_B4_a0.70", "blockdiff_B8_a0.70", "blockdiff_B16_a0.70",
-    "blockdv_B4_a0.70", "blockdv_B8_a0.70", "blockdv_B16_a0.70",
+    "selfspec_k4",
+    "selfspec_k8",
+    "selfspec_k16",
+    "blockdiff_B4_a0.70",
+    "blockdiff_B8_a0.70",
+    "blockdiff_B16_a0.70",
+    "blockdv_B4_a0.70",
+    "blockdv_B8_a0.70",
+    "blockdv_B16_a0.70",
     "blockdv_onestep_B8_a0.00",
-    "blockdv_eb_B8_g1.00", "blockdv_eb_B8_g2.00",
+    "blockdv_eb_B8_g1.00",
+    "blockdv_eb_B8_g2.00",
     "blockdiff_eb_B8_g1.00",
     "blockdv_hetv_B8_a0.70_hetv",
     "blockdv_bal_B8_a0.70_bal",
@@ -224,8 +234,11 @@ def parse_inference_log():
             else:
                 method = f"unknown_{bltd_idx}"
         results[current_arm][method] = {
-            "dec": dec, "enc": enc, "accept": accept,
-            "agree": agree, "lat_ms": lat,
+            "dec": dec,
+            "enc": enc,
+            "accept": accept,
+            "agree": agree,
+            "lat_ms": lat,
         }
         row_idx += 1
     return results
@@ -267,13 +280,15 @@ def parse_cuda_bench():
             averaged[k] = avg
             lo, hi = min(vals), max(vals)
             if lo != hi:
-                print(f"  warn {tag}: {k} range [{lo:.4g} .. {hi:.4g}] "
-                      f"(avg {avg:.4g}, n={len(vals)})")
+                print(
+                    f"  warn {tag}: {k} range [{lo:.4g} .. {hi:.4g}] (avg {avg:.4g}, n={len(vals)})"
+                )
         results[tag] = averaged
     return results
 
 
 # ── Toy-scale plots ──────────────────────────────────────────────────
+
 
 def plot_toy_quality_frontier(parsed, base, out_dir):
     fig, ax = plt.subplots(figsize=(8.5, 5.5))
@@ -308,22 +323,35 @@ def plot_toy_quality_frontier(parsed, base, out_dir):
             offsets[j] = (x_dir, y_dir * mag)
 
     for j, r in enumerate(pts_sorted):
-        ax.scatter(r["dec"], r["agree"],
-                   c=MODEL_COLORS[r["model"]],
-                   marker=METHOD_MARKERS[r["method"]], s=90,
-                   edgecolors="black", linewidths=0.6, zorder=3)
+        ax.scatter(
+            r["dec"],
+            r["agree"],
+            c=MODEL_COLORS[r["model"]],
+            marker=METHOD_MARKERS[r["method"]],
+            s=90,
+            edgecolors="black",
+            linewidths=0.6,
+            zorder=3,
+        )
         xyoff = offsets.get(j, (7, 5))
-        ax.annotate(r["short"], (r["dec"], r["agree"]),
-                    textcoords="offset points", xytext=xyoff,
-                    fontsize=7.5)
+        ax.annotate(
+            r["short"],
+            (r["dec"], r["agree"]),
+            textcoords="offset points",
+            xytext=xyoff,
+            fontsize=7.5,
+        )
 
     ax.axhline(1.0, color="gray", lw=0.8, ls="--", alpha=0.6)
-    ax.axvline(base["dec"], color="gray", lw=0.8, ls=":", alpha=0.6,
-               label="greedy baseline dec NFE")
+    ax.axvline(
+        base["dec"], color="gray", lw=0.8, ls=":", alpha=0.6, label="greedy baseline dec NFE"
+    )
     ax.set_xlabel("decoder forward passes per generated byte")
     ax.set_ylabel("agreement with same-model greedy output")
-    ax.set_title("Quality/cost frontier of generation methods\n"
-                 "(toy 300k-param models, held-out C code prompts)")
+    ax.set_title(
+        "Quality/cost frontier of generation methods\n"
+        "(toy 300k-param models, held-out C code prompts)"
+    )
     ax.set_ylim(-0.05, 1.2)
     ax.legend(fontsize=8)
     ax.grid(alpha=0.25)
@@ -334,18 +362,39 @@ def plot_toy_quality_frontier(parsed, base, out_dir):
 
 def plot_toy_enc_dec_map(parsed, out_dir):
     fig, ax = plt.subplots(figsize=(8.5, 5.5))
-    OFFS = [(7, 5), (7, -11), (7, 12), (7, -4), (-14, 14), (7, 19),
-            (-14, -10), (12, -14), (-14, 4), (12, 8)]
+    OFFS = [
+        (7, 5),
+        (7, -11),
+        (7, 12),
+        (7, -4),
+        (-14, 14),
+        (7, 19),
+        (-14, -10),
+        (12, -14),
+        (-14, 4),
+        (12, 8),
+    ]
     for i, r in enumerate(parsed):
-        ax.scatter(r["dec"], r["enc"],
-                   c=MODEL_COLORS[r["model"]],
-                   marker=METHOD_MARKERS[r["method"]], s=90,
-                   edgecolors="black", linewidths=0.6, zorder=3)
-        ax.annotate(r["short"], (r["dec"], r["enc"]),
-                    textcoords="offset points", xytext=OFFS[i % len(OFFS)],
-                    fontsize=7.5)
-    ax.scatter([1], [1], marker="*", s=260, c="green",
-               edgecolors="black", zorder=4, label="baseline (1,1)")
+        ax.scatter(
+            r["dec"],
+            r["enc"],
+            c=MODEL_COLORS[r["model"]],
+            marker=METHOD_MARKERS[r["method"]],
+            s=90,
+            edgecolors="black",
+            linewidths=0.6,
+            zorder=3,
+        )
+        ax.annotate(
+            r["short"],
+            (r["dec"], r["enc"]),
+            textcoords="offset points",
+            xytext=OFFS[i % len(OFFS)],
+            fontsize=7.5,
+        )
+    ax.scatter(
+        [1], [1], marker="*", s=260, c="green", edgecolors="black", zorder=4, label="baseline (1,1)"
+    )
     ax.set_xlabel("decoder NFEs / byte")
     ax.set_ylabel("encoder+global NFEs / byte")
     ax.set_title("Where each method spends its forward passes")
@@ -357,20 +406,23 @@ def plot_toy_enc_dec_map(parsed, out_dir):
 
 
 def plot_toy_acceptance(parsed, out_dir):
-    drafted = [r for r in parsed
-               if r["acc"] >= 0.0 and r["method"] != "blockdiff"]
+    drafted = [r for r in parsed if r["acc"] >= 0.0 and r["method"] != "blockdiff"]
     drafted.sort(key=lambda r: r["acc"])
     labels = [r["short"] for r in drafted]
     colors = [MODEL_COLORS[r["model"]] for r in drafted]
     fig, ax = plt.subplots(figsize=(9.5, 5.2))
-    ax.barh(range(len(drafted)), [r["acc"] for r in drafted],
-                   color=colors, edgecolor="black", linewidth=0.5)
+    ax.barh(
+        range(len(drafted)),
+        [r["acc"] for r in drafted],
+        color=colors,
+        edgecolor="black",
+        linewidth=0.5,
+    )
     ax.set_yticks(range(len(drafted)))
     ax.set_yticklabels(labels, fontsize=8)
     ax.axvline(1.0, color="gray", lw=0.8, ls="--")
     for i, r in enumerate(drafted):
-        ax.text(r["acc"] + 0.01, i, f"{r['acc']:.2f}", va="center",
-                fontsize=8)
+        ax.text(r["acc"] + 0.01, i, f"{r['acc']:.2f}", va="center", fontsize=8)
     ax.set_xlabel("drafted bytes accepted by verification")
     ax.set_title("Speculative acceptance")
     ax.set_xlim(0, 1.08)
@@ -385,13 +437,17 @@ def plot_toy_latency(parsed, out_dir):
     labels = [r["short"] for r in order]
     colors = [MODEL_COLORS[r["model"]] for r in order]
     fig, ax = plt.subplots(figsize=(9, 5.5))
-    ax.barh(range(len(order)), [r["lat_ms"] for r in order],
-            color=colors, edgecolor="black", linewidth=0.5)
+    ax.barh(
+        range(len(order)),
+        [r["lat_ms"] for r in order],
+        color=colors,
+        edgecolor="black",
+        linewidth=0.5,
+    )
     ax.set_yticks(range(len(order)))
     ax.set_yticklabels(labels, fontsize=8)
     for i, r in enumerate(order):
-        ax.text(r["lat_ms"] * 1.02, i, f"{r['lat_ms']:.0f}", va="center",
-                fontsize=8)
+        ax.text(r["lat_ms"] * 1.02, i, f"{r['lat_ms']:.0f}", va="center", fontsize=8)
     ax.set_xlabel("mean wall-clock ms per prompt (64 new bytes)")
     ax.set_title("Latency (note: KV-cache use differs between paths)")
     ax.grid(axis="x", alpha=0.25)
@@ -404,12 +460,14 @@ def plot_inference_nfe(out_dir):
     data = parse_inference_log()
     arms = [a for a in ARM_ORDER if a in data]
     if not arms:
-        print("  skip inference_nfe: no per-arm inference data exists "
-              "(logs/s6_infer.log was never generated; the 6_infer phase "
-              "in results.jsonl benchmarks a single checkpoint across "
-              "inference methods, but has no arm dimension — it cannot "
-              "provide per-arm NFE/acceptance breakdowns) — needs a "
-              "future benchmarking pass")
+        print(
+            "  skip inference_nfe: no per-arm inference data exists "
+            "(logs/s6_infer.log was never generated; the 6_infer phase "
+            "in results.jsonl benchmarks a single checkpoint across "
+            "inference methods, but has no arm dimension — it cannot "
+            "provide per-arm NFE/acceptance breakdowns) — needs a "
+            "future benchmarking pass"
+        )
         return
 
     method = "bltd_blockdv_onestep_B8_a0.00"
@@ -425,25 +483,31 @@ def plot_inference_nfe(out_dir):
         colors.append(ARM_COLORS.get(arm, "#888888"))
 
     if not dec_vals:
-        print("  skip inference_nfe: no onestep data in per-arm inference "
-              "results")
+        print("  skip inference_nfe: no onestep data in per-arm inference results")
         return
 
     y = np.arange(len(labels))
     fig, ax = plt.subplots(figsize=(8.5, 5.5))
-    ax.barh(y, dec_vals, color=colors, edgecolor="black", linewidth=0.5,
-            label="decoder NFE/byte")
-    ax.barh(y, enc_vals, left=dec_vals, color=colors, edgecolor="black",
-            linewidth=0.5, alpha=0.5, label="encoder NFE/byte")
+    ax.barh(y, dec_vals, color=colors, edgecolor="black", linewidth=0.5, label="decoder NFE/byte")
+    ax.barh(
+        y,
+        enc_vals,
+        left=dec_vals,
+        color=colors,
+        edgecolor="black",
+        linewidth=0.5,
+        alpha=0.5,
+        label="encoder NFE/byte",
+    )
     ax.set_yticks(y)
     ax.set_yticklabels(labels, fontsize=8)
     ax.set_xlabel("forward passes per generated byte")
-    ax.set_title("Inference: total NFE by configuration\n"
-                 "(BLT-DV onestep B=8, 3.5M-param models, CUDA)")
+    ax.set_title(
+        "Inference: total NFE by configuration\n(BLT-DV onestep B=8, 3.5M-param models, CUDA)"
+    )
     for i, (d, e, a) in enumerate(zip(dec_vals, enc_vals, acc_vals)):
         total = d + e
-        ax.text(total + 0.02, i, f"{total:.2f} (acc {a:.0%})", va="center",
-                fontsize=7.5)
+        ax.text(total + 0.02, i, f"{total:.2f} (acc {a:.0%})", va="center", fontsize=7.5)
     ax.legend(fontsize=8, loc="lower right")
     ax.grid(axis="x", alpha=0.25)
     fig.tight_layout()
@@ -471,29 +535,43 @@ def plot_quality_speed(out_dir):
         colors.append(ARM_COLORS.get(arm, "#888888"))
 
     if not arms:
-        print("  skip quality_speed: no per-arm inference data exists "
-              "(logs/s6_infer.log was never generated; the 6_infer phase "
-              "in results.jsonl benchmarks a single checkpoint across "
-              "inference methods, but has no arm dimension — it cannot "
-              "provide per-arm NFE/acceptance breakdowns) — needs a "
-              "future benchmarking pass")
+        print(
+            "  skip quality_speed: no per-arm inference data exists "
+            "(logs/s6_infer.log was never generated; the 6_infer phase "
+            "in results.jsonl benchmarks a single checkpoint across "
+            "inference methods, but has no arm dimension — it cannot "
+            "provide per-arm NFE/acceptance breakdowns) — needs a "
+            "future benchmarking pass"
+        )
         return
 
     fig, ax = plt.subplots(figsize=(8.5, 5.5))
     sizes = [max(40, a * 300) for a in accs]
-    ax.scatter(bpbs, nfes, s=sizes, c=colors, edgecolors="black",
-               linewidths=0.6, zorder=3)
-    OFFS = [(8, 4), (8, -8), (-10, 8), (8, 12), (-10, -8),
-            (8, -12), (-10, 12), (8, 16), (-10, -12), (14, -4)]
+    ax.scatter(bpbs, nfes, s=sizes, c=colors, edgecolors="black", linewidths=0.6, zorder=3)
+    OFFS = [
+        (8, 4),
+        (8, -8),
+        (-10, 8),
+        (8, 12),
+        (-10, -8),
+        (8, -12),
+        (-10, 12),
+        (8, 16),
+        (-10, -12),
+        (14, -4),
+    ]
     for i, arm in enumerate(arms):
         lbl = ARM_LABELS.get(arm, arm)
-        ax.annotate(lbl, (bpbs[i], nfes[i]),
-                    textcoords="offset points", xytext=OFFS[i % len(OFFS)],
-                    fontsize=7.5)
+        ax.annotate(
+            lbl,
+            (bpbs[i], nfes[i]),
+            textcoords="offset points",
+            xytext=OFFS[i % len(OFFS)],
+            fontsize=7.5,
+        )
     ax.set_xlabel("training BPB (lower = better quality)")
     ax.set_ylabel("inference NFE/byte (lower = faster)")
-    ax.set_title("Quality vs speed trade-off\n"
-                 "(point size = acceptance rate, 3.5M-param models)")
+    ax.set_title("Quality vs speed trade-off\n(point size = acceptance rate, 3.5M-param models)")
     ax.grid(alpha=0.25)
     fig.tight_layout()
     fig.savefig(os.path.join(out_dir, "quality_speed.png"), dpi=150)
@@ -547,12 +625,21 @@ def plot_cuda_speedup(out_dir):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5))
 
     # Forward
-    ax1.bar(x - width, cpu_fwd, width, label="CPU",
-            color="#aaaaaa", edgecolor="black", linewidth=0.5)
-    ax1.bar(x, cuda_fwd, width, label="CUDA fp32",
-            color="#ee6677", edgecolor="black", linewidth=0.5)
-    ax1.bar(x + width, bf16_fwd, width, label="CUDA bf16",
-            color="#44aa77", edgecolor="black", linewidth=0.5)
+    ax1.bar(
+        x - width, cpu_fwd, width, label="CPU", color="#aaaaaa", edgecolor="black", linewidth=0.5
+    )
+    ax1.bar(
+        x, cuda_fwd, width, label="CUDA fp32", color="#ee6677", edgecolor="black", linewidth=0.5
+    )
+    ax1.bar(
+        x + width,
+        bf16_fwd,
+        width,
+        label="CUDA bf16",
+        color="#44aa77",
+        edgecolor="black",
+        linewidth=0.5,
+    )
     ax1.set_xticks(x)
     ax1.set_xticklabels([f"seq={s}" for s in seqs])
     ax1.set_ylabel("forward time (ms)")
@@ -566,12 +653,21 @@ def plot_cuda_speedup(out_dir):
     ax1.grid(axis="y", alpha=0.25)
 
     # Backward
-    ax2.bar(x - width, cpu_bwd, width, label="CPU",
-            color="#aaaaaa", edgecolor="black", linewidth=0.5)
-    ax2.bar(x, cuda_bwd, width, label="CUDA fp32",
-            color="#ee6677", edgecolor="black", linewidth=0.5)
-    ax2.bar(x + width, bf16_bwd, width, label="CUDA bf16",
-            color="#44aa77", edgecolor="black", linewidth=0.5)
+    ax2.bar(
+        x - width, cpu_bwd, width, label="CPU", color="#aaaaaa", edgecolor="black", linewidth=0.5
+    )
+    ax2.bar(
+        x, cuda_bwd, width, label="CUDA fp32", color="#ee6677", edgecolor="black", linewidth=0.5
+    )
+    ax2.bar(
+        x + width,
+        bf16_bwd,
+        width,
+        label="CUDA bf16",
+        color="#44aa77",
+        edgecolor="black",
+        linewidth=0.5,
+    )
     ax2.set_xticks(x)
     ax2.set_xticklabels([f"seq={s}" for s in seqs])
     ax2.set_ylabel("backward time (ms)")
@@ -584,24 +680,26 @@ def plot_cuda_speedup(out_dir):
         ax2.text(i + width, cb * 1.2, f"{cb:.1f}", ha="center", fontsize=7)
     ax2.grid(axis="y", alpha=0.25)
 
-    fig.suptitle("CPU vs CUDA fp32 vs CUDA bf16 pipeline timing (E=64 L=2, fixed stride-4)",
-                 fontsize=11, y=1.02)
+    fig.suptitle(
+        "CPU vs CUDA fp32 vs CUDA bf16 pipeline timing (E=64 L=2, fixed stride-4)",
+        fontsize=11,
+        y=1.02,
+    )
     fig.tight_layout()
-    fig.savefig(os.path.join(out_dir, "cuda_speedup.png"), dpi=150,
-                bbox_inches="tight")
+    fig.savefig(os.path.join(out_dir, "cuda_speedup.png"), dpi=150, bbox_inches="tight")
     plt.close(fig)
     print("  wrote cuda_speedup.png")
 
 
 # ── main ─────────────────────────────────────────────────────────────
 
+
 def main(argv=None):
     args = parse_args(argv)
     os.makedirs(args.out, exist_ok=True)
 
     # Toy-scale plots from results.jsonl.
-    rows = [r for r in load_rows(args.results, args.phase)
-            if r.get("name") == "gen_methods"]
+    rows = [r for r in load_rows(args.results, args.phase) if r.get("name") == "gen_methods"]
     if rows:
         latest = {}
         for r in rows:
@@ -615,24 +713,33 @@ def main(argv=None):
         # "Entropy patching (default)" table and eliminating CPU/CUDA
         # label collisions (identical NFE coordinates across backends).
         n_before = len(all_rows)
-        rows = [r for r in all_rows
-                if "_cuda" in r["tag"] and not r["tag"].endswith("_fixp")]
+        rows = [r for r in all_rows if "_cuda" in r["tag"] and not r["tag"].endswith("_fixp")]
         n_dropped = n_before - len(rows)
-        print(f"  toy-scale: kept {len(rows)} CUDA+entropy tags, "
-              f"dropped {n_dropped} (CPU + CUDA fixp)")
+        print(
+            f"  toy-scale: kept {len(rows)} CUDA+entropy tags, "
+            f"dropped {n_dropped} (CPU + CUDA fixp)"
+        )
 
         parsed = []
         for r in rows:
             model, method, suffix, k, B, thresh = split_tag(r["tag"])
             m = r["metrics"]
-            parsed.append(dict(
-                model=model, method=method, k=k, B=B, thresh=thresh,
-                dec=m["dec_nfe_per_byte"], enc=m["enc_nfe_per_byte"],
-                acc=m["acceptance"], agree=m["agreement"],
-                lat_ms=r["latency"]["mean"] * 1000.0,
-                label=pretty_name(model, method, suffix, k, B, thresh),
-                short=short_name(model, method, suffix, k, B, thresh),
-            ))
+            parsed.append(
+                dict(
+                    model=model,
+                    method=method,
+                    k=k,
+                    B=B,
+                    thresh=thresh,
+                    dec=m["dec_nfe_per_byte"],
+                    enc=m["enc_nfe_per_byte"],
+                    acc=m["acceptance"],
+                    agree=m["agreement"],
+                    lat_ms=r["latency"]["mean"] * 1000.0,
+                    label=pretty_name(model, method, suffix, k, B, thresh),
+                    short=short_name(model, method, suffix, k, B, thresh),
+                )
+            )
         base = next(r for r in parsed if r["method"] == "greedy")
 
         plot_toy_quality_frontier(parsed, base, args.out)

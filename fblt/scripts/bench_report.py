@@ -1,6 +1,6 @@
 """
 Reads the JSON produced by bench/harness.c,
-filters by phase/tag, and renders a Markdown comparison table. 
+filters by phase/tag, and renders a Markdown comparison table.
 Optionally produces a matplotlib PNG (e.g. BPB vs FLOPs, quality vs
 memory-bandwidth)
 
@@ -20,29 +20,54 @@ import sys
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description="Render benchmark JSONL results as Markdown/PNG.")
-    p.add_argument("--results", default="bench/results.jsonl",
-                   help="path to results.jsonl (default: bench/results.jsonl)")
-    p.add_argument("--phase", action="append", default=[],
-                   help="keep only these experiment groups (repeatable)")
-    p.add_argument("--tag", action="append", default=[],
-                   help="keep only these tags (repeatable)")
-    p.add_argument("--name", action="append", default=[],
-                   help="keep only these names (repeatable)")
-    p.add_argument("--baseline", default=None,
-                   help="tag of the baseline run; adds %%delta columns vs it")
-    p.add_argument("--sort", default=None, metavar="KEY",
-                   help="sort rows by latency field or metric key (e.g. mean, bpb)")
-    p.add_argument("--x", default=None, metavar="KEY",
-                   help="metric key for the plot x-axis (latency field or metric)")
-    p.add_argument("--y", default=None, metavar="KEY",
-                   help="metric key for the plot y-axis (latency field or metric)")
-    p.add_argument("--plot", default=None, metavar="PNG",
-                   help="write a scatter PNG to this path (requires --x/--y and matplotlib)")
-    p.add_argument("--compare", action="append", default=[],
-                   help="tag to include in a grouped BPB-vs-throughput bar chart "
-                        "(repeatable; --baseline tag is auto-included and highlighted)")
-    p.add_argument("--title", default=None, metavar="TEXT",
-                   help="title for the --compare chart")
+    p.add_argument(
+        "--results",
+        default="bench/results.jsonl",
+        help="path to results.jsonl (default: bench/results.jsonl)",
+    )
+    p.add_argument(
+        "--phase",
+        action="append",
+        default=[],
+        help="keep only these experiment groups (repeatable)",
+    )
+    p.add_argument("--tag", action="append", default=[], help="keep only these tags (repeatable)")
+    p.add_argument("--name", action="append", default=[], help="keep only these names (repeatable)")
+    p.add_argument(
+        "--baseline", default=None, help="tag of the baseline run; adds %%delta columns vs it"
+    )
+    p.add_argument(
+        "--sort",
+        default=None,
+        metavar="KEY",
+        help="sort rows by latency field or metric key (e.g. mean, bpb)",
+    )
+    p.add_argument(
+        "--x",
+        default=None,
+        metavar="KEY",
+        help="metric key for the plot x-axis (latency field or metric)",
+    )
+    p.add_argument(
+        "--y",
+        default=None,
+        metavar="KEY",
+        help="metric key for the plot y-axis (latency field or metric)",
+    )
+    p.add_argument(
+        "--plot",
+        default=None,
+        metavar="PNG",
+        help="write a scatter PNG to this path (requires --x/--y and matplotlib)",
+    )
+    p.add_argument(
+        "--compare",
+        action="append",
+        default=[],
+        help="tag to include in a grouped BPB-vs-throughput bar chart "
+        "(repeatable; --baseline tag is auto-included and highlighted)",
+    )
+    p.add_argument("--title", default=None, metavar="TEXT", help="title for the --compare chart")
     return p.parse_args(argv)
 
 
@@ -145,17 +170,19 @@ def main(argv=None):
             sys.exit(f"error: baseline tag '{args.baseline}' not found in filtered rows")
 
     if args.sort:
+
         def sort_key(r):
             v = get_value(r, args.sort)
             return float("inf") if v is None else v
+
         rows.sort(key=sort_key)
 
     # ---- Markdown table -------------------------------------------------------
-    header = ["name", "tag", "n", "mean_ms", "p50_ms", "p90_ms", "p99_ms"] + \
-             [f"{k}*" for k in metric_keys]
+    header = ["name", "tag", "n", "mean_ms", "p50_ms", "p90_ms", "p99_ms"] + [
+        f"{k}*" for k in metric_keys
+    ]
     sep = ["---"] * len(header)
-    lines = ["| " + " | ".join(header) + " |",
-             "| " + " | ".join(sep) + " |"]
+    lines = ["| " + " | ".join(header) + " |", "| " + " | ".join(sep) + " |"]
 
     for r in rows:
         lat = r.get("latency", {})
@@ -163,7 +190,7 @@ def main(argv=None):
             r.get("name", ""),
             r.get("tag", ""),
             str(lat.get("n", "-")),
-            fmt(lat.get("mean", 0) * 1e3),   # seconds -> ms
+            fmt(lat.get("mean", 0) * 1e3),  # seconds -> ms
             fmt(lat.get("p50", 0) * 1e3),
             fmt(lat.get("p90", 0) * 1e3),
             fmt(lat.get("p99", 0) * 1e3),
@@ -171,8 +198,7 @@ def main(argv=None):
 
         if base_rec is not None and r is not base_rec:
             bl = base_rec.get("latency", {})
-            cells.append(fmt_delta(lat.get("mean"), bl.get("mean"),
-                                   lower_is_better=True))
+            cells.append(fmt_delta(lat.get("mean"), bl.get("mean"), lower_is_better=True))
             for k in metric_keys:
                 # Metrics are assumed lower-is-better too (BPB, NFEs, FLOPs/byte);
                 # throughput-style metrics should be inverted at logging time
@@ -189,8 +215,10 @@ def main(argv=None):
         print("* metric values (domain metrics: BPB, NFEs, GB/s, ...)")
     if base_rec is not None:
         print()
-        print(f"delta vs baseline tag '{args.baseline}': "
-              "(+) improvement, (-) regression; latency/metrics assumed lower-is-better.")
+        print(
+            f"delta vs baseline tag '{args.baseline}': "
+            "(+) improvement, (-) regression; latency/metrics assumed lower-is-better."
+        )
 
     # ---- Optional scatter plot -----------------------------------------------
     if args.plot and not args.compare:
@@ -198,6 +226,7 @@ def main(argv=None):
             sys.exit("error: --plot requires both --x KEY and --y KEY")
         try:
             import matplotlib
+
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
         except ImportError:
@@ -210,8 +239,9 @@ def main(argv=None):
         fig, ax = plt.subplots(figsize=(7, 5))
         ax.scatter([p[0] for p in pts], [p[1] for p in pts])
         for x, y, r in pts:
-            ax.annotate(r.get("tag", ""), (x, y), fontsize=7,
-                        xytext=(3, 3), textcoords="offset points")
+            ax.annotate(
+                r.get("tag", ""), (x, y), fontsize=7, xytext=(3, 3), textcoords="offset points"
+            )
         ax.set_xlabel(args.x)
         ax.set_ylabel(args.y)
         ax.set_title("benchmark comparison")
@@ -232,6 +262,7 @@ def render_compare(rows, base_rec, args):
     highlight/reference a run and --title TEXT to label the figure."""
     try:
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError:
@@ -254,7 +285,7 @@ def render_compare(rows, base_rec, args):
         return 0.0 if v is None else float(v)
 
     bpbs = [metric(t, "bpb") for t in tags]
-    thr = [metric(t, "throughput_bytes_per_sec") for t in tags]          # B/s
+    thr = [metric(t, "throughput_bytes_per_sec") for t in tags]  # B/s
 
     best_i = min(range(len(tags)), key=lambda i: bpbs[i])
     colors = []
@@ -272,15 +303,13 @@ def render_compare(rows, base_rec, args):
     ax1.set_ylabel("held-out BPB (lower is better)")
     ax1.set_ylim(min(bpbs) * 0.985, max(bpbs) * 1.005)
     for b, v in zip(bars1, bpbs):
-        ax1.text(b.get_x() + b.get_width() / 2, v, f"{v:.4f}",
-                 ha="center", va="bottom", fontsize=7)
+        ax1.text(b.get_x() + b.get_width() / 2, v, f"{v:.4f}", ha="center", va="bottom", fontsize=7)
 
     bars2 = ax2.bar(tags, thr, color=colors)
     ax2.set_ylabel("train throughput (bytes/s, higher is better)")
     ax2.set_ylim(0, max(thr) * 1.18)
     for b, v in zip(bars2, thr):
-        ax2.text(b.get_x() + b.get_width() / 2, v, f"{v:.0f}",
-                 ha="center", va="bottom", fontsize=7)
+        ax2.text(b.get_x() + b.get_width() / 2, v, f"{v:.0f}", ha="center", va="bottom", fontsize=7)
 
     for ax in (ax1, ax2):
         ax.tick_params(axis="x", labelrotation=35)

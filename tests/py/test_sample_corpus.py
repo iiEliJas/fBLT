@@ -8,9 +8,15 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SCRIPT = REPO_ROOT / "fblt" / "scripts" / "build_sample_corpus.py"
 
 MANIFEST_KEYS = {
-    "git_commit", "source_files", "train_files", "heldout_files",
-    "train_sha256", "heldout_sha256", "train_size_bytes",
-    "heldout_size_bytes", "seed",
+    "git_commit",
+    "source_files",
+    "train_files",
+    "heldout_files",
+    "train_sha256",
+    "heldout_sha256",
+    "train_size_bytes",
+    "heldout_size_bytes",
+    "seed",
 }
 
 

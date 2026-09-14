@@ -18,8 +18,16 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
 EXCLUDE_DIRS = {
-    "obj", "obj-cuda", "bin", "bin-cuda", "data", ".git",
-    ".venv", "__pycache__", "build", "node_modules",
+    "obj",
+    "obj-cuda",
+    "bin",
+    "bin-cuda",
+    "data",
+    ".git",
+    ".venv",
+    "__pycache__",
+    "build",
+    "node_modules",
 }
 
 SEP = b"\n"
@@ -99,8 +107,7 @@ def build_stream(file_list, size_bytes):
             break
     if len(buf) < size_bytes:
         actual = len(buf)
-        print(f"warning: pool smaller than cap "
-              f"({actual} < {size_bytes} bytes)")
+        print(f"warning: pool smaller than cap ({actual} < {size_bytes} bytes)")
     return bytes(buf), included, total_source
 
 
@@ -109,7 +116,9 @@ def get_git_commit():
     try:
         r = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            capture_output=True, text=True, cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            cwd=REPO_ROOT,
         )
         if r.returncode == 0:
             return r.stdout.strip()
@@ -124,10 +133,8 @@ def generate_corpus(out_dir, train_size, heldout_size, seed):
     files = find_source_files()
     train_files, heldout_files = split_files(files, seed)
 
-    train_bytes, train_included, train_src = build_stream(
-        train_files, train_size)
-    heldout_bytes, heldout_included, heldout_src = build_stream(
-        heldout_files, heldout_size)
+    train_bytes, train_included, train_src = build_stream(train_files, train_size)
+    heldout_bytes, heldout_included, heldout_src = build_stream(heldout_files, heldout_size)
 
     out_path = REPO_ROOT / out_dir
     out_path.mkdir(parents=True, exist_ok=True)
@@ -140,8 +147,7 @@ def generate_corpus(out_dir, train_size, heldout_size, seed):
     manifest = {
         "git_commit": get_git_commit(),
         "source_files": [
-            {"path": rel.as_posix(), "size": (REPO_ROOT / rel).stat().st_size}
-            for rel in files
+            {"path": rel.as_posix(), "size": (REPO_ROOT / rel).stat().st_size} for rel in files
         ],
         "train_files": [
             {"path": rel.as_posix(), "size": (REPO_ROOT / rel).stat().st_size}
@@ -174,8 +180,7 @@ def check_corpus(out_dir, train_size, heldout_size, seed):
 
     tmp = tempfile.mkdtemp()
     try:
-        manifest = generate_corpus(
-            tmp, train_size, heldout_size, seed)
+        manifest = generate_corpus(tmp, train_size, heldout_size, seed)
         if manifest["train_sha256"] != existing["train_sha256"]:
             print("error: train.bin sha256 mismatch")
             print(f"  expected: {existing['train_sha256']}")
@@ -193,41 +198,41 @@ def check_corpus(out_dir, train_size, heldout_size, seed):
 
 
 def main():
-    ap = argparse.ArgumentParser(
-        description="Deterministic sample corpus generator")
-    ap.add_argument("--train-size-mb", type=float, default=2.0,
-                    help="max train corpus size in MB")
-    ap.add_argument("--heldout-size-mb", type=float, default=0.2,
-                    help="max heldout corpus size in MB")
-    ap.add_argument("--output-dir", default="data",
-                    help="output directory relative to repo root")
-    ap.add_argument("--check", action="store_true",
-                    help="drift guard: regenerate and compare sha256")
-    ap.add_argument("--seed", type=int, default=0,
-                    help="seed for hash-based file split")
+    ap = argparse.ArgumentParser(description="Deterministic sample corpus generator")
+    ap.add_argument("--train-size-mb", type=float, default=2.0, help="max train corpus size in MB")
+    ap.add_argument(
+        "--heldout-size-mb", type=float, default=0.2, help="max heldout corpus size in MB"
+    )
+    ap.add_argument("--output-dir", default="data", help="output directory relative to repo root")
+    ap.add_argument(
+        "--check", action="store_true", help="drift guard: regenerate and compare sha256"
+    )
+    ap.add_argument("--seed", type=int, default=0, help="seed for hash-based file split")
     args = ap.parse_args()
 
     train_bytes = int(args.train_size_mb * 1024 * 1024)
     heldout_bytes = int(args.heldout_size_mb * 1024 * 1024)
 
     if args.check:
-        return check_corpus(args.output_dir, train_bytes, heldout_bytes,
-                            args.seed)
+        return check_corpus(args.output_dir, train_bytes, heldout_bytes, args.seed)
 
-    manifest = generate_corpus(args.output_dir, train_bytes, heldout_bytes,
-                               args.seed)
+    manifest = generate_corpus(args.output_dir, train_bytes, heldout_bytes, args.seed)
 
     n_source = len(manifest["source_files"])
     n_train = len(manifest["train_files"])
     n_heldout = len(manifest["heldout_files"])
     tb = manifest["train_size_bytes"]
     hb = manifest["heldout_size_bytes"]
-    print(f"{n_source} files discovered, "
-          f"{n_train} train / {n_heldout} heldout, "
-          f"train {tb/1e6:.2f} MB, heldout {hb/1e6:.2f} MB")
-    print(f"output: {args.output_dir}/train.bin, "
-          f"{args.output_dir}/heldout.bin, "
-          f"{args.output_dir}/sample_corpus_manifest.json")
+    print(
+        f"{n_source} files discovered, "
+        f"{n_train} train / {n_heldout} heldout, "
+        f"train {tb / 1e6:.2f} MB, heldout {hb / 1e6:.2f} MB"
+    )
+    print(
+        f"output: {args.output_dir}/train.bin, "
+        f"{args.output_dir}/heldout.bin, "
+        f"{args.output_dir}/sample_corpus_manifest.json"
+    )
     return 0
 
 

@@ -26,6 +26,7 @@ def iter_rows(path):
     opener = open
     if path.endswith(".gz"):
         import gzip
+
         opener = gzip.open
     with opener(path, "rt", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -49,8 +50,7 @@ def main():
 
     rng = random.Random(SEED)
 
-    rejected = {"too_small": 0, "too_large": 0, "alphanum": 0, "line_length": 0,
-                "duplicate": 0}
+    rejected = {"too_small": 0, "too_large": 0, "alphanum": 0, "line_length": 0, "duplicate": 0}
     kept = []
     seen_hashes = set()
     total = 0
@@ -99,8 +99,14 @@ def main():
             offset = len(buf)
             buf += f["data"]
             buf += b"\n"
-            entries.append({"offset": offset, "length": len(f["data"]),
-                            "domain": f["domain"], "path": f["path"]})
+            entries.append(
+                {
+                    "offset": offset,
+                    "length": len(f["data"]),
+                    "domain": f["domain"],
+                    "path": f["path"],
+                }
+            )
         streams[split_name] = bytes(buf)
         index[split_name] = entries
 
@@ -118,7 +124,7 @@ def main():
         buf = bytearray()
         for e in index["heldout"]:
             if e["domain"] == dom:
-                buf += streams["heldout"][e["offset"]:e["offset"] + e["length"]]
+                buf += streams["heldout"][e["offset"] : e["offset"] + e["length"]]
                 buf += b"\n"
         p = os.path.join(args.out_dir, f"heldout_{dom}.bin")
         with open(p, "wb") as fh:
@@ -153,7 +159,8 @@ def main():
             for chunk in iter(lambda: fh.read(1 << 20), b""):
                 hh.update(chunk)
         manifest["bytes"][f"heldout_{dom}"] = {
-            "path": p, "sha256": hh.hexdigest(),
+            "path": p,
+            "sha256": hh.hexdigest(),
             "size_bytes": os.path.getsize(p),
         }
 
@@ -162,11 +169,9 @@ def main():
 
     tr = manifest["bytes"]["train"]["size_bytes"]
     ho = manifest["bytes"]["heldout"]["size_bytes"]
-    print(f"kept {len(kept)}/{total} files "
-          f"(rejected: {rejected})")
-    print(f"train.bin   {tr/1e6:.2f} MB")
-    print(f"heldout.bin {ho/1e6:.2f} MB "
-          f"({manifest['split_counts']['heldout_files']} files)")
+    print(f"kept {len(kept)}/{total} files (rejected: {rejected})")
+    print(f"train.bin   {tr / 1e6:.2f} MB")
+    print(f"heldout.bin {ho / 1e6:.2f} MB ({manifest['split_counts']['heldout_files']} files)")
     return 0
 
 
