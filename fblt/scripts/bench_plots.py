@@ -21,14 +21,12 @@ import argparse
 import json
 import os
 import re
-from collections import defaultdict
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-
 
 # ── Shared style ──────────────────────────────────────────────────────
 
