@@ -1,6 +1,7 @@
+import argparse
 import struct
 from pathlib import Path
-import argparse
+
 import numpy as np
 
 try:
@@ -13,7 +14,7 @@ def write_tensor(path: str, tensor, dtype: str = "float32") -> None:
     """Write a tensor to binary file with shape header."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # Check explicitly if it is a PyTorch Tensor
     if torch is not None and isinstance(tensor, torch.Tensor):
         tensor = tensor.detach().cpu().contiguous()
@@ -34,12 +35,12 @@ def write_tensor(path: str, tensor, dtype: str = "float32") -> None:
             tensor = tensor.astype(np.uint8)
         shape = tuple(tensor.shape)
         values = tensor.flatten().tolist()
-    
+
     with path.open("wb") as fh:
         fh.write(struct.pack("<I", len(shape)))
         for dim in shape:
             fh.write(struct.pack("<I", int(dim)))
-        
+
         if dtype == "uint8":
             fh.write(bytes(values))
         else:
@@ -80,9 +81,9 @@ def infer_shape(value):
 
 def get_output_dir(args) -> Path:
     """Get output directory from args or use default."""
-    if hasattr(args, 'output_dir'):
+    if hasattr(args, "output_dir"):
         return Path(args.output_dir)
-    elif hasattr(args, 'outdir'):
+    elif hasattr(args, "outdir"):
         return Path(args.outdir)
     else:
         return Path("data")
@@ -91,6 +92,10 @@ def get_output_dir(args) -> Path:
 def create_parser(description: str = "Generate golden test data") -> argparse.ArgumentParser:
     """Create a basic argument parser."""
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--output-dir", type=Path, default=Path("data/tests"), 
-                       help="Directory to write reference files")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("data/tests"),
+        help="Directory to write reference files",
+    )
     return parser

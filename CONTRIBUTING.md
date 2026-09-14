@@ -12,12 +12,17 @@ Thanks for your interest in contributing to fBLT.
 Run the lightweight checks locally before submitting:
 
 ```sh
+# Python (lint + tests)
+pip install ruff pytest
+ruff check .
+ruff format --check .
+pytest tests/
+
+# C tests
 make test
-python3 tests/py/test_config.py
-python3 tests/py/test_entrypoints.py
 ```
 
-This builds the project and runs the full test suite (unit + integration tests). It requires `gcc` and `make`. No CUDA needed for the default CPU path.
+This builds the project and runs the full C test suite (unit + integration tests). It requires `gcc` and `make`. No CUDA needed for the default CPU path.
 
 For CUDA changes, additionally check on a CUDA-capable host:
 
@@ -28,6 +33,7 @@ make CUDA=1 test
 ## Code style
 
 - C99, `gcc -O2 -std=c99 -Wall -Wextra` (default Makefile)
+- Python: Ruff formatter (line-length 100, target Python 3.11)
 - 4-space indentation, 120-column limit for C/CUDA files
 - Match the patterns in the file you are editing
 

@@ -1,16 +1,14 @@
-import os
-import numpy as np
-from pathlib import Path
 import sys
+from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent))
 
-from parity_transformer import main_transformer
-from parity_patcher import main_patcher
-from parity_math import main_math
 from parity_global_tranformer import main_global_transformer
 from parity_local_decoder import main_local_decoder
 from parity_local_encoder import main_local_encoder
-
+from parity_math import main_math
+from parity_patcher import main_patcher
+from parity_transformer import main_transformer
 
 if __name__ == "__main__":
     main_math()

@@ -13,9 +13,7 @@ from fblt._runner import run_binary
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        prog="fblt-train", description="Train BLT-D model"
-    )
+    parser = argparse.ArgumentParser(prog="fblt-train", description="Train BLT-D model")
     parser.add_argument("--config", type=str, default=None, help="YAML config path")
     parser.add_argument(
         "--backend",

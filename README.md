@@ -48,9 +48,6 @@ make main         # build main executable
 make info         # show build config
 make clean        # remove obj/, bin/
 make help         # show all targets
-
-python3 tests/py/test_config.py        # Python config tests
-python3 tests/py/test_entrypoints.py   # Python entry-point tests
 ```
 
 Default is `gcc -O2 -std=c99 -Wall -Wextra`. Change it:
@@ -64,10 +61,29 @@ CUDA: `make CUDA=1 <target>` compiles `.cu` files with nvcc, outputs to `obj-cud
 ### Python setup
 
 ```bash
-pip install -e .    # installs fblt package + fblt-train / fblt-infer entry points
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .                      # install fblt package + entry points
+pip install ruff pytest               # dev dependencies
 ```
 
 Requires Python >= 3.9.
+
+Run Python tests and lint checks:
+
+```bash
+pytest tests/                         # run Python test suite
+ruff check .                          # lint
+ruff format --check .                 # format check
+```
+
+For the C test suite parity tests, generate golden data first:
+
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/cpu numpy
+make parity-data                      # or python tests/py/parity_generate.py
+make test                             # build + run C tests
+```
 
 ## Layout
 

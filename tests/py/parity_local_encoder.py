@@ -1,9 +1,10 @@
+import math
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
-from pathlib import Path
-from golden import write_tensor_fp32, write_tensor_uint8, create_parser
+from golden import create_parser, write_tensor_fp32, write_tensor_uint8
 
 EMBED_DIM = 32
 NUM_LAYERS = 3
@@ -56,15 +57,20 @@ def apply_rope(x, cos, sin):
 
 
 class ReferenceNgramEmbedding(nn.Module):
-    def __init__(self, embed_dim=EMBED_DIM, ngram_sizes=NGRAM_SIZES,
-                 per_ngram_vocab=NGRAM_VOCAB, hash_prime=HASH_PRIME):
+    def __init__(
+        self,
+        embed_dim=EMBED_DIM,
+        ngram_sizes=NGRAM_SIZES,
+        per_ngram_vocab=NGRAM_VOCAB,
+        hash_prime=HASH_PRIME,
+    ):
         super().__init__()
         self.ngram_sizes = ngram_sizes
         self.hash_prime = hash_prime
         self.per_ngram_vocab = per_ngram_vocab
-        self.tables = nn.ParameterList([
-            nn.Parameter(torch.empty(per_ngram_vocab, embed_dim)) for _ in ngram_sizes
-        ])
+        self.tables = nn.ParameterList(
+            [nn.Parameter(torch.empty(per_ngram_vocab, embed_dim)) for _ in ngram_sizes]
+        )
 
     def forward(self, bytes_in):
         seq_len = bytes_in.shape[0]
@@ -74,7 +80,7 @@ class ReferenceNgramEmbedding(nn.Module):
             for i in range(seq_len):
                 if i < n - 1:
                     continue
-                gram = bytes_in[i - n + 1:i + 1]
+                gram = bytes_in[i - n + 1 : i + 1]
                 idx = rolling_poly_hash(gram, self.hash_prime, self.per_ngram_vocab)
                 out[i] += table[idx]
         return out
@@ -132,14 +138,18 @@ class ReferenceCrossAttention(nn.Module):
         num_patches = patch_query.shape[0]
         seq_len = byte_kv.shape[0]
 
-        q = (patch_query @ self.weight_q).view(num_patches, self.num_heads, self.head_dim).transpose(0, 1)
+        q = (
+            (patch_query @ self.weight_q)
+            .view(num_patches, self.num_heads, self.head_dim)
+            .transpose(0, 1)
+        )
         k = (byte_kv @ self.weight_k).view(seq_len, self.num_heads, self.head_dim).transpose(0, 1)
         v = (byte_kv @ self.weight_v).view(seq_len, self.num_heads, self.head_dim).transpose(0, 1)
 
         # block-diagonal mask
         mask = torch.full((num_patches, seq_len), float("-inf"))
         for j, (start, length) in enumerate(spans):
-            mask[j, start:start + length] = 0.0
+            mask[j, start : start + length] = 0.0
 
         scores = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
         scores = scores + mask.unsqueeze(0)
@@ -192,9 +202,7 @@ class ReferenceLocalEncoder(nn.Module):
         self.byte_embedding_weight = nn.Parameter(torch.empty(256, EMBED_DIM))
         self.ngram_embedding = ReferenceNgramEmbedding()
 
-        self.layers = nn.ModuleList([
-            ReferenceLocalEncoderLayer() for _ in range(self.num_layers)
-        ])
+        self.layers = nn.ModuleList([ReferenceLocalEncoderLayer() for _ in range(self.num_layers)])
 
         cos, sin = rope_cos_sin(SEQ_LEN, HEAD_DIM, ROPE_THETA)
         self.register_buffer("rope_cos", cos)
@@ -209,7 +217,7 @@ class ReferenceLocalEncoder(nn.Module):
 
         # P_0 via mean pooling of initial byte representations
         patch_repr = torch.stack(
-            [x[start:start + length].mean(dim=0) for (start, length) in spans], dim=0
+            [x[start : start + length].mean(dim=0) for (start, length) in spans], dim=0
         )
 
         for layer in self.layers:
@@ -244,19 +252,29 @@ def export_reference_weights(model, weights_dir):
     for t_idx, table in enumerate(model.ngram_embedding.tables):
         write_tensor_fp32(out_path / f"ngram_table_{t_idx}.bin", table.detach())
 
-    for l, layer in enumerate(model.layers):
-        write_tensor_fp32(out_path / f"layer_{l}_norm1_weight.bin", layer.norm1_weight.detach())
-        write_tensor_fp32(out_path / f"layer_{l}_attn_qkv_w.bin", layer.self_attn.qkv_w.detach())
-        write_tensor_fp32(out_path / f"layer_{l}_attn_proj_w.bin", layer.self_attn.proj_w.detach())
-        write_tensor_fp32(out_path / f"layer_{l}_norm2_weight.bin", layer.norm2_weight.detach())
-        write_tensor_fp32(out_path / f"layer_{l}_ffn_up_w.bin", layer.ffn_up_w.detach())
-        write_tensor_fp32(out_path / f"layer_{l}_ffn_gate_w.bin", layer.ffn_gate_w.detach())
-        write_tensor_fp32(out_path / f"layer_{l}_ffn_down_w.bin", layer.ffn_down_w.detach())
-        write_tensor_fp32(out_path / f"layer_{l}_cross_norm_weight.bin", layer.cross_norm_weight.detach())
-        write_tensor_fp32(out_path / f"layer_{l}_cross_weight_q.bin", layer.cross_attn.weight_q.detach())
-        write_tensor_fp32(out_path / f"layer_{l}_cross_weight_k.bin", layer.cross_attn.weight_k.detach())
-        write_tensor_fp32(out_path / f"layer_{l}_cross_weight_v.bin", layer.cross_attn.weight_v.detach())
-        write_tensor_fp32(out_path / f"layer_{l}_cross_weight_proj.bin", layer.cross_attn.weight_proj.detach())
+    for li, layer in enumerate(model.layers):
+        write_tensor_fp32(out_path / f"layer_{li}_norm1_weight.bin", layer.norm1_weight.detach())
+        write_tensor_fp32(out_path / f"layer_{li}_attn_qkv_w.bin", layer.self_attn.qkv_w.detach())
+        write_tensor_fp32(out_path / f"layer_{li}_attn_proj_w.bin", layer.self_attn.proj_w.detach())
+        write_tensor_fp32(out_path / f"layer_{li}_norm2_weight.bin", layer.norm2_weight.detach())
+        write_tensor_fp32(out_path / f"layer_{li}_ffn_up_w.bin", layer.ffn_up_w.detach())
+        write_tensor_fp32(out_path / f"layer_{li}_ffn_gate_w.bin", layer.ffn_gate_w.detach())
+        write_tensor_fp32(out_path / f"layer_{li}_ffn_down_w.bin", layer.ffn_down_w.detach())
+        write_tensor_fp32(
+            out_path / f"layer_{li}_cross_norm_weight.bin", layer.cross_norm_weight.detach()
+        )
+        write_tensor_fp32(
+            out_path / f"layer_{li}_cross_weight_q.bin", layer.cross_attn.weight_q.detach()
+        )
+        write_tensor_fp32(
+            out_path / f"layer_{li}_cross_weight_k.bin", layer.cross_attn.weight_k.detach()
+        )
+        write_tensor_fp32(
+            out_path / f"layer_{li}_cross_weight_v.bin", layer.cross_attn.weight_v.detach()
+        )
+        write_tensor_fp32(
+            out_path / f"layer_{li}_cross_weight_proj.bin", layer.cross_attn.weight_proj.detach()
+        )
 
 
 def generate_data(output_dir="data/tests", cross_attn_all_layers=True):
@@ -289,6 +307,7 @@ def main_local_encoder():
     generate_data(args.output_dir, cross_attn_all_layers=True)
     generate_data(args.output_dir, cross_attn_all_layers=False)
     print("Successfully generated local encoder golden files and reference weights.")
+
 
 if __name__ == "__main__":
     main_local_encoder()

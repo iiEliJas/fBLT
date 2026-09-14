@@ -1,9 +1,10 @@
 import math
-from pathlib import Path
 import sys
+from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent))
 
-from golden import write_tensor, flatten_and_shape, infer_shape, create_parser
+from golden import create_parser, write_tensor
 
 try:
     import torch
@@ -26,12 +27,12 @@ def _matmul(a, b):
         out.append(out_row)
     return out
 
+
 def _softmax(values):
     max_val = max(values)
     exps = [math.exp(v - max_val) for v in values]
     total = sum(exps)
     return [x / total for x in exps]
-
 
 
 def generate_golden_math_files(output_dir: str = "data/tests") -> None:
@@ -67,6 +68,7 @@ def main_math():
     parser = create_parser("Generate golden files for math ops")
     args = parser.parse_args()
     generate_golden_math_files(str(args.output_dir))
+
 
 if __name__ == "__main__":
     main_math()

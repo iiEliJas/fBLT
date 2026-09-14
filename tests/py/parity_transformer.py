@@ -1,11 +1,12 @@
 import os
-import numpy as np
-from pathlib import Path
 import sys
+from pathlib import Path
+
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).parent))
-from golden import write_tensor as write_tensor_transformer, create_parser as create_parser_trans
-from parity_patcher import main_patcher
-from parity_math import main_math
+from golden import create_parser as create_parser_trans
+from golden import write_tensor as write_tensor_transformer
 
 SEED = 0
 EMBED_DIM = 16
@@ -102,8 +103,9 @@ def multihead_attention(x, w_qkv, w_proj, num_heads, is_causal, use_rope=False, 
     return attn_out @ w_proj
 
 
-def multihead_attention_backward(x, w_qkv, w_proj, grad_out, num_heads, is_causal,
-                                  use_rope=False, rope_theta=10000.0):
+def multihead_attention_backward(
+    x, w_qkv, w_proj, grad_out, num_heads, is_causal, use_rope=False, rope_theta=10000.0
+):
     seq_len, embed_dim = x.shape
     head_dim = embed_dim // num_heads
     scale = 1.0 / np.sqrt(head_dim)
@@ -174,7 +176,15 @@ def layer_norm(x, weight, bias, eps):
 
 def transformer_block(x, weights, num_heads, is_causal, eps, use_rope=False, rope_theta=10000.0):
     norm1 = layer_norm(x, weights["norm1_weight"], weights["norm1_bias"], eps)
-    attn_out = multihead_attention(norm1, weights["attn_qkv_w"], weights["attn_proj_w"], num_heads, is_causal, use_rope=use_rope, rope_theta=rope_theta)
+    attn_out = multihead_attention(
+        norm1,
+        weights["attn_qkv_w"],
+        weights["attn_proj_w"],
+        num_heads,
+        is_causal,
+        use_rope=use_rope,
+        rope_theta=rope_theta,
+    )
     attn_residual = x + attn_out
 
     norm2 = layer_norm(attn_residual, weights["norm2_weight"], weights["norm2_bias"], eps)
@@ -196,7 +206,9 @@ def generate_golden_transformer_files(outdir: str = "data/tests", use_rope: bool
     attn_qkv_w = randn(EMBED_DIM, 3 * EMBED_DIM)
     attn_proj_w = randn(EMBED_DIM, EMBED_DIM)
 
-    attn_expected = multihead_attention(attn_input, attn_qkv_w, attn_proj_w, NUM_HEADS, is_causal=True, use_rope=use_rope)
+    attn_expected = multihead_attention(
+        attn_input, attn_qkv_w, attn_proj_w, NUM_HEADS, is_causal=True, use_rope=use_rope
+    )
 
     write_tensor_transformer(os.path.join(outdir, "attn_input.bin"), attn_input)
     write_tensor_transformer(os.path.join(outdir, "attn_qkv_w.bin"), attn_qkv_w)
@@ -206,14 +218,21 @@ def generate_golden_transformer_files(outdir: str = "data/tests", use_rope: bool
     attn_grad_out = randn(SEQ_LEN, EMBED_DIM)
 
     attn_grad_input, attn_grad_qkv_w, attn_grad_proj_w = multihead_attention_backward(
-        attn_input, attn_qkv_w, attn_proj_w, attn_grad_out,
-        NUM_HEADS, is_causal=True, use_rope=use_rope,
+        attn_input,
+        attn_qkv_w,
+        attn_proj_w,
+        attn_grad_out,
+        NUM_HEADS,
+        is_causal=True,
+        use_rope=use_rope,
     )
 
     write_tensor_transformer(os.path.join(outdir, "attn_grad_out.bin"), attn_grad_out)
     write_tensor_transformer(os.path.join(outdir, "attn_expected_grad_input.bin"), attn_grad_input)
     write_tensor_transformer(os.path.join(outdir, "attn_expected_grad_qkv_w.bin"), attn_grad_qkv_w)
-    write_tensor_transformer(os.path.join(outdir, "attn_expected_grad_proj_w.bin"), attn_grad_proj_w)
+    write_tensor_transformer(
+        os.path.join(outdir, "attn_expected_grad_proj_w.bin"), attn_grad_proj_w
+    )
 
     block_input = randn(SEQ_LEN, EMBED_DIM)
     block_weights = {
@@ -227,17 +246,41 @@ def generate_golden_transformer_files(outdir: str = "data/tests", use_rope: bool
         "ffn_down_w": randn(HIDDEN_DIM, EMBED_DIM),
     }
 
-    block_expected = transformer_block(block_input, block_weights, NUM_HEADS, is_causal=True, eps=LAYER_NORM_EPS, use_rope=True, rope_theta=10000.0)
+    block_expected = transformer_block(
+        block_input,
+        block_weights,
+        NUM_HEADS,
+        is_causal=True,
+        eps=LAYER_NORM_EPS,
+        use_rope=True,
+        rope_theta=10000.0,
+    )
 
     write_tensor_transformer(os.path.join(outdir, "transformer_input.bin"), block_input)
-    write_tensor_transformer(os.path.join(outdir, "transformer_norm1_weight.bin"), block_weights["norm1_weight"])
-    write_tensor_transformer(os.path.join(outdir, "transformer_norm1_bias.bin"), block_weights["norm1_bias"])
-    write_tensor_transformer(os.path.join(outdir, "transformer_attn_qkv_w.bin"), block_weights["attn_qkv_w"])
-    write_tensor_transformer(os.path.join(outdir, "transformer_attn_proj_w.bin"), block_weights["attn_proj_w"])
-    write_tensor_transformer(os.path.join(outdir, "transformer_norm2_weight.bin"), block_weights["norm2_weight"])
-    write_tensor_transformer(os.path.join(outdir, "transformer_norm2_bias.bin"), block_weights["norm2_bias"])
-    write_tensor_transformer(os.path.join(outdir, "transformer_ffn_up_w.bin"), block_weights["ffn_up_w"])
-    write_tensor_transformer(os.path.join(outdir, "transformer_ffn_down_w.bin"), block_weights["ffn_down_w"])
+    write_tensor_transformer(
+        os.path.join(outdir, "transformer_norm1_weight.bin"), block_weights["norm1_weight"]
+    )
+    write_tensor_transformer(
+        os.path.join(outdir, "transformer_norm1_bias.bin"), block_weights["norm1_bias"]
+    )
+    write_tensor_transformer(
+        os.path.join(outdir, "transformer_attn_qkv_w.bin"), block_weights["attn_qkv_w"]
+    )
+    write_tensor_transformer(
+        os.path.join(outdir, "transformer_attn_proj_w.bin"), block_weights["attn_proj_w"]
+    )
+    write_tensor_transformer(
+        os.path.join(outdir, "transformer_norm2_weight.bin"), block_weights["norm2_weight"]
+    )
+    write_tensor_transformer(
+        os.path.join(outdir, "transformer_norm2_bias.bin"), block_weights["norm2_bias"]
+    )
+    write_tensor_transformer(
+        os.path.join(outdir, "transformer_ffn_up_w.bin"), block_weights["ffn_up_w"]
+    )
+    write_tensor_transformer(
+        os.path.join(outdir, "transformer_ffn_down_w.bin"), block_weights["ffn_down_w"]
+    )
     write_tensor_transformer(os.path.join(outdir, "transformer_expected_out.bin"), block_expected)
 
 
@@ -246,6 +289,7 @@ def main_transformer():
     parser.add_argument("--use-rope", action="store_true", help="Enable RoPE in reference math")
     args = parser.parse_args()
     generate_golden_transformer_files(str(args.output_dir), use_rope=args.use_rope)
+
 
 if __name__ == "__main__":
     main_transformer()

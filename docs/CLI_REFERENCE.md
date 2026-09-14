@@ -8,7 +8,7 @@ All commands assume the repo root as working directory. CUDA builds output to `b
 
 | Command | Description |
 |---------|-------------|
-| `make test` | Build + run full C test suite (69 tests, ~4s) |
+| `make test` | Build + run full C test suite (68 tests, ~4s) |
 | `make CUDA=1 test` | Same, CUDA backend |
 | `make main` | Build minimal main (linking stub) |
 | `make CUDA=1 main` | Same, CUDA |
@@ -16,8 +16,9 @@ All commands assume the repo root as working directory. CUDA builds output to `b
 | `make sandbox` | Build + run scratch playground (`run/sandbox.c`) |
 | `make cuda-smoke` | Device sanity check (H2D → kernel → D2H) |
 | `make cuda-sanitize` | Run tests under `compute-sanitizer` (native Linux) |
-| `python3 tests/test_config.py` | Python config tests (93 tests — round-trip, YAML, overrides, C drift protection) |
-| `python3 tests/test_entrypoints.py` | Python entry-point tests (41 tests — run-dir, resolved_config, auto-shape, defaults) |
+| `pytest tests/` | Python test suite (config round-trips, YAML, overrides, entry points) |
+| `ruff check .` | Python lint |
+| `ruff format --check .` | Python format check |
 
 ---
 

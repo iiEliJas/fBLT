@@ -1,11 +1,12 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import math
 from pathlib import Path
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
 # Assume these are provided by your testing framework as in the local encoder test
-from golden import write_tensor_fp32, create_parser
+from golden import create_parser, write_tensor_fp32
 
 # Configuration matching the C test
 NUM_LAYERS = 3
@@ -68,7 +69,7 @@ class ReferenceGlobalAttention(nn.Module):
         q = q.transpose(0, 1)  # [heads, seq_len, head_dim]
         k = k.transpose(0, 1)
         v = v.transpose(0, 1)
-        
+
         scores = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
         scores = scores + mask.unsqueeze(0)
         probs = F.softmax(scores, dim=-1)
@@ -83,7 +84,7 @@ class ReferenceGlobalEncoderLayer(nn.Module):
         self.norm1_weight = nn.Parameter(torch.ones(embed_dim))
         self.attn = ReferenceGlobalAttention(embed_dim, num_heads)
         self.norm2_weight = nn.Parameter(torch.ones(embed_dim))
-        
+
         # SwiGLU FFN
         self.ffn_up_w = nn.Parameter(torch.empty(embed_dim, hidden_dim))
         self.ffn_gate_w = nn.Parameter(torch.empty(embed_dim, hidden_dim))
@@ -105,17 +106,15 @@ class ReferenceGlobalEncoderLayer(nn.Module):
         up = normed2 @ self.ffn_up_w
         ffn_out = (F.silu(gate) * up) @ self.ffn_down_w
         x = x + ffn_out
-        
+
         return x
 
 
 class ReferenceGlobalTransformer(nn.Module):
     def __init__(self):
         super().__init__()
-        self.layers = nn.ModuleList([
-            ReferenceGlobalEncoderLayer() for _ in range(NUM_LAYERS)
-        ])
-        
+        self.layers = nn.ModuleList([ReferenceGlobalEncoderLayer() for _ in range(NUM_LAYERS)])
+
         cos, sin = rope_cos_sin(MAX_SEQ_LEN, HEAD_DIM, ROPE_THETA)
         self.register_buffer("rope_cos", cos)
         self.register_buffer("rope_sin", sin)
@@ -125,7 +124,7 @@ class ReferenceGlobalTransformer(nn.Module):
         # Only use the sequence length we currently need
         cos = self.rope_cos[:seq_len]
         sin = self.rope_sin[:seq_len]
-        
+
         for layer in self.layers:
             x = layer(x, cos, sin)
         return x
@@ -170,24 +169,28 @@ def generate_data(output_dir="data/tests"):
     write_tensor_fp32(out_path / "global_transformer_grad_patch_in.bin", patch_in.grad)
 
     # 6. Export Weights and Gradients
-    for l, layer in enumerate(model.layers):
+    for li, layer in enumerate(model.layers):
         # Forward Weights
-        write_tensor_fp32(weights_dir / f"layer_{l}_norm1_weight.bin", layer.norm1_weight)
-        write_tensor_fp32(weights_dir / f"layer_{l}_attn_qkv_w.bin", layer.attn.qkv_w)
-        write_tensor_fp32(weights_dir / f"layer_{l}_attn_proj_w.bin", layer.attn.proj_w)
-        write_tensor_fp32(weights_dir / f"layer_{l}_norm2_weight.bin", layer.norm2_weight)
-        write_tensor_fp32(weights_dir / f"layer_{l}_ffn_up_w.bin", layer.ffn_up_w)
-        write_tensor_fp32(weights_dir / f"layer_{l}_ffn_gate_w.bin", layer.ffn_gate_w)
-        write_tensor_fp32(weights_dir / f"layer_{l}_ffn_down_w.bin", layer.ffn_down_w)
+        write_tensor_fp32(weights_dir / f"layer_{li}_norm1_weight.bin", layer.norm1_weight)
+        write_tensor_fp32(weights_dir / f"layer_{li}_attn_qkv_w.bin", layer.attn.qkv_w)
+        write_tensor_fp32(weights_dir / f"layer_{li}_attn_proj_w.bin", layer.attn.proj_w)
+        write_tensor_fp32(weights_dir / f"layer_{li}_norm2_weight.bin", layer.norm2_weight)
+        write_tensor_fp32(weights_dir / f"layer_{li}_ffn_up_w.bin", layer.ffn_up_w)
+        write_tensor_fp32(weights_dir / f"layer_{li}_ffn_gate_w.bin", layer.ffn_gate_w)
+        write_tensor_fp32(weights_dir / f"layer_{li}_ffn_down_w.bin", layer.ffn_down_w)
 
         # Gradients
-        write_tensor_fp32(weights_dir / f"grad_layer_{l}_norm1_weight.bin", layer.norm1_weight.grad)
-        write_tensor_fp32(weights_dir / f"grad_layer_{l}_attn_qkv_w.bin", layer.attn.qkv_w.grad)
-        write_tensor_fp32(weights_dir / f"grad_layer_{l}_attn_proj_w.bin", layer.attn.proj_w.grad)
-        write_tensor_fp32(weights_dir / f"grad_layer_{l}_norm2_weight.bin", layer.norm2_weight.grad)
-        write_tensor_fp32(weights_dir / f"grad_layer_{l}_ffn_up_w.bin", layer.ffn_up_w.grad)
-        write_tensor_fp32(weights_dir / f"grad_layer_{l}_ffn_gate_w.bin", layer.ffn_gate_w.grad)
-        write_tensor_fp32(weights_dir / f"grad_layer_{l}_ffn_down_w.bin", layer.ffn_down_w.grad)
+        write_tensor_fp32(
+            weights_dir / f"grad_layer_{li}_norm1_weight.bin", layer.norm1_weight.grad
+        )
+        write_tensor_fp32(weights_dir / f"grad_layer_{li}_attn_qkv_w.bin", layer.attn.qkv_w.grad)
+        write_tensor_fp32(weights_dir / f"grad_layer_{li}_attn_proj_w.bin", layer.attn.proj_w.grad)
+        write_tensor_fp32(
+            weights_dir / f"grad_layer_{li}_norm2_weight.bin", layer.norm2_weight.grad
+        )
+        write_tensor_fp32(weights_dir / f"grad_layer_{li}_ffn_up_w.bin", layer.ffn_up_w.grad)
+        write_tensor_fp32(weights_dir / f"grad_layer_{li}_ffn_gate_w.bin", layer.ffn_gate_w.grad)
+        write_tensor_fp32(weights_dir / f"grad_layer_{li}_ffn_down_w.bin", layer.ffn_down_w.grad)
 
 
 def main_global_transformer():
@@ -195,6 +198,7 @@ def main_global_transformer():
     args = parser.parse_args()
     generate_data(args.output_dir)
     print("Successfully generated global transformer golden files and weights.")
+
 
 if __name__ == "__main__":
     main_global_transformer()

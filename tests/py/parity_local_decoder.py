@@ -1,9 +1,10 @@
+import math
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
-from pathlib import Path
-from golden import write_tensor_fp32, write_tensor_uint8, create_parser
+from golden import create_parser, write_tensor_fp32, write_tensor_uint8
 
 # Configuration mirroring the C test
 EMBED_DIM = 32
@@ -29,7 +30,7 @@ def patch_spans():
 def rope_cos_sin(seq_len, head_dim, theta):
     freqs = 1.0 / (theta ** (torch.arange(0, head_dim, 2).float() / head_dim))
     pos = torch.arange(seq_len).float()
-    angles = torch.outer(pos, freqs)  
+    angles = torch.outer(pos, freqs)
     return torch.cos(angles), torch.sin(angles)
 
 
@@ -67,7 +68,9 @@ class ReferenceSelfAttention(nn.Module):
         mask = torch.zeros(seq_len, seq_len)
         mask.masked_fill_(~(causal & in_window), float("-inf"))
 
-        scores = (q.transpose(0, 1) @ k.transpose(0, 1).transpose(-2, -1)) / math.sqrt(self.head_dim)
+        scores = (q.transpose(0, 1) @ k.transpose(0, 1).transpose(-2, -1)) / math.sqrt(
+            self.head_dim
+        )
         probs = F.softmax(scores + mask.unsqueeze(0), dim=-1)
         return (probs @ v.transpose(0, 1)).transpose(0, 1).reshape(seq_len, -1) @ self.proj_w
 
@@ -84,14 +87,26 @@ class ReferenceCrossAttentionDecoder(nn.Module):
 
     def forward(self, byte_query, patch_kv, spans):
         seq_len, num_patches = byte_query.shape[0], patch_kv.shape[0]
-        q = (byte_query @ self.weight_q).view(seq_len, self.num_heads, self.head_dim).transpose(0, 1)
-        k = (patch_kv @ self.weight_k).view(num_patches, self.num_heads, self.head_dim).transpose(0, 1)
-        v = (patch_kv @ self.weight_v).view(num_patches, self.num_heads, self.head_dim).transpose(0, 1)
+        q = (
+            (byte_query @ self.weight_q)
+            .view(seq_len, self.num_heads, self.head_dim)
+            .transpose(0, 1)
+        )
+        k = (
+            (patch_kv @ self.weight_k)
+            .view(num_patches, self.num_heads, self.head_dim)
+            .transpose(0, 1)
+        )
+        v = (
+            (patch_kv @ self.weight_v)
+            .view(num_patches, self.num_heads, self.head_dim)
+            .transpose(0, 1)
+        )
 
         # STRICTLY BLOCK-DIAGONAL: Bytes only attend to their parent patch.
         mask = torch.full((seq_len, num_patches), float("-inf"))
         for j, (start, length) in enumerate(spans):
-            mask[start:start + length, j] = 0.0
+            mask[start : start + length, j] = 0.0
 
         scores = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
         probs = F.softmax(scores + mask.unsqueeze(0), dim=-1)
@@ -103,10 +118,10 @@ class ReferenceLocalDecoderLayer(nn.Module):
         super().__init__()
         self.cross_norm_weight = nn.Parameter(torch.ones(EMBED_DIM))
         self.cross_attn = ReferenceCrossAttentionDecoder()
-        
+
         self.norm1_weight = nn.Parameter(torch.ones(EMBED_DIM))
         self.self_attn = ReferenceSelfAttention()
-        
+
         self.norm2_weight = nn.Parameter(torch.ones(EMBED_DIM))
         self.ffn_up_w = nn.Parameter(torch.empty(EMBED_DIM, HIDDEN_DIM))
         self.ffn_gate_w = nn.Parameter(torch.empty(EMBED_DIM, HIDDEN_DIM))
@@ -120,14 +135,14 @@ class ReferenceLocalDecoderLayer(nn.Module):
         # 1. Cross-Attention First
         if apply_cross:
             x = x + self.cross_attn(self.rmsnorm(x, self.cross_norm_weight), patch_repr, spans)
-            
+
         # 2. Causal Self-Attention
         x = x + self.self_attn(self.rmsnorm(x, self.norm1_weight), cos, sin, window)
-        
+
         # 3. SwiGLU FFN
         normed2 = self.rmsnorm(x, self.norm2_weight)
         x = x + ((F.silu(normed2 @ self.ffn_gate_w) * (normed2 @ self.ffn_up_w)) @ self.ffn_down_w)
-        
+
         return x
 
     def apply_cross_only(self, x, patch_repr, spans):
@@ -148,10 +163,18 @@ class ReferenceLocalDecoder(nn.Module):
         spans = patch_spans()
         x = byte_hidden_in
         for layer in self.layers:
-            x = layer(x, patch_in, self.rope_cos, self.rope_sin, LOCAL_WINDOW, spans, self.cross_attn_all_layers)
+            x = layer(
+                x,
+                patch_in,
+                self.rope_cos,
+                self.rope_sin,
+                LOCAL_WINDOW,
+                spans,
+                self.cross_attn_all_layers,
+            )
         if not self.cross_attn_all_layers:
             x = self.layers[-1].apply_cross_only(x, patch_in, spans)
-            
+
         logits = x @ self.lm_head_weight
         loss = F.cross_entropy(logits[:-1, :].contiguous(), bytes_in[1:].contiguous().long())
         return logits, loss
@@ -165,7 +188,7 @@ def generate_data(output_dir="data/tests", cross_attn_all_layers=True):
 
     torch.manual_seed(42)
     bytes_in = torch.randint(0, 256, (SEQ_LEN,), dtype=torch.uint8)
-    
+
     # CRITICAL FIX: Scale initial inputs to prevent accumulation drift in C
     byte_hidden_in = torch.empty(SEQ_LEN, EMBED_DIM, requires_grad=True)
     patch_in = torch.empty(len(PATCH_STARTS), EMBED_DIM, requires_grad=True)
@@ -176,9 +199,11 @@ def generate_data(output_dir="data/tests", cross_attn_all_layers=True):
     g = torch.Generator().manual_seed(1234)
     with torch.no_grad():
         for p in model.parameters():
-            if p.dim() >= 2: nn.init.uniform_(p, -0.05, 0.05, generator=g)
-            else: p.fill_(1.0)
-    
+            if p.dim() >= 2:
+                nn.init.uniform_(p, -0.05, 0.05, generator=g)
+            else:
+                p.fill_(1.0)
+
     model.train()
     logits, loss = model(byte_hidden_in, patch_in, bytes_in)
     loss.backward()
@@ -192,23 +217,30 @@ def generate_data(output_dir="data/tests", cross_attn_all_layers=True):
     write_tensor_fp32(out_path / f"local_decoder_logits_out_{suffix}.bin", logits.detach())
     # Reshape scalar to 1D tensor of size [1]
     write_tensor_fp32(out_path / f"local_decoder_loss_out_{suffix}.bin", loss.detach().view(1))
-    write_tensor_fp32(out_path / f"local_decoder_grad_byte_hidden_in_{suffix}.bin", byte_hidden_in.grad)
+    write_tensor_fp32(
+        out_path / f"local_decoder_grad_byte_hidden_in_{suffix}.bin", byte_hidden_in.grad
+    )
     write_tensor_fp32(out_path / f"local_decoder_grad_patch_in_{suffix}.bin", patch_in.grad)
     write_tensor_fp32(weights_dir / "lm_head_weight.bin", model.lm_head_weight)
-    
-    for l, layer in enumerate(model.layers):
-        write_tensor_fp32(weights_dir / f"layer_{l}_norm1_weight.bin", layer.norm1_weight)
-        write_tensor_fp32(weights_dir / f"layer_{l}_attn_qkv_w.bin", layer.self_attn.qkv_w)
-        write_tensor_fp32(weights_dir / f"layer_{l}_attn_proj_w.bin", layer.self_attn.proj_w)
-        write_tensor_fp32(weights_dir / f"layer_{l}_norm2_weight.bin", layer.norm2_weight)
-        write_tensor_fp32(weights_dir / f"layer_{l}_ffn_up_w.bin", layer.ffn_up_w)
-        write_tensor_fp32(weights_dir / f"layer_{l}_ffn_gate_w.bin", layer.ffn_gate_w)
-        write_tensor_fp32(weights_dir / f"layer_{l}_ffn_down_w.bin", layer.ffn_down_w)
-        write_tensor_fp32(weights_dir / f"layer_{l}_cross_norm_weight.bin", layer.cross_norm_weight)
-        write_tensor_fp32(weights_dir / f"layer_{l}_cross_weight_q.bin", layer.cross_attn.weight_q)
-        write_tensor_fp32(weights_dir / f"layer_{l}_cross_weight_k.bin", layer.cross_attn.weight_k)
-        write_tensor_fp32(weights_dir / f"layer_{l}_cross_weight_v.bin", layer.cross_attn.weight_v)
-        write_tensor_fp32(weights_dir / f"layer_{l}_cross_weight_proj.bin", layer.cross_attn.weight_proj)
+
+    for li, layer in enumerate(model.layers):
+        write_tensor_fp32(weights_dir / f"layer_{li}_norm1_weight.bin", layer.norm1_weight)
+        write_tensor_fp32(weights_dir / f"layer_{li}_attn_qkv_w.bin", layer.self_attn.qkv_w)
+        write_tensor_fp32(weights_dir / f"layer_{li}_attn_proj_w.bin", layer.self_attn.proj_w)
+        write_tensor_fp32(weights_dir / f"layer_{li}_norm2_weight.bin", layer.norm2_weight)
+        write_tensor_fp32(weights_dir / f"layer_{li}_ffn_up_w.bin", layer.ffn_up_w)
+        write_tensor_fp32(weights_dir / f"layer_{li}_ffn_gate_w.bin", layer.ffn_gate_w)
+        write_tensor_fp32(weights_dir / f"layer_{li}_ffn_down_w.bin", layer.ffn_down_w)
+        write_tensor_fp32(
+            weights_dir / f"layer_{li}_cross_norm_weight.bin", layer.cross_norm_weight
+        )
+        write_tensor_fp32(weights_dir / f"layer_{li}_cross_weight_q.bin", layer.cross_attn.weight_q)
+        write_tensor_fp32(weights_dir / f"layer_{li}_cross_weight_k.bin", layer.cross_attn.weight_k)
+        write_tensor_fp32(weights_dir / f"layer_{li}_cross_weight_v.bin", layer.cross_attn.weight_v)
+        write_tensor_fp32(
+            weights_dir / f"layer_{li}_cross_weight_proj.bin", layer.cross_attn.weight_proj
+        )
+
 
 def main_local_decoder():
     parser = create_parser("Generate local decoder golden files and weights")

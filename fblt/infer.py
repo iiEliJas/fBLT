@@ -12,9 +12,7 @@ from fblt._runner import run_binary
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        prog="fblt-infer", description="Run BLT inference"
-    )
+    parser = argparse.ArgumentParser(prog="fblt-infer", description="Run BLT inference")
     parser.add_argument("--config", type=str, default=None, help="YAML config path")
     parser.add_argument(
         "--backend",
@@ -28,14 +26,10 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="key=value override (repeatable)",
     )
-    parser.add_argument(
-        "--checkpoint", type=str, required=True, help="Path to model checkpoint"
-    )
+    parser.add_argument("--checkpoint", type=str, required=True, help="Path to model checkpoint")
     prompt_group = parser.add_mutually_exclusive_group()
     prompt_group.add_argument("--prompt", type=str, default=None, help="Prompt text")
-    prompt_group.add_argument(
-        "--prompt-file", type=str, default=None, help="Path to prompt file"
-    )
+    prompt_group.add_argument("--prompt-file", type=str, default=None, help="Path to prompt file")
     parser.add_argument("--output", type=str, default=None, help="Output file path")
     return parser.parse_args()
 
@@ -78,7 +72,6 @@ def main() -> None:
             resolved = yaml.safe_load(fh) or {}
         if isinstance(resolved, dict):
             defaults = {f.name: f.default for f in dataclasses.fields(cfg)}
-            effective_layers = resolved.get("layers", 4)
             for key in ("enc_layers", "glob_layers", "dec_layers"):
                 if resolved.get(key, 0) == 0 and "layers" in resolved:
                     resolved[key] = resolved["layers"]

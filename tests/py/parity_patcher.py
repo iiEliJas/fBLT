@@ -1,8 +1,11 @@
-import torch
-from pathlib import Path
 import sys
+from pathlib import Path
+
+import torch
+
 sys.path.insert(0, str(Path(__file__).parent))
-from golden import write_tensor_fp32, write_tensor_uint8, create_parser as create_parser_base
+from golden import create_parser as create_parser_base
+from golden import write_tensor_fp32, write_tensor_uint8
 
 
 def build_patches(entropy, bytes_array, args):
@@ -22,20 +25,22 @@ def build_patches(entropy, bytes_array, args):
     for idx in range(1, seq_len):
         val = float(entropy[idx].item())
         boundary = False
-        
+
         if args.reset_on_newline and bytes_array[idx].item() == 0x0A:
             boundary = True
         elif current_len >= args.max_patch_length:
             boundary = True
         else:
             global_rule = val > args.threshold_global
-            monotonic_rule = (idx > current_start) and ((val - float(entropy[idx-1].item())) > args.threshold_monotonic)
-            
-            if args.rule == 'global':
+            monotonic_rule = (idx > current_start) and (
+                (val - float(entropy[idx - 1].item())) > args.threshold_monotonic
+            )
+
+            if args.rule == "global":
                 boundary = global_rule
-            elif args.rule == 'monotonic':
+            elif args.rule == "monotonic":
                 boundary = monotonic_rule
-            elif args.rule == 'both':
+            elif args.rule == "both":
                 boundary = global_rule or monotonic_rule
 
         if boundary:
@@ -57,25 +62,28 @@ def build_patches(entropy, bytes_array, args):
     return patch_starts, patch_lengths, patch_peak_entropies
 
 
-def generate_golden_patcher_files(output_dir: str = "data/tests", 
-                                   threshold_global: float = 0.6,
-                                   threshold_monotonic: float = 0.4,
-                                   max_patch_length: int = 5,
-                                   rule: str = 'both',
-                                   reset_on_newline: bool = True,
-                                   seed: int = 0) -> None:
+def generate_golden_patcher_files(
+    output_dir: str = "data/tests",
+    threshold_global: float = 0.6,
+    threshold_monotonic: float = 0.4,
+    max_patch_length: int = 5,
+    rule: str = "both",
+    reset_on_newline: bool = True,
+    seed: int = 0,
+) -> None:
     """Generate golden files for patcher."""
     torch.manual_seed(seed)
-    
+
     probs = torch.softmax(torch.randn(512, 256, dtype=torch.float32), dim=-1)
     entropy = -torch.sum(probs * torch.log2(probs + 1e-9), dim=-1)
-    
+
     bytes_array = torch.randint(0, 256, (512,), dtype=torch.uint8)
     newline_indices = torch.randint(1, 511, (15,))
     bytes_array[newline_indices] = 0x0A
 
     class Args:
         pass
+
     args = Args()
     args.threshold_global = threshold_global
     args.threshold_monotonic = threshold_monotonic
@@ -98,11 +106,23 @@ def generate_golden_patcher_files(output_dir: str = "data/tests",
 
 def main_patcher():
     parser = create_parser_base("Generate golden files for patcher")
-    parser.add_argument("--threshold-global", type=float, default=0.6, help="Global patch threshold")
-    parser.add_argument("--threshold-monotonic", type=float, default=0.4, help="Monotonic patch threshold")
+    parser.add_argument(
+        "--threshold-global", type=float, default=0.6, help="Global patch threshold"
+    )
+    parser.add_argument(
+        "--threshold-monotonic", type=float, default=0.4, help="Monotonic patch threshold"
+    )
     parser.add_argument("--max-patch-length", type=int, default=5, help="Maximum length of a patch")
-    parser.add_argument("--rule", type=str, choices=['global', 'monotonic', 'both'], default='both', help="Patching rule")
-    parser.add_argument("--reset-on-newline", action='store_true', default=True, help="Reset patches on newline")
+    parser.add_argument(
+        "--rule",
+        type=str,
+        choices=["global", "monotonic", "both"],
+        default="both",
+        help="Patching rule",
+    )
+    parser.add_argument(
+        "--reset-on-newline", action="store_true", default=True, help="Reset patches on newline"
+    )
     parser.add_argument("--seed", type=int, default=0, help="Random seed")
     args = parser.parse_args()
 
@@ -113,8 +133,9 @@ def main_patcher():
         max_patch_length=args.max_patch_length,
         rule=args.rule,
         reset_on_newline=args.reset_on_newline,
-        seed=args.seed
+        seed=args.seed,
     )
+
 
 if __name__ == "__main__":
     main_patcher()
