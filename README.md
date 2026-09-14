@@ -28,8 +28,9 @@ Five-stage pipeline:
 ```bash
 pip install -e .                    # install fblt package + entry points
 make CUDA=1 train-blt-d infer       # build C binaries (drop CUDA=1 for CPU-only)
+python fblt/scripts/build_sample_corpus.py  # generate sample training data from repo source
 
-# Train a tiny model (debug config, ~10 steps)
+# Train a tiny model (debug config, 10 steps)
 fblt-train --config configs/train/debug.yaml --backend cpu
 
 # Generate text from the trained checkpoint (auto-shapes from resolved_config.yaml)
@@ -37,7 +38,25 @@ CKPT=$(ls runs/debug-*/checkpoint.fblt | head -1)
 fblt-infer --checkpoint "$CKPT" --backend cpu --prompt "int main"
 ```
 
-The debug config trains a small model in seconds. For production training, use `configs/train/production.yaml` with CUDA.
+The sample corpus is generated from the repo's own `.c`/`.h` source files (~1.1 MB) under the Apache 2.0 license. The debug config trains a small model in seconds. For production training, use `configs/train/production.yaml` with your own larger corpus (e.g., the stack-smol-C-derived dataset used for the benchmark results).
+
+### Using your own dataset
+
+The training binary expects a flat `.bin` file of raw bytes with no header, no framing, no length prefix. If you're using multiple source files, separate them with a newline (`\n`).
+
+To use your own data, place the `.bin` file in the repo and point the config at it:
+
+```bash
+# Option 1: edit the config
+# configs/train/production.yaml:
+#   corpus: /path/to/your/train.bin
+
+# Option 2: override on the command line
+fblt-train --config configs/train/production.yaml --backend cpu \
+  --override corpus=/path/to/your/train.bin
+```
+
+For heldout evaluation, set `--eval-corpus` to a separate `.bin` file not overlapping with your training data. The inference benchmark (`infer_bench`) defaults to `data/heldout.bin` for this purpose.
 
 ## Build
 
@@ -81,7 +100,7 @@ For the C test suite parity tests, generate golden data first:
 
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cpu numpy
-make parity-data                      # or python tests/py/parity_generate.py
+make parity-data                      # or just python tests/py/parity_generate.py
 make test                             # build + run C tests
 ```
 
@@ -101,7 +120,7 @@ fblt/                 Python package
   _binary.py          Binary path resolution
   _config.py          TrainConfig / InferConfig dataclasses, YAML loader
   _runner.py          Subprocess runner with live streaming
-  scripts/            Utilities (bench_plots, bench_report, gen_configs, prep_corpus)
+  scripts/            Utilities (bench_plots, bench_report, gen_configs, prep_corpus, build_sample_corpus)
 
 configs/
   train/              Training YAML configs (production, debug)
@@ -111,7 +130,7 @@ configs/
 tests/                Test suite (C + Python)
 bench/                Benchmarks
 run/                  C entry points (train_blt_d.c, infer.c, etc.)
-data/                 Sample data (tests, training, etc.)
+data/                 Training data (sample corpus, golden test tensors)
 ```
 
 ## Training configuration

@@ -23,15 +23,10 @@ __pycache__/
 *.safetensors
 *.log
 data/dummy_entropy.bin
-data/raw/
+data/the-stack-smol
 data/tests/
-data/train.bin
-data/heldout.bin
-data/heldout_c.bin
-data/heldout_h.bin
 
 # Generated files
-compile_commands.json
 configs/sweep_state.json
 bench/*.jsonl
 bench/ckpts/
@@ -39,7 +34,6 @@ bench/ckpts/
 # Tool output
 tmp/
 reports/
-scripts/
 runs/
 logs/
 graphify-out/

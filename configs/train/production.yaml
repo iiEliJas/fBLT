@@ -1,4 +1,6 @@
 # 2.97M-parameter BLT-D training
+# corpus must point to your own full training data (not included in repo).
+# For a quick start with sample data, use configs/train/debug.yaml instead
 corpus: data/corpus.bin
 embed: 192
 hidden: 384

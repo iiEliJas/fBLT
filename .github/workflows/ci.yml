@@ -191,6 +191,9 @@ jobs:
           ruff check .
           ruff format --check .
 
+      - name: Sample corpus drift guard
+        run: python fblt/scripts/build_sample_corpus.py --check
+
       - name: Run Python Tests via Pytest
         run: pytest tests/
 

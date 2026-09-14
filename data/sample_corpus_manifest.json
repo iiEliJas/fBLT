@@ -1,0 +1,1198 @@
+{
+  "git_commit": "5bb42b763f4cafb81cdf90a397cb52e640b87c96",
+  "source_files": [
+    {
+      "path": "bench/cuda_bench.c",
+      "size": 31004
+    },
+    {
+      "path": "bench/harness.c",
+      "size": 5012
+    },
+    {
+      "path": "bench/harness.h",
+      "size": 3399
+    },
+    {
+      "path": "bench/infer_bench.c",
+      "size": 22854
+    },
+    {
+      "path": "csrc/blt.h",
+      "size": 943
+    },
+    {
+      "path": "csrc/core/allocator.c",
+      "size": 3358
+    },
+    {
+      "path": "csrc/core/allocator.h",
+      "size": 1348
+    },
+    {
+      "path": "csrc/core/backend.c",
+      "size": 31998
+    },
+    {
+      "path": "csrc/core/backend.h",
+      "size": 3277
+    },
+    {
+      "path": "csrc/core/calibrate_threshold.c",
+      "size": 5842
+    },
+    {
+      "path": "csrc/core/cuda_shim.h",
+      "size": 1393
+    },
+    {
+      "path": "csrc/core/dtype.h",
+      "size": 590
+    },
+    {
+      "path": "csrc/core/flops.c",
+      "size": 3368
+    },
+    {
+      "path": "csrc/core/flops.h",
+      "size": 2279
+    },
+    {
+      "path": "csrc/core/generate_greedy.c",
+      "size": 4590
+    },
+    {
+      "path": "csrc/core/generate_greedy.h",
+      "size": 830
+    },
+    {
+      "path": "csrc/core/json.c",
+      "size": 15305
+    },
+    {
+      "path": "csrc/core/json.h",
+      "size": 3195
+    },
+    {
+      "path": "csrc/core/tensor.c",
+      "size": 6514
+    },
+    {
+      "path": "csrc/core/tensor.h",
+      "size": 1836
+    },
+    {
+      "path": "csrc/cuda_smoke.c",
+      "size": 264
+    },
+    {
+      "path": "csrc/e2e_blt_dv.c",
+      "size": 7056
+    },
+    {
+      "path": "csrc/infer.c",
+      "size": 21162
+    },
+    {
+      "path": "csrc/infer/block_generation.c",
+      "size": 16922
+    },
+    {
+      "path": "csrc/infer/block_generation.h",
+      "size": 6449
+    },
+    {
+      "path": "csrc/infer/kv_cache.c",
+      "size": 19020
+    },
+    {
+      "path": "csrc/infer/kv_cache.h",
+      "size": 5392
+    },
+    {
+      "path": "csrc/infer/rope_gather.c",
+      "size": 1840
+    },
+    {
+      "path": "csrc/infer/rope_gather.h",
+      "size": 1061
+    },
+    {
+      "path": "csrc/infer/self_speculation.c",
+      "size": 18459
+    },
+    {
+      "path": "csrc/infer/self_speculation.h",
+      "size": 4332
+    },
+    {
+      "path": "csrc/infer/stats.c",
+      "size": 780
+    },
+    {
+      "path": "csrc/infer/stats.h",
+      "size": 1175
+    },
+    {
+      "path": "csrc/main.c",
+      "size": 112
+    },
+    {
+      "path": "csrc/models/attention.c",
+      "size": 19091
+    },
+    {
+      "path": "csrc/models/attention.h",
+      "size": 1375
+    },
+    {
+      "path": "csrc/models/block_diffusion.c",
+      "size": 34599
+    },
+    {
+      "path": "csrc/models/block_diffusion.h",
+      "size": 6647
+    },
+    {
+      "path": "csrc/models/byte_embedding.c",
+      "size": 3677
+    },
+    {
+      "path": "csrc/models/byte_embedding.h",
+      "size": 1098
+    },
+    {
+      "path": "csrc/models/checkpoint.c",
+      "size": 13864
+    },
+    {
+      "path": "csrc/models/checkpoint.h",
+      "size": 2221
+    },
+    {
+      "path": "csrc/models/cross_attention.c",
+      "size": 18512
+    },
+    {
+      "path": "csrc/models/cross_attention.h",
+      "size": 3417
+    },
+    {
+      "path": "csrc/models/entropy.c",
+      "size": 718
+    },
+    {
+      "path": "csrc/models/entropy.h",
+      "size": 534
+    },
+    {
+      "path": "csrc/models/entropy_lm.c",
+      "size": 8231
+    },
+    {
+      "path": "csrc/models/entropy_lm.h",
+      "size": 2494
+    },
+    {
+      "path": "csrc/models/global_transformer.c",
+      "size": 8035
+    },
+    {
+      "path": "csrc/models/global_transformer.h",
+      "size": 2878
+    },
+    {
+      "path": "csrc/models/hash_ngram.c",
+      "size": 11544
+    },
+    {
+      "path": "csrc/models/hash_ngram.h",
+      "size": 2862
+    },
+    {
+      "path": "csrc/models/local_common.c",
+      "size": 5250
+    },
+    {
+      "path": "csrc/models/local_common.h",
+      "size": 3547
+    },
+    {
+      "path": "csrc/models/local_decoder.c",
+      "size": 27285
+    },
+    {
+      "path": "csrc/models/local_decoder.h",
+      "size": 6480
+    },
+    {
+      "path": "csrc/models/local_encoder.c",
+      "size": 24466
+    },
+    {
+      "path": "csrc/models/local_encoder.h",
+      "size": 4212
+    },
+    {
+      "path": "csrc/models/model.c",
+      "size": 10163
+    },
+    {
+      "path": "csrc/models/model.h",
+      "size": 3559
+    },
+    {
+      "path": "csrc/models/model_builder.c",
+      "size": 3984
+    },
+    {
+      "path": "csrc/models/model_builder.h",
+      "size": 2441
+    },
+    {
+      "path": "csrc/models/patcher.c",
+      "size": 3597
+    },
+    {
+      "path": "csrc/models/patcher.h",
+      "size": 980
+    },
+    {
+      "path": "csrc/models/transformer.c",
+      "size": 6648
+    },
+    {
+      "path": "csrc/models/transformer.h",
+      "size": 4154
+    },
+    {
+      "path": "csrc/models/transformer_stack.c",
+      "size": 19273
+    },
+    {
+      "path": "csrc/models/transformer_stack.h",
+      "size": 5373
+    },
+    {
+      "path": "csrc/ops/attn_core.h",
+      "size": 2995
+    },
+    {
+      "path": "csrc/ops/attn_core_cpu.c",
+      "size": 5193
+    },
+    {
+      "path": "csrc/ops/cast.h",
+      "size": 324
+    },
+    {
+      "path": "csrc/ops/cast_cpu.c",
+      "size": 1810
+    },
+    {
+      "path": "csrc/ops/cross_entropy.h",
+      "size": 651
+    },
+    {
+      "path": "csrc/ops/elementwise.h",
+      "size": 427
+    },
+    {
+      "path": "csrc/ops/elementwise_cpu.c",
+      "size": 5955
+    },
+    {
+      "path": "csrc/ops/gather_scatter.h",
+      "size": 2075
+    },
+    {
+      "path": "csrc/ops/gather_scatter_cpu.c",
+      "size": 6309
+    },
+    {
+      "path": "csrc/ops/gelu.h",
+      "size": 481
+    },
+    {
+      "path": "csrc/ops/layernorm.h",
+      "size": 682
+    },
+    {
+      "path": "csrc/ops/linalg_cpu.c",
+      "size": 5279
+    },
+    {
+      "path": "csrc/ops/mask_builder.h",
+      "size": 2675
+    },
+    {
+      "path": "csrc/ops/mask_builder_cpu.c",
+      "size": 6083
+    },
+    {
+      "path": "csrc/ops/matmul.h",
+      "size": 387
+    },
+    {
+      "path": "csrc/ops/optim.h",
+      "size": 898
+    },
+    {
+      "path": "csrc/ops/optim_cpu.c",
+      "size": 2180
+    },
+    {
+      "path": "csrc/ops/patch_pool.h",
+      "size": 1628
+    },
+    {
+      "path": "csrc/ops/patch_pool_cpu.c",
+      "size": 5992
+    },
+    {
+      "path": "csrc/ops/reductions_cpu.c",
+      "size": 16484
+    },
+    {
+      "path": "csrc/ops/rmsnorm.h",
+      "size": 618
+    },
+    {
+      "path": "csrc/ops/rope.h",
+      "size": 1412
+    },
+    {
+      "path": "csrc/ops/row_stats.h",
+      "size": 809
+    },
+    {
+      "path": "csrc/ops/row_stats_cpu.c",
+      "size": 1624
+    },
+    {
+      "path": "csrc/ops/softmax.h",
+      "size": 316
+    },
+    {
+      "path": "csrc/ops/swiglu.h",
+      "size": 542
+    },
+    {
+      "path": "csrc/ops/vecmath.h",
+      "size": 1390
+    },
+    {
+      "path": "csrc/ops/vecmath_cpu.c",
+      "size": 2809
+    },
+    {
+      "path": "csrc/sandbox.c",
+      "size": 5865
+    },
+    {
+      "path": "csrc/train_blt_d.c",
+      "size": 84269
+    },
+    {
+      "path": "csrc/train_sweep.c",
+      "size": 51876
+    },
+    {
+      "path": "tests/bench.h",
+      "size": 3306
+    },
+    {
+      "path": "tests/bench/bench_harness_selftest.c",
+      "size": 4413
+    },
+    {
+      "path": "tests/bench/bench_patcher.c",
+      "size": 7923
+    },
+    {
+      "path": "tests/parity/parity_cuda_composites.c",
+      "size": 8970
+    },
+    {
+      "path": "tests/parity/parity_cuda_elementwise.c",
+      "size": 5181
+    },
+    {
+      "path": "tests/parity/parity_cuda_matmul.c",
+      "size": 3927
+    },
+    {
+      "path": "tests/parity/parity_cuda_model.c",
+      "size": 15340
+    },
+    {
+      "path": "tests/parity/parity_cuda_reductions.c",
+      "size": 8164
+    },
+    {
+      "path": "tests/parity/parity_elm.c",
+      "size": 11487
+    },
+    {
+      "path": "tests/parity/parity_global_transformer.c",
+      "size": 5956
+    },
+    {
+      "path": "tests/parity/parity_local_decoder.c",
+      "size": 7984
+    },
+    {
+      "path": "tests/parity/parity_local_encoder.c",
+      "size": 6931
+    },
+    {
+      "path": "tests/parity/parity_math.c",
+      "size": 1853
+    },
+    {
+      "path": "tests/parity/parity_patcher.c",
+      "size": 7243
+    },
+    {
+      "path": "tests/parity/parity_transformer.c",
+      "size": 8451
+    },
+    {
+      "path": "tests/test_helpers.c",
+      "size": 1968
+    },
+    {
+      "path": "tests/test_helpers.h",
+      "size": 2457
+    },
+    {
+      "path": "tests/test_main.c",
+      "size": 6805
+    },
+    {
+      "path": "tests/test_suite.h",
+      "size": 2768
+    },
+    {
+      "path": "tests/unit/backend/unit_elementwise_cpu.c",
+      "size": 3088
+    },
+    {
+      "path": "tests/unit/backend/unit_linalg_cpu.c",
+      "size": 3390
+    },
+    {
+      "path": "tests/unit/backend/unit_mask.c",
+      "size": 6947
+    },
+    {
+      "path": "tests/unit/backend/unit_optim_cpu.c",
+      "size": 3097
+    },
+    {
+      "path": "tests/unit/backend/unit_reductions_cpu.c",
+      "size": 5637
+    },
+    {
+      "path": "tests/unit/core/test_bf16_cast.c",
+      "size": 6024
+    },
+    {
+      "path": "tests/unit/core/test_deterministic.c",
+      "size": 4132
+    },
+    {
+      "path": "tests/unit/core/unit_allocator.c",
+      "size": 767
+    },
+    {
+      "path": "tests/unit/core/unit_backend.c",
+      "size": 1590
+    },
+    {
+      "path": "tests/unit/core/unit_cuda_memory.c",
+      "size": 2065
+    },
+    {
+      "path": "tests/unit/core/unit_tensor.c",
+      "size": 637
+    },
+    {
+      "path": "tests/unit/infer/unit_block_generation.c",
+      "size": 30179
+    },
+    {
+      "path": "tests/unit/infer/unit_infer_utils.c",
+      "size": 3127
+    },
+    {
+      "path": "tests/unit/infer/unit_kv_cache.c",
+      "size": 13492
+    },
+    {
+      "path": "tests/unit/infer/unit_self_speculation.c",
+      "size": 25544
+    },
+    {
+      "path": "tests/unit/models/unit_attention.c",
+      "size": 6840
+    },
+    {
+      "path": "tests/unit/models/unit_attention_back.c",
+      "size": 4165
+    },
+    {
+      "path": "tests/unit/models/unit_block_diffusion.c",
+      "size": 29079
+    },
+    {
+      "path": "tests/unit/models/unit_byte_embedding.c",
+      "size": 3366
+    },
+    {
+      "path": "tests/unit/models/unit_cross_attention.c",
+      "size": 14929
+    },
+    {
+      "path": "tests/unit/models/unit_entropy.c",
+      "size": 1147
+    },
+    {
+      "path": "tests/unit/models/unit_entropy_lm.c",
+      "size": 9022
+    },
+    {
+      "path": "tests/unit/models/unit_global_transformer.c",
+      "size": 10553
+    },
+    {
+      "path": "tests/unit/models/unit_hash_ngram.c",
+      "size": 10987
+    },
+    {
+      "path": "tests/unit/models/unit_local_decoder.c",
+      "size": 13561
+    },
+    {
+      "path": "tests/unit/models/unit_local_encoder.c",
+      "size": 21933
+    },
+    {
+      "path": "tests/unit/models/unit_model.c",
+      "size": 23068
+    },
+    {
+      "path": "tests/unit/models/unit_model_stages.c",
+      "size": 18056
+    },
+    {
+      "path": "tests/unit/models/unit_patcher.c",
+      "size": 1867
+    },
+    {
+      "path": "tests/unit/tools/unit_json.c",
+      "size": 4047
+    }
+  ],
+  "train_files": [
+    {
+      "path": "bench/cuda_bench.c",
+      "size": 31004
+    },
+    {
+      "path": "bench/harness.c",
+      "size": 5012
+    },
+    {
+      "path": "bench/harness.h",
+      "size": 3399
+    },
+    {
+      "path": "bench/infer_bench.c",
+      "size": 22854
+    },
+    {
+      "path": "csrc/blt.h",
+      "size": 943
+    },
+    {
+      "path": "csrc/core/allocator.h",
+      "size": 1348
+    },
+    {
+      "path": "csrc/core/backend.c",
+      "size": 31998
+    },
+    {
+      "path": "csrc/core/backend.h",
+      "size": 3277
+    },
+    {
+      "path": "csrc/core/calibrate_threshold.c",
+      "size": 5842
+    },
+    {
+      "path": "csrc/core/cuda_shim.h",
+      "size": 1393
+    },
+    {
+      "path": "csrc/core/dtype.h",
+      "size": 590
+    },
+    {
+      "path": "csrc/core/flops.c",
+      "size": 3368
+    },
+    {
+      "path": "csrc/core/flops.h",
+      "size": 2279
+    },
+    {
+      "path": "csrc/core/generate_greedy.c",
+      "size": 4590
+    },
+    {
+      "path": "csrc/core/generate_greedy.h",
+      "size": 830
+    },
+    {
+      "path": "csrc/core/json.h",
+      "size": 3195
+    },
+    {
+      "path": "csrc/core/tensor.c",
+      "size": 6514
+    },
+    {
+      "path": "csrc/core/tensor.h",
+      "size": 1836
+    },
+    {
+      "path": "csrc/cuda_smoke.c",
+      "size": 264
+    },
+    {
+      "path": "csrc/e2e_blt_dv.c",
+      "size": 7056
+    },
+    {
+      "path": "csrc/infer.c",
+      "size": 21162
+    },
+    {
+      "path": "csrc/infer/block_generation.c",
+      "size": 16922
+    },
+    {
+      "path": "csrc/infer/block_generation.h",
+      "size": 6449
+    },
+    {
+      "path": "csrc/infer/kv_cache.c",
+      "size": 19020
+    },
+    {
+      "path": "csrc/infer/kv_cache.h",
+      "size": 5392
+    },
+    {
+      "path": "csrc/infer/rope_gather.c",
+      "size": 1840
+    },
+    {
+      "path": "csrc/infer/rope_gather.h",
+      "size": 1061
+    },
+    {
+      "path": "csrc/infer/self_speculation.c",
+      "size": 18459
+    },
+    {
+      "path": "csrc/infer/self_speculation.h",
+      "size": 4332
+    },
+    {
+      "path": "csrc/infer/stats.c",
+      "size": 780
+    },
+    {
+      "path": "csrc/infer/stats.h",
+      "size": 1175
+    },
+    {
+      "path": "csrc/main.c",
+      "size": 112
+    },
+    {
+      "path": "csrc/models/attention.c",
+      "size": 19091
+    },
+    {
+      "path": "csrc/models/attention.h",
+      "size": 1375
+    },
+    {
+      "path": "csrc/models/block_diffusion.c",
+      "size": 34599
+    },
+    {
+      "path": "csrc/models/block_diffusion.h",
+      "size": 6647
+    },
+    {
+      "path": "csrc/models/byte_embedding.c",
+      "size": 3677
+    },
+    {
+      "path": "csrc/models/byte_embedding.h",
+      "size": 1098
+    },
+    {
+      "path": "csrc/models/checkpoint.c",
+      "size": 13864
+    },
+    {
+      "path": "csrc/models/checkpoint.h",
+      "size": 2221
+    },
+    {
+      "path": "csrc/models/cross_attention.c",
+      "size": 18512
+    },
+    {
+      "path": "csrc/models/cross_attention.h",
+      "size": 3417
+    },
+    {
+      "path": "csrc/models/entropy.c",
+      "size": 718
+    },
+    {
+      "path": "csrc/models/entropy.h",
+      "size": 534
+    },
+    {
+      "path": "csrc/models/entropy_lm.c",
+      "size": 8231
+    },
+    {
+      "path": "csrc/models/entropy_lm.h",
+      "size": 2494
+    },
+    {
+      "path": "csrc/models/global_transformer.c",
+      "size": 8035
+    },
+    {
+      "path": "csrc/models/global_transformer.h",
+      "size": 2878
+    },
+    {
+      "path": "csrc/models/hash_ngram.c",
+      "size": 11544
+    },
+    {
+      "path": "csrc/models/hash_ngram.h",
+      "size": 2862
+    },
+    {
+      "path": "csrc/models/local_common.c",
+      "size": 5250
+    },
+    {
+      "path": "csrc/models/local_common.h",
+      "size": 3547
+    },
+    {
+      "path": "csrc/models/local_decoder.c",
+      "size": 27285
+    },
+    {
+      "path": "csrc/models/local_decoder.h",
+      "size": 6480
+    },
+    {
+      "path": "csrc/models/local_encoder.c",
+      "size": 24466
+    },
+    {
+      "path": "csrc/models/local_encoder.h",
+      "size": 4212
+    },
+    {
+      "path": "csrc/models/model.c",
+      "size": 10163
+    },
+    {
+      "path": "csrc/models/model.h",
+      "size": 3559
+    },
+    {
+      "path": "csrc/models/model_builder.c",
+      "size": 3984
+    },
+    {
+      "path": "csrc/models/model_builder.h",
+      "size": 2441
+    },
+    {
+      "path": "csrc/models/patcher.c",
+      "size": 3597
+    },
+    {
+      "path": "csrc/models/patcher.h",
+      "size": 980
+    },
+    {
+      "path": "csrc/models/transformer.c",
+      "size": 6648
+    },
+    {
+      "path": "csrc/models/transformer.h",
+      "size": 4154
+    },
+    {
+      "path": "csrc/models/transformer_stack.h",
+      "size": 5373
+    },
+    {
+      "path": "csrc/ops/attn_core.h",
+      "size": 2995
+    },
+    {
+      "path": "csrc/ops/attn_core_cpu.c",
+      "size": 5193
+    },
+    {
+      "path": "csrc/ops/cast.h",
+      "size": 324
+    },
+    {
+      "path": "csrc/ops/cast_cpu.c",
+      "size": 1810
+    },
+    {
+      "path": "csrc/ops/cross_entropy.h",
+      "size": 651
+    },
+    {
+      "path": "csrc/ops/elementwise.h",
+      "size": 427
+    },
+    {
+      "path": "csrc/ops/elementwise_cpu.c",
+      "size": 5955
+    },
+    {
+      "path": "csrc/ops/gather_scatter.h",
+      "size": 2075
+    },
+    {
+      "path": "csrc/ops/gather_scatter_cpu.c",
+      "size": 6309
+    },
+    {
+      "path": "csrc/ops/gelu.h",
+      "size": 481
+    },
+    {
+      "path": "csrc/ops/layernorm.h",
+      "size": 682
+    },
+    {
+      "path": "csrc/ops/linalg_cpu.c",
+      "size": 5279
+    },
+    {
+      "path": "csrc/ops/mask_builder.h",
+      "size": 2675
+    },
+    {
+      "path": "csrc/ops/mask_builder_cpu.c",
+      "size": 6083
+    },
+    {
+      "path": "csrc/ops/matmul.h",
+      "size": 387
+    },
+    {
+      "path": "csrc/ops/optim.h",
+      "size": 898
+    },
+    {
+      "path": "csrc/ops/optim_cpu.c",
+      "size": 2180
+    },
+    {
+      "path": "csrc/ops/patch_pool.h",
+      "size": 1628
+    },
+    {
+      "path": "csrc/ops/patch_pool_cpu.c",
+      "size": 5992
+    },
+    {
+      "path": "csrc/ops/reductions_cpu.c",
+      "size": 16484
+    },
+    {
+      "path": "csrc/ops/rmsnorm.h",
+      "size": 618
+    },
+    {
+      "path": "csrc/ops/rope.h",
+      "size": 1412
+    },
+    {
+      "path": "csrc/ops/row_stats.h",
+      "size": 809
+    },
+    {
+      "path": "csrc/ops/row_stats_cpu.c",
+      "size": 1624
+    },
+    {
+      "path": "csrc/ops/softmax.h",
+      "size": 316
+    },
+    {
+      "path": "csrc/ops/swiglu.h",
+      "size": 542
+    },
+    {
+      "path": "csrc/ops/vecmath.h",
+      "size": 1390
+    },
+    {
+      "path": "csrc/ops/vecmath_cpu.c",
+      "size": 2809
+    },
+    {
+      "path": "csrc/sandbox.c",
+      "size": 5865
+    },
+    {
+      "path": "csrc/train_blt_d.c",
+      "size": 84269
+    },
+    {
+      "path": "csrc/train_sweep.c",
+      "size": 51876
+    },
+    {
+      "path": "tests/bench/bench_harness_selftest.c",
+      "size": 4413
+    },
+    {
+      "path": "tests/bench/bench_patcher.c",
+      "size": 7923
+    },
+    {
+      "path": "tests/parity/parity_cuda_composites.c",
+      "size": 8970
+    },
+    {
+      "path": "tests/parity/parity_cuda_elementwise.c",
+      "size": 5181
+    },
+    {
+      "path": "tests/parity/parity_cuda_matmul.c",
+      "size": 3927
+    },
+    {
+      "path": "tests/parity/parity_cuda_model.c",
+      "size": 15340
+    },
+    {
+      "path": "tests/parity/parity_cuda_reductions.c",
+      "size": 8164
+    },
+    {
+      "path": "tests/parity/parity_elm.c",
+      "size": 11487
+    },
+    {
+      "path": "tests/parity/parity_global_transformer.c",
+      "size": 5956
+    },
+    {
+      "path": "tests/parity/parity_local_decoder.c",
+      "size": 7984
+    },
+    {
+      "path": "tests/parity/parity_local_encoder.c",
+      "size": 6931
+    },
+    {
+      "path": "tests/parity/parity_math.c",
+      "size": 1853
+    },
+    {
+      "path": "tests/parity/parity_patcher.c",
+      "size": 7243
+    },
+    {
+      "path": "tests/parity/parity_transformer.c",
+      "size": 8451
+    },
+    {
+      "path": "tests/test_helpers.c",
+      "size": 1968
+    },
+    {
+      "path": "tests/test_helpers.h",
+      "size": 2457
+    },
+    {
+      "path": "tests/test_main.c",
+      "size": 6805
+    },
+    {
+      "path": "tests/test_suite.h",
+      "size": 2768
+    },
+    {
+      "path": "tests/unit/backend/unit_elementwise_cpu.c",
+      "size": 3088
+    },
+    {
+      "path": "tests/unit/backend/unit_linalg_cpu.c",
+      "size": 3390
+    },
+    {
+      "path": "tests/unit/backend/unit_mask.c",
+      "size": 6947
+    },
+    {
+      "path": "tests/unit/backend/unit_optim_cpu.c",
+      "size": 3097
+    },
+    {
+      "path": "tests/unit/backend/unit_reductions_cpu.c",
+      "size": 5637
+    },
+    {
+      "path": "tests/unit/core/test_bf16_cast.c",
+      "size": 6024
+    },
+    {
+      "path": "tests/unit/core/test_deterministic.c",
+      "size": 4132
+    },
+    {
+      "path": "tests/unit/core/unit_allocator.c",
+      "size": 767
+    },
+    {
+      "path": "tests/unit/core/unit_backend.c",
+      "size": 1590
+    },
+    {
+      "path": "tests/unit/core/unit_cuda_memory.c",
+      "size": 2065
+    },
+    {
+      "path": "tests/unit/core/unit_tensor.c",
+      "size": 637
+    },
+    {
+      "path": "tests/unit/infer/unit_block_generation.c",
+      "size": 30179
+    },
+    {
+      "path": "tests/unit/infer/unit_infer_utils.c",
+      "size": 3127
+    },
+    {
+      "path": "tests/unit/infer/unit_kv_cache.c",
+      "size": 13492
+    },
+    {
+      "path": "tests/unit/infer/unit_self_speculation.c",
+      "size": 25544
+    },
+    {
+      "path": "tests/unit/models/unit_attention.c",
+      "size": 6840
+    },
+    {
+      "path": "tests/unit/models/unit_attention_back.c",
+      "size": 4165
+    },
+    {
+      "path": "tests/unit/models/unit_block_diffusion.c",
+      "size": 29079
+    },
+    {
+      "path": "tests/unit/models/unit_byte_embedding.c",
+      "size": 3366
+    },
+    {
+      "path": "tests/unit/models/unit_cross_attention.c",
+      "size": 14929
+    },
+    {
+      "path": "tests/unit/models/unit_entropy.c",
+      "size": 1147
+    },
+    {
+      "path": "tests/unit/models/unit_entropy_lm.c",
+      "size": 9022
+    },
+    {
+      "path": "tests/unit/models/unit_global_transformer.c",
+      "size": 10553
+    },
+    {
+      "path": "tests/unit/models/unit_hash_ngram.c",
+      "size": 10987
+    },
+    {
+      "path": "tests/unit/models/unit_local_decoder.c",
+      "size": 13561
+    },
+    {
+      "path": "tests/unit/models/unit_local_encoder.c",
+      "size": 21933
+    },
+    {
+      "path": "tests/unit/models/unit_model.c",
+      "size": 23068
+    },
+    {
+      "path": "tests/unit/models/unit_model_stages.c",
+      "size": 18056
+    },
+    {
+      "path": "tests/unit/models/unit_patcher.c",
+      "size": 1867
+    },
+    {
+      "path": "tests/unit/tools/unit_json.c",
+      "size": 4047
+    }
+  ],
+  "heldout_files": [
+    {
+      "path": "csrc/core/allocator.c",
+      "size": 3358
+    },
+    {
+      "path": "csrc/core/json.c",
+      "size": 15305
+    },
+    {
+      "path": "csrc/models/transformer_stack.c",
+      "size": 19273
+    },
+    {
+      "path": "tests/bench.h",
+      "size": 3306
+    }
+  ],
+  "train_sha256": "54127142276f8e0f2d4361c05a52e3ff83609b942efcaf35c3b20ccc36990520",
+  "heldout_sha256": "64248a187689a6273c4c0fdb18790c0a4dc681566255e2dcf50c3e80259da198",
+  "train_size_bytes": 1108570,
+  "heldout_size_bytes": 41245,
+  "seed": 0
+}
