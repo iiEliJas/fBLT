@@ -168,10 +168,9 @@ Full tables, raw numbers, and production config: [ABLATIONS.md](docs/ABLATIONS.m
 
 ## Docs
 
-- [API_REFERENCE.md](API_REFERENCE.md) - Tensor and op API
 - [BENCHMARKS.md](docs/BENCHMARKS.md) - Full benchmark report
 - [ABLATIONS.md](docs/ABLATIONS.md) - Ablation sweep results
-- [TEST_API_REFERENCE.md](TEST_API_REFERENCE.md) - Writing tests
+- [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) - CLI commands for training and inference
 
 ## Contributing
 
