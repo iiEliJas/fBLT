@@ -112,19 +112,35 @@ CUDA_SMOKE_SRCS := \
 	$(SRC_DIR)/ops/smoke.cu
 
 ifeq ($(CUDA),1)
-NVCC ?= /usr/local/cuda/bin/nvcc
-NVCC_FLAGS := -O2 -std=c++17 -gencode arch=compute_89,code=sm_89 \
-              -Icsrc -DBLT_WITH_CUDA -MMD -MP
-# Static cudart is required here: the shared libcudart.so.13 init path picks
-# up the system-installed (older) libnvidia-ptxjitcompiler under WSL2 and
-# segfaults; the static runtime avoids that dependency entirely.
-# Linux-only linker flags for CUDA static runtime.
-# Windows CUDA requires different flags (ws2_32, kernel32, etc.)
-CUDA_LIBS := -L/usr/local/cuda/lib64 -lcublas -lcudart_static -ldl -lpthread -lrt -lstdc++
+# GPU architecture — override with: make CUDA=1 NVCC_ARCH="sm_86 sm_89"
+NVCC_ARCH ?= sm_89
+
+ifeq ($(OS),Windows_NT)
+    # ── Windows CUDA (MSVC host compiler required by nvcc) ──────────
+    CUDA_PATH ?= C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6
+    NVCC       = "$(CUDA_PATH)/bin/nvcc.exe"
+    NVCC_FLAGS  = -O2 -std=c++17 \
+                  $(foreach arch,$(NVCC_ARCH),-gencode arch=compute_$(arch:sm_%=%),code=$(arch)) \
+                  -Icsrc -DBLT_WITH_CUDA -MMD -MP
+    # Static cudart on Windows: no -ldl/-lrt/-lpthread (POSIX-only).
+    # cublas is dynamic-only on Windows; cudart_static needs kernel32.
+    CUDA_LIBS  = -L"$(CUDA_PATH)/lib/x64" \
+                 -lcublas -lcudart_static -lkernel32
+else
+    # ── Linux CUDA ──────────────────────────────────────────────────
+    CUDA_PATH ?= /usr/local/cuda
+    NVCC       = $(CUDA_PATH)/bin/nvcc
+    NVCC_FLAGS  = -O2 -std=c++17 \
+                  $(foreach arch,$(NVCC_ARCH),-gencode arch=compute_$(arch:sm_%=%),code=$(arch)) \
+                  -Icsrc -DBLT_WITH_CUDA -MMD -MP
+    # Static cudart avoids libnvidia-ptxjitcompiler version mismatch on WSL2.
+    CUDA_LIBS  = -L$(CUDA_PATH)/lib64 \
+                 -lcublas -lcudart_static -ldl -lpthread -lrt -lstdc++
+endif
+
 CFLAGS += -DBLT_WITH_CUDA
 LDLIBS += $(CUDA_LIBS)
-# Separate trees so CPU and CUDA objects never mix: core sources are
-# compiled with -DBLT_WITH_CUDA only in the CUDA tree.
+# Separate trees so CPU and CUDA objects never mix.
 OBJ_DIR := obj-cuda
 BIN_DIR := bin-cuda
 endif
@@ -232,12 +248,15 @@ train-blt-d: $(BIN_DIR)/train_blt_d$(EXE_EXT)
 # box: WSL2/dxg devices are rejected by the sanitizer ("Device not
 # supported"). TOOL selects memcheck (default), racecheck, initcheck, or
 # synccheck.
+# Windows: compute-sanitizer is not available; gate behind non-Windows.
+ifneq ($(OS),Windows_NT)
 CUDA_SANITIZER ?= /usr/local/cuda/bin/compute-sanitizer
 SANITIZE_TOOL  ?= memcheck
 .PHONY: cuda-sanitize
 cuda-sanitize: $(BIN_DIR)/test_main$(EXE_EXT)
 	@echo [SANITIZE] $(SANITIZE_TOOL) over the full CUDA suite...
 	@$(CUDA_SANITIZER) --target-processes all --tool $(SANITIZE_TOOL) ./$(BIN_DIR)/test_main$(EXE_EXT)
+endif
 
 
 # ============================================================================
