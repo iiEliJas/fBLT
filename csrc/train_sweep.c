@@ -22,7 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
+#include "core/platform.h"
 
 #include "core/allocator.h"
 #include "core/backend.h"
@@ -869,11 +869,7 @@ static void eval_stream(const train_ctx *tc, const byte_buf *buf, const window_l
 
 // Wall clock
 
-static double now_sec(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (double)ts.tv_sec + 1e-9 * (double)ts.tv_nsec;
-}
+static double now_sec(void) { return blt_time_sec(); }
 
 static volatile sig_atomic_t g_stop_requested = 0;
 
@@ -881,6 +877,7 @@ static void on_signal(int sig) {
     (void)sig;
     g_stop_requested = 1;
 }
+
 // main
 
 static void usage(const char *argv0) {

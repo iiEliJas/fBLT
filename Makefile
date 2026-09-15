@@ -2,7 +2,7 @@
 # CONFIGURATION
 # ============================================================================
 CC ?= gcc
-CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Icsrc -Itests -D_POSIX_C_SOURCE=200809L
+CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Icsrc -Itests
 # Header dependency tracking (auto-generated .d files)
 DEPFLAGS := -MMD -MP
 LDLIBS ?= -lm
@@ -40,6 +40,11 @@ else
     EXE_EXT :=
     MKDIR_P = @mkdir -p $(dir $@)
     MKDIR_BIN = @mkdir -p $(BIN_DIR)
+endif
+
+# POSIX source feature test macro not for Windows
+ifneq ($(OS),Windows_NT)
+    CFLAGS += -D_POSIX_C_SOURCE=200809L
 endif
 
 
@@ -107,17 +112,35 @@ CUDA_SMOKE_SRCS := \
 	$(SRC_DIR)/ops/smoke.cu
 
 ifeq ($(CUDA),1)
-NVCC ?= /usr/local/cuda/bin/nvcc
-NVCC_FLAGS := -O2 -std=c++17 -gencode arch=compute_89,code=sm_89 \
-              -Icsrc -DBLT_WITH_CUDA -MMD -MP
-# Static cudart is required here: the shared libcudart.so.13 init path picks
-# up the system-installed (older) libnvidia-ptxjitcompiler under WSL2 and
-# segfaults; the static runtime avoids that dependency entirely.
-CUDA_LIBS := -L/usr/local/cuda/lib64 -lcublas -lcudart_static -ldl -lpthread -lrt -lstdc++
+# GPU architecture — override with: make CUDA=1 NVCC_ARCH="sm_86 sm_89"
+NVCC_ARCH ?= sm_89
+
+ifeq ($(OS),Windows_NT)
+    # ── Windows CUDA (MSVC host compiler required by nvcc) ──────────
+    CUDA_PATH ?= C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6
+    NVCC       = "$(CUDA_PATH)/bin/nvcc.exe"
+    NVCC_FLAGS  = -O2 -std=c++17 \
+                  $(foreach arch,$(NVCC_ARCH),-gencode arch=compute_$(arch:sm_%=%),code=$(arch)) \
+                  -Icsrc -DBLT_WITH_CUDA -MMD -MP
+    # Static cudart on Windows: no -ldl/-lrt/-lpthread (POSIX-only).
+    # cublas is dynamic-only on Windows; cudart_static needs kernel32.
+    CUDA_LIBS  = -L"$(CUDA_PATH)/lib/x64" \
+                 -lcublas -lcudart_static -lkernel32
+else
+    # ── Linux CUDA ──────────────────────────────────────────────────
+    CUDA_PATH ?= /usr/local/cuda
+    NVCC       = $(CUDA_PATH)/bin/nvcc
+    NVCC_FLAGS  = -O2 -std=c++17 \
+                  $(foreach arch,$(NVCC_ARCH),-gencode arch=compute_$(arch:sm_%=%),code=$(arch)) \
+                  -Icsrc -DBLT_WITH_CUDA -MMD -MP
+    # Static cudart avoids libnvidia-ptxjitcompiler version mismatch on WSL2.
+    CUDA_LIBS  = -L$(CUDA_PATH)/lib64 \
+                 -lcublas -lcudart_static -ldl -lpthread -lrt -lstdc++
+endif
+
 CFLAGS += -DBLT_WITH_CUDA
 LDLIBS += $(CUDA_LIBS)
-# Separate trees so CPU and CUDA objects never mix: core sources are
-# compiled with -DBLT_WITH_CUDA only in the CUDA tree.
+# Separate trees so CPU and CUDA objects never mix.
 OBJ_DIR := obj-cuda
 BIN_DIR := bin-cuda
 endif
@@ -163,12 +186,12 @@ info:
 	@echo ================================
 
 parity-data:
-	@if [ ! -d data/tests ]; then \
-		echo [PARITY] Generating golden test data...; \
-		python3 tests/py/parity_generate.py; \
-	else \
-		echo [PARITY] Golden test data already exists, skipping...; \
-	fi
+ifeq ($(wildcard data/tests),)
+	@echo [PARITY] Generating golden test data...
+	python3 tests/py/parity_generate.py
+else
+	@echo [PARITY] Golden test data already exists, skipping...
+endif
 
 test: $(BIN_DIR)/test_main$(EXE_EXT) parity-data
 	@echo [TEST] Running tests...
@@ -225,12 +248,15 @@ train-blt-d: $(BIN_DIR)/train_blt_d$(EXE_EXT)
 # box: WSL2/dxg devices are rejected by the sanitizer ("Device not
 # supported"). TOOL selects memcheck (default), racecheck, initcheck, or
 # synccheck.
+# Windows: compute-sanitizer is not available; gate behind non-Windows.
+ifneq ($(OS),Windows_NT)
 CUDA_SANITIZER ?= /usr/local/cuda/bin/compute-sanitizer
 SANITIZE_TOOL  ?= memcheck
 .PHONY: cuda-sanitize
 cuda-sanitize: $(BIN_DIR)/test_main$(EXE_EXT)
 	@echo [SANITIZE] $(SANITIZE_TOOL) over the full CUDA suite...
 	@$(CUDA_SANITIZER) --target-processes all --tool $(SANITIZE_TOOL) ./$(BIN_DIR)/test_main$(EXE_EXT)
+endif
 
 
 # ============================================================================
@@ -313,23 +339,23 @@ $(BIN_DIR)/cuda_smoke$(EXE_EXT): $(SRC_DIR)/cuda_smoke.c $(CORE_OBJS) $(CUDA_SMO
 
 # Link inference binary
 $(BIN_DIR)/infer$(EXE_EXT): $(SRC_DIR)/infer.c $(CORE_OBJS)
-	@mkdir -p $(BIN_DIR)
+	$(MKDIR_BIN)
 	@echo "[CC] $< -> $@"
 	@$(CC) $(CFLAGS) $(SRC_DIR)/infer.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
 # Link end-to-end driver
 $(BIN_DIR)/e2e_blt_dv$(EXE_EXT): $(SRC_DIR)/e2e_blt_dv.c $(CORE_OBJS)
-	@mkdir -p $(BIN_DIR)
+	$(MKDIR_BIN)
 	@$(CC) $(CFLAGS) $(SRC_DIR)/e2e_blt_dv.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
 # Link inference benchmark
 $(BIN_DIR)/infer_bench$(EXE_EXT): bench/infer_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJS)
-	@mkdir -p $(BIN_DIR)
+	$(MKDIR_BIN)
 	@echo "[CC] $< -> $@"
 	@$(CC) $(CFLAGS) -I$(BENCH_DIR) bench/infer_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)
 
 $(BIN_DIR)/cuda_bench$(EXE_EXT): bench/cuda_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJS)
-	@mkdir -p $(BIN_DIR)
+	$(MKDIR_BIN)
 	@echo "[CC] $< -> $@"
 	@$(CC) $(CFLAGS) -I$(BENCH_DIR) bench/cuda_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)
 
@@ -370,7 +396,7 @@ help:
 	@echo -  make CUDA=1 cuda-sanitize [SANITIZE_TOOL=memcheck|racecheck|initcheck|synccheck]
 	@echo -       - Full CUDA test suite under compute-sanitizer (native box only)
 	@echo Platform detected: $(DETECTED_OS)
--include $(shell find obj obj-cuda -name '*.d' 2>/dev/null)
+-include $(wildcard obj/*.d obj-cuda/*.d)
 
 
 
