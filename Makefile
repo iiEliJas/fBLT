@@ -2,7 +2,7 @@
 # CONFIGURATION
 # ============================================================================
 CC ?= gcc
-CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Icsrc -Itests -D_POSIX_C_SOURCE=200809L
+CFLAGS ?= -O2 -std=c99 -Wall -Wextra -Icsrc -Itests
 # Header dependency tracking (auto-generated .d files)
 DEPFLAGS := -MMD -MP
 LDLIBS ?= -lm
@@ -40,6 +40,11 @@ else
     EXE_EXT :=
     MKDIR_P = @mkdir -p $(dir $@)
     MKDIR_BIN = @mkdir -p $(BIN_DIR)
+endif
+
+# POSIX source feature test macro not for Windows
+ifneq ($(OS),Windows_NT)
+    CFLAGS += -D_POSIX_C_SOURCE=200809L
 endif
 
 
@@ -113,6 +118,8 @@ NVCC_FLAGS := -O2 -std=c++17 -gencode arch=compute_89,code=sm_89 \
 # Static cudart is required here: the shared libcudart.so.13 init path picks
 # up the system-installed (older) libnvidia-ptxjitcompiler under WSL2 and
 # segfaults; the static runtime avoids that dependency entirely.
+# Linux-only linker flags for CUDA static runtime.
+# Windows CUDA requires different flags (ws2_32, kernel32, etc.)
 CUDA_LIBS := -L/usr/local/cuda/lib64 -lcublas -lcudart_static -ldl -lpthread -lrt -lstdc++
 CFLAGS += -DBLT_WITH_CUDA
 LDLIBS += $(CUDA_LIBS)
@@ -163,12 +170,12 @@ info:
 	@echo ================================
 
 parity-data:
-	@if [ ! -d data/tests ]; then \
-		echo [PARITY] Generating golden test data...; \
-		python3 tests/py/parity_generate.py; \
-	else \
-		echo [PARITY] Golden test data already exists, skipping...; \
-	fi
+ifeq ($(wildcard data/tests),)
+	@echo [PARITY] Generating golden test data...
+	python3 tests/py/parity_generate.py
+else
+	@echo [PARITY] Golden test data already exists, skipping...
+endif
 
 test: $(BIN_DIR)/test_main$(EXE_EXT) parity-data
 	@echo [TEST] Running tests...
@@ -313,23 +320,23 @@ $(BIN_DIR)/cuda_smoke$(EXE_EXT): $(SRC_DIR)/cuda_smoke.c $(CORE_OBJS) $(CUDA_SMO
 
 # Link inference binary
 $(BIN_DIR)/infer$(EXE_EXT): $(SRC_DIR)/infer.c $(CORE_OBJS)
-	@mkdir -p $(BIN_DIR)
+	$(MKDIR_BIN)
 	@echo "[CC] $< -> $@"
 	@$(CC) $(CFLAGS) $(SRC_DIR)/infer.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
 # Link end-to-end driver
 $(BIN_DIR)/e2e_blt_dv$(EXE_EXT): $(SRC_DIR)/e2e_blt_dv.c $(CORE_OBJS)
-	@mkdir -p $(BIN_DIR)
+	$(MKDIR_BIN)
 	@$(CC) $(CFLAGS) $(SRC_DIR)/e2e_blt_dv.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
 # Link inference benchmark
 $(BIN_DIR)/infer_bench$(EXE_EXT): bench/infer_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJS)
-	@mkdir -p $(BIN_DIR)
+	$(MKDIR_BIN)
 	@echo "[CC] $< -> $@"
 	@$(CC) $(CFLAGS) -I$(BENCH_DIR) bench/infer_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)
 
 $(BIN_DIR)/cuda_bench$(EXE_EXT): bench/cuda_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJS)
-	@mkdir -p $(BIN_DIR)
+	$(MKDIR_BIN)
 	@echo "[CC] $< -> $@"
 	@$(CC) $(CFLAGS) -I$(BENCH_DIR) bench/cuda_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJS) -o $@ $(LDLIBS)
 
@@ -370,7 +377,7 @@ help:
 	@echo -  make CUDA=1 cuda-sanitize [SANITIZE_TOOL=memcheck|racecheck|initcheck|synccheck]
 	@echo -       - Full CUDA test suite under compute-sanitizer (native box only)
 	@echo Platform detected: $(DETECTED_OS)
--include $(shell find obj obj-cuda -name '*.d' 2>/dev/null)
+-include $(wildcard obj/*.d obj-cuda/*.d)
 
 
 

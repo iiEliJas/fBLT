@@ -198,18 +198,45 @@ jobs:
         run: pytest tests/
 
   # ====================================================================
-  # Windows build — DISABLED
+  # 6. Windows build + test (MSYS2 UCRT64, MinGW gcc)
   # ====================================================================
-  # MinGW cross-compilation needs testing.  Re-enable once the Makefile
-  # handles Windows paths and the CI runner has the toolchain.
-  #
-  # windows-build:
-  #   runs-on: windows-latest
-  #   steps:
-  #     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-  #     - uses: msys2/setup-msys2@v2
-  #       with:
-  #         msystem: UCRT64
-  #         install: make mingw-w64-ucrt-x86_64-gcc
-  #     - shell: msys2 {0}
-  #       run: make CC=gcc test
+  # Verifies Windows portability with the MinGW toolchain.
+  windows-test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: make mingw-w64-ucrt-x86_64-gcc
+
+      - name: Set up Python
+        shell: msys2 {0}
+        run: |
+          pacman -S --noconfirm mingw-w64-ucrt-x86_64-python
+
+      - name: Install Python deps for parity generation
+        shell: msys2 {0}
+        run: |
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu numpy
+
+      - name: Generate parity test data
+        shell: msys2 {0}
+        run: python tests/py/parity_generate.py
+
+      - name: Show build config
+        shell: msys2 {0}
+        run: make info
+
+      - name: Build and run tests
+        shell: msys2 {0}
+        run: make CC=gcc test
+
+      - name: Clean build artifacts
+        if: always()
+        shell: msys2 {0}
+        run: make clean

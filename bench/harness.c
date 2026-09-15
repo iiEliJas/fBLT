@@ -8,18 +8,17 @@
 #include <time.h>
 #include <math.h>
 
+#include "core/platform.h"
+
 // Timer
 
-static struct timespec bench_ts_start;
+static double bench_ts_start;
 
-void bench_timer_start(void) { clock_gettime(CLOCK_MONOTONIC, &bench_ts_start); }
+void bench_timer_start(void) { bench_ts_start = blt_time_sec(); }
 
 uint64_t bench_timer_stop_ns(void) {
-    struct timespec end;
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    uint64_t sec = (uint64_t)(end.tv_sec - bench_ts_start.tv_sec);
-    long nsec = end.tv_nsec - bench_ts_start.tv_nsec;
-    return sec * 1000000000ULL + (uint64_t)nsec;
+    double elapsed = blt_time_sec() - bench_ts_start;
+    return (uint64_t)(elapsed * 1e9);
 }
 
 double bench_timer_stop_sec(void) { return (double)bench_timer_stop_ns() / 1e9; }

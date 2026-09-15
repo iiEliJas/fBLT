@@ -22,7 +22,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
+#include "core/platform.h"
 
 #include "core/allocator.h"
 #include "core/backend.h"
@@ -1353,11 +1353,11 @@ int main(int argc, char **argv) {
     if (a.loss_log) loss_fp = fopen(a.loss_log, "w");
 
     double t_fwd = 0.0, t_bwd = 0.0, t_opt = 0.0, t_step = 0.0;
-    struct timespec ts0, tsA, tsB, tsC, tsD;
+    double ts0, tsA, tsB, tsC, tsD;
     const int timing = (getenv("BLT_TRAIN_TIMING") != NULL);
 
     for (size_t step = 0; step < a.steps; step++) {
-        if (timing) clock_gettime(CLOCK_MONOTONIC, &ts0);
+        if (timing) ts0 = blt_time_sec();
         blt_arena_reset(scratch);
 
         const size_t w = step % num_windows;
@@ -1440,7 +1440,7 @@ int main(int argc, char **argv) {
             size_t p_shape2[2] = {M, a.embed};
             blt_tensor P = blt_tensor_create(scratch, p_shape2, 2, BLT_DTYPE_FP32);
             blt_tensor h = blt_tensor_create(scratch, h_shape, 2, BLT_DTYPE_FP32);
-            if (timing) clock_gettime(CLOCK_MONOTONIC, &tsA);
+            if (timing) tsA = blt_time_sec();
             blt_local_encoder_forward(model->encoder, &bytes_in, patches, M, NULL, 0, &P, &h, scratch);
 
             blt_tensor O = blt_tensor_create(scratch, p_shape2, 2, BLT_DTYPE_FP32);
@@ -1460,8 +1460,8 @@ int main(int argc, char **argv) {
             blt_tensor_download(&loss, &lv, sizeof(float));
             if (loss_fp) fprintf(loss_fp, "%zu %.6f\n", step + 1, (double)lv);
             if (timing) {
-                clock_gettime(CLOCK_MONOTONIC, &tsB);
-                t_fwd += (tsB.tv_sec - tsA.tv_sec) + (tsB.tv_nsec - tsA.tv_nsec) / 1e9;
+                tsB = blt_time_sec();
+                t_fwd += tsB - tsA;
             }
             running += lv;
             running_n++;
@@ -1480,8 +1480,8 @@ int main(int argc, char **argv) {
             if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
                 log_gradient_activation_dump(adump_fp, step + 1, model, grad);
             if (timing) {
-                clock_gettime(CLOCK_MONOTONIC, &tsC);
-                t_bwd += (tsC.tv_sec - tsB.tv_sec) + (tsC.tv_nsec - tsB.tv_nsec) / 1e9;
+                tsC = blt_time_sec();
+                t_bwd += tsC - tsB;
             }
         } else {
             // plain causal BLT baseline: identical pipeline, standard
@@ -1513,7 +1513,7 @@ int main(int argc, char **argv) {
             else if (step >= (a.steps * 60) / 100) lr *= 0.3f;
         }
 
-        if (timing) clock_gettime(CLOCK_MONOTONIC, &tsC);
+        if (timing) tsC = blt_time_sec();
         if (cnorm_fp) log_component_norms(cnorm_fp, step + 1, model, grad);
         float pre_clip_norm = clip_all(model, grad, a.max_norm);
         if (gnorm_fp) fprintf(gnorm_fp, "%zu %.6f\n", step + 1, pre_clip_norm);
@@ -1541,9 +1541,9 @@ int main(int argc, char **argv) {
             sgd_all(model, grad, lr);
         }
         if (timing) {
-            clock_gettime(CLOCK_MONOTONIC, &tsD);
-            t_opt += (tsD.tv_sec - tsC.tv_sec) + (tsD.tv_nsec - tsC.tv_nsec) / 1e9;
-            t_step += (tsD.tv_sec - ts0.tv_sec) + (tsD.tv_nsec - ts0.tv_nsec) / 1e9;
+            tsD = blt_time_sec();
+            t_opt += tsD - tsC;
+            t_step += tsD - ts0;
             if ((step % 50) == 49) {
                 printf("[TIMING] step %zu fwd %.1fms bwd %.1fms opt %.1fms step %.1fms\n", step + 1,
                        1000.0 * t_fwd / 50.0, 1000.0 * t_bwd / 50.0, 1000.0 * t_opt / 50.0, 1000.0 * t_step / 50.0);
@@ -1612,9 +1612,8 @@ int main(int argc, char **argv) {
         printf("[CKPT] saved weights to %s\n", a.save_path);
     }
 
-    // Held-out causal BPB evaluation. Same windowing/patches as training;
-    // clean-row CE only -- valid for BOTH arms because the Figure-5 TRAIN
-    // mask is plain causal (clean rows cannot see block rows).
+    // Held-out causal BPB evaluation
+    // Same windowing/patches as training
 
     double bpb = -1.0;
     if (a.eval_path != NULL) {
