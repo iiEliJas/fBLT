@@ -39,4 +39,22 @@ int blt_test_check_close(const blt_tensor *actual, const blt_tensor *expected, f
         }                                                                                                              \
     } while (0)
 
+// Void-safe variants — use inside functions that return void.
+#define TEST_ASSERT_VOID(cond)                                                                                         \
+    do {                                                                                                               \
+        if (!(cond)) {                                                                                                 \
+            fprintf(stderr, "  [FAIL] %s:%d: Assertion failed: %s\n", __FILE__, __LINE__, #cond);                      \
+            return;                                                                                                    \
+        }                                                                                                              \
+    } while (0)
+
+#define TEST_ASSERT_CLOSE_VOID(actual, expected, tol)                                                                  \
+    do {                                                                                                               \
+        if (!blt_test_check_close((actual), (expected), (tol))) {                                                      \
+            fprintf(stderr, "  [FAIL] %s:%d: Tensor values out of tolerance (tol=%.1e)\n", __FILE__, __LINE__,         \
+                    (double)(tol));                                                                                    \
+            return;                                                                                                    \
+        }                                                                                                              \
+    } while (0)
+
 #endif
