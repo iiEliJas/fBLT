@@ -37,7 +37,14 @@ void blt_byte_embedding_forward(const blt_byte_embedding *emb, const blt_tensor 
         blt_tensor_download(bytes_in, stage, bytes_in->numel);
         ids = stage;
     }
-    blt_embedding_lookup(&emb->weight, ids, out);
+    // Convert uint8_t ids to uint32_t for the embedding lookup API.
+    uint32_t *ids_u32 = (uint32_t *)malloc(bytes_in->numel * sizeof(uint32_t));
+    BLT_REQUIRE(ids_u32 != NULL, "blt_byte_embedding_forward: ids_u32 alloc failed");
+    for (size_t i = 0; i < (size_t)bytes_in->numel; i++) {
+        ids_u32[i] = ids[i];
+    }
+    blt_embedding_lookup(&emb->weight, ids_u32, out);
+    free(ids_u32);
     free(stage);
 }
 
@@ -69,6 +76,13 @@ void blt_byte_embedding_backward(const blt_byte_embedding *emb, const blt_tensor
         blt_tensor_download(bytes_in, stage, bytes_in->numel);
         ids = stage;
     }
-    blt_embedding_scatter_add(grad_weight, ids, grad_out);
+    // Convert uint8_t ids to uint32_t for the embedding scatter-add API.
+    uint32_t *ids_u32 = (uint32_t *)malloc(bytes_in->numel * sizeof(uint32_t));
+    BLT_REQUIRE(ids_u32 != NULL, "blt_byte_embedding_backward: ids_u32 alloc failed");
+    for (size_t i = 0; i < (size_t)bytes_in->numel; i++) {
+        ids_u32[i] = ids[i];
+    }
+    blt_embedding_scatter_add(grad_weight, ids_u32, grad_out);
+    free(ids_u32);
     free(stage);
 }

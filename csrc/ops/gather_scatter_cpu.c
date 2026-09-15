@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-void blt_embedding_lookup_cpu(const blt_tensor *table, const uint8_t *ids_host, blt_tensor *out) {
+void blt_embedding_lookup_cpu(const blt_tensor *table, const uint32_t *ids_host, blt_tensor *out) {
     BLT_REQUIRE(table->backend == BLT_BACKEND_CPU && out->backend == BLT_BACKEND_CPU,
                 "blt_embedding_lookup: CPU implementation called with non-CPU tensors");
     const size_t seq_len = out->shape[0];
@@ -19,7 +19,7 @@ void blt_embedding_lookup_cpu(const blt_tensor *table, const uint8_t *ids_host, 
     }
 }
 
-void blt_embedding_scatter_add_cpu(const blt_tensor *grad_table, const uint8_t *ids_host, const blt_tensor *grad_out) {
+void blt_embedding_scatter_add_cpu(const blt_tensor *grad_table, const uint32_t *ids_host, const blt_tensor *grad_out) {
     BLT_REQUIRE(grad_table->backend == BLT_BACKEND_CPU && grad_out->backend == BLT_BACKEND_CPU,
                 "blt_embedding_scatter_add: CPU implementation called with non-CPU tensors");
     const size_t seq_len = grad_out->shape[0];

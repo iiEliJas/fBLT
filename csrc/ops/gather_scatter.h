@@ -18,10 +18,10 @@ extern "C" {
 
 // out[i, :] = table[ids_host[i], :]; ids_host holds seq_len byte values,
 // each validated against table row count.
-void blt_embedding_lookup(const blt_tensor *table, const uint8_t *ids_host, blt_tensor *out);
+void blt_embedding_lookup(const blt_tensor *table, const uint32_t *ids_host, blt_tensor *out);
 
 // grad_table[ids_host[i], :] += grad_out[i, :]  (accumulates).
-void blt_embedding_scatter_add(const blt_tensor *grad_table, const uint8_t *ids_host, const blt_tensor *grad_out);
+void blt_embedding_scatter_add(const blt_tensor *grad_table, const uint32_t *ids_host, const blt_tensor *grad_out);
 
 // io[i, :] += table[idx_host[i], :] for every non-sentinel i. Used for n-gram adds.
 #define BLT_IDX_SENTINEL UINT32_MAX

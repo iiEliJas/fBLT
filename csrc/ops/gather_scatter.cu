@@ -27,7 +27,7 @@ static unsigned blt_cuda_grid(size_t n) {
 
 // Deterministic single-threaded scatter-add, selected when g_blt_deterministic is set.
 
-__global__ void blt_embedding_scatter_add_det_kernel(float *grad_table, const unsigned char *ids, const float *grad_out,
+__global__ void blt_embedding_scatter_add_det_kernel(float *grad_table, const unsigned int *ids, const float *grad_out,
                                                      size_t seq_len, size_t embed_dim) {
     for (size_t i = 0; i < seq_len; i++) {
         const size_t row = (size_t)ids[i];
@@ -73,18 +73,18 @@ __global__ void blt_indexed_row_scatter_add_normalized_det_kernel(float *grad_ta
     }
 }
 
-__global__ void blt_embedding_lookup_kernel(const float *table, size_t table_rows, const unsigned char *ids, float *out,
+__global__ void blt_embedding_lookup_kernel(const float *table, size_t table_rows, const unsigned int *ids, float *out,
                                             size_t seq_len, size_t embed_dim) {
     const size_t work = seq_len * embed_dim;
     for (size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x; idx < work;
          idx += (size_t)gridDim.x * blockDim.x) {
         const size_t i = idx / embed_dim;
-        const unsigned char id = ids[i];
+        const unsigned int id = ids[i];
         out[idx] = table[(size_t)id * embed_dim + (idx % embed_dim)];
     }
 }
 
-extern "C" void blt_embedding_lookup_cuda(const blt_tensor *table, const uint8_t *ids_host, blt_tensor *out) {
+extern "C" void blt_embedding_lookup_cuda(const blt_tensor *table, const uint32_t *ids_host, blt_tensor *out) {
     const size_t seq_len = out->shape[0];
     const size_t embed_dim = out->shape[1];
 
@@ -92,14 +92,15 @@ extern "C" void blt_embedding_lookup_cuda(const blt_tensor *table, const uint8_t
         BLT_REQUIRE(ids_host[i] < table->shape[0], "blt_embedding_lookup: id out of range");
     }
 
-    unsigned char *d_ids = (unsigned char *)blt_arena_alloc(blt_cuda_get_scratch_arena(), seq_len > 0 ? seq_len : 1, 1);
-    blt_cuda_memcpy_h2d(d_ids, ids_host, seq_len);
+    unsigned int *d_ids = (unsigned int *)blt_arena_alloc(blt_cuda_get_scratch_arena(),
+                                                          seq_len > 0 ? seq_len * sizeof(unsigned int) : 1, 4);
+    blt_cuda_memcpy_h2d(d_ids, ids_host, seq_len * sizeof(unsigned int));
     blt_embedding_lookup_kernel<<<blt_cuda_grid(seq_len * embed_dim), 256>>>(
         (const float *)table->data, table->shape[0], d_ids, (float *)out->data, seq_len, embed_dim);
     blt_cuda_launch_check("blt_embedding_lookup");
 }
 
-__global__ void blt_embedding_scatter_add_kernel(float *grad_table, size_t table_rows, const unsigned char *ids,
+__global__ void blt_embedding_scatter_add_kernel(float *grad_table, size_t table_rows, const unsigned int *ids,
                                                  const float *grad_out, size_t seq_len, size_t embed_dim) {
     const size_t work = seq_len * embed_dim;
     for (size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x; idx < work;
@@ -110,7 +111,7 @@ __global__ void blt_embedding_scatter_add_kernel(float *grad_table, size_t table
     }
 }
 
-extern "C" void blt_embedding_scatter_add_cuda(const blt_tensor *grad_table, const uint8_t *ids_host,
+extern "C" void blt_embedding_scatter_add_cuda(const blt_tensor *grad_table, const uint32_t *ids_host,
                                                const blt_tensor *grad_out) {
     const size_t seq_len = grad_out->shape[0];
     const size_t embed_dim = grad_out->shape[1];
@@ -119,8 +120,9 @@ extern "C" void blt_embedding_scatter_add_cuda(const blt_tensor *grad_table, con
         BLT_REQUIRE(ids_host[i] < grad_table->shape[0], "blt_embedding_scatter_add: id out of range");
     }
 
-    unsigned char *d_ids = (unsigned char *)blt_arena_alloc(blt_cuda_get_scratch_arena(), seq_len > 0 ? seq_len : 1, 1);
-    blt_cuda_memcpy_h2d(d_ids, ids_host, seq_len);
+    unsigned int *d_ids = (unsigned int *)blt_arena_alloc(blt_cuda_get_scratch_arena(),
+                                                          seq_len > 0 ? seq_len * sizeof(unsigned int) : 1, 4);
+    blt_cuda_memcpy_h2d(d_ids, ids_host, seq_len * sizeof(unsigned int));
     if (g_blt_deterministic) {
         blt_embedding_scatter_add_det_kernel<<<1, 1>>>((float *)grad_table->data, d_ids, (const float *)grad_out->data,
                                                        seq_len, embed_dim);

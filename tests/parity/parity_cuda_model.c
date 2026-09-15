@@ -115,7 +115,7 @@ static void build_scenario(blt_arena *host, const blt_local_decoder_config *cfg,
         patches[np].peak_entropy = 0.5f;
         np++;
     }
-    TEST_ASSERT(np >= 2);
+    TEST_ASSERT_VOID(np >= 2);
     *np_out = np;
 
     size_t h_shape[2] = {N, E};

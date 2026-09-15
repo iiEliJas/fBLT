@@ -30,9 +30,9 @@ ifeq ($(OS),Windows_NT)
     RM := del /Q
     RM_DIR := rmdir /S /Q
     EXE_EXT := .exe
-    # Windows command to create parent directory
-    MKDIR_P = @if not exist "$(subst /,\,$(dir $@))" cmd /c "mkdir $(subst /,\,$(dir $@))"
-    MKDIR_BIN = @if not exist "$(BIN_DIR)" cmd /c "mkdir $(BIN_DIR)"
+    # All Windows builds use MSYS2 / MinGW shell — POSIX mkdir works.
+    MKDIR_P = @mkdir -p $(dir $@)
+    MKDIR_BIN = @mkdir -p $(BIN_DIR)
 else
     DETECTED_OS := Linux
     RM := rm -f
@@ -121,18 +121,18 @@ ifeq ($(OS),Windows_NT)
     NVCC       = "$(CUDA_PATH)/bin/nvcc.exe"
     NVCC_FLAGS  = -O2 -std=c++17 \
                   $(foreach arch,$(NVCC_ARCH),-gencode arch=compute_$(arch:sm_%=%),code=$(arch)) \
-                  -Icsrc -DBLT_WITH_CUDA -MMD -MP
-    # Static cudart on Windows: no -ldl/-lrt/-lpthread (POSIX-only).
-    # cublas is dynamic-only on Windows; cudart_static needs kernel32.
+                  -Icsrc -DBLT_WITH_CUDA
+    # Dynamic cudart: cudart_static requires MSVC CRT symbols
+    # (__GSHandlerCheck etc.) that MinGW's linker cannot resolve.
     CUDA_LIBS  = -L"$(CUDA_PATH)/lib/x64" \
-                 -lcublas -lcudart_static -lkernel32
+                 -lcublas -lcudart
 else
     # ── Linux CUDA ──────────────────────────────────────────────────
     CUDA_PATH ?= /usr/local/cuda
     NVCC       = $(CUDA_PATH)/bin/nvcc
     NVCC_FLAGS  = -O2 -std=c++17 \
                   $(foreach arch,$(NVCC_ARCH),-gencode arch=compute_$(arch:sm_%=%),code=$(arch)) \
-                  -Icsrc -DBLT_WITH_CUDA -MMD -MP
+                  -Icsrc -DBLT_WITH_CUDA
     # Static cudart avoids libnvidia-ptxjitcompiler version mismatch on WSL2.
     CUDA_LIBS  = -L$(CUDA_PATH)/lib64 \
                  -lcublas -lcudart_static -ldl -lpthread -lrt -lstdc++
@@ -170,7 +170,7 @@ TEST_OBJS := $(addprefix $(OBJ_DIR)/,$(TEST_SRCS:.c=.o)) $(CORE_OBJS)
 # ============================================================================
 # TARGETS
 # ============================================================================
-.PHONY: all test main bench bench-harness bench-cuda sandbox e2e-dv bench-infer sweep cuda-smoke cuda-sanitize parity-data infer clean info help
+.PHONY: all test main bench bench-harness bench-cuda sandbox e2e-dv bench-infer sweep cuda-smoke cuda-sanitize cuda-compile parity-data infer clean info help
 
 all: test
 
@@ -184,6 +184,9 @@ info:
 	@echo OBJ_DIR: $(OBJ_DIR)
 	@echo BIN_DIR: $(BIN_DIR)
 	@echo ================================
+
+cuda-compile: $(CUDA_OBJS)
+	@echo "All CUDA sources compiled successfully."
 
 parity-data:
 ifeq ($(wildcard data/tests),)
@@ -365,12 +368,7 @@ $(BIN_DIR)/cuda_bench$(EXE_EXT): bench/cuda_bench.c $(CORE_OBJS) $(BENCH_LIB_OBJ
 # ============================================================================
 clean:
 	@echo [CLEAN] Removing object and binary directories ...
-ifeq ($(DETECTED_OS),Windows)
-	@if exist $(OBJ_DIR) $(RM_DIR) $(OBJ_DIR)
-	@if exist $(BIN_DIR) $(RM_DIR) $(BIN_DIR)
-else
 	@$(RM_DIR) obj obj-cuda bin bin-cuda 2>/dev/null || true
-endif
 	@echo [CLEAN] Complete.
 
 

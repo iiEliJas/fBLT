@@ -25,6 +25,9 @@ __pycache__/
 data/dummy_entropy.bin
 data/the-stack-smol
 data/tests/
+data/train.bin
+data/heldout.bin
+data/sample_corpus_manifest.json
 
 # Generated files
 configs/sweep_state.json

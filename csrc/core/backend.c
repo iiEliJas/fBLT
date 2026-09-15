@@ -65,8 +65,8 @@ void blt_patch_pool_backward_cpu(const blt_tensor *grad_out, const blt_tensor *b
 void blt_attention_head_core_cpu(blt_backend backend, const blt_attention_head_args *args);
 void blt_attention_head_core_backward_cpu(blt_backend backend, const blt_attention_head_bwd_args *args);
 
-void blt_embedding_lookup_cpu(const blt_tensor *table, const uint8_t *ids_host, blt_tensor *out);
-void blt_embedding_scatter_add_cpu(const blt_tensor *grad_table, const uint8_t *ids_host, const blt_tensor *grad_out);
+void blt_embedding_lookup_cpu(const blt_tensor *table, const uint32_t *ids_host, blt_tensor *out);
+void blt_embedding_scatter_add_cpu(const blt_tensor *grad_table, const uint32_t *ids_host, const blt_tensor *grad_out);
 void blt_indexed_row_accumulate_cpu(const blt_tensor *table, const uint32_t *idx_host, blt_tensor *io);
 void blt_indexed_row_scatter_add_cpu(const blt_tensor *grad_table, const uint32_t *idx_host, const blt_tensor *grad_out,
                                      float scale);
@@ -194,8 +194,8 @@ void blt_patch_pool_backward_cuda(const blt_tensor *grad_out, const blt_tensor *
 void blt_attention_head_core_cuda(blt_backend backend, const blt_attention_head_args *args);
 void blt_attention_head_core_backward_cuda(blt_backend backend, const blt_attention_head_bwd_args *args);
 
-void blt_embedding_lookup_cuda(const blt_tensor *table, const uint8_t *ids_host, blt_tensor *out);
-void blt_embedding_scatter_add_cuda(const blt_tensor *grad_table, const uint8_t *ids_host, const blt_tensor *grad_out);
+void blt_embedding_lookup_cuda(const blt_tensor *table, const uint32_t *ids_host, blt_tensor *out);
+void blt_embedding_scatter_add_cuda(const blt_tensor *grad_table, const uint32_t *ids_host, const blt_tensor *grad_out);
 void blt_indexed_row_accumulate_cuda(const blt_tensor *table, const uint32_t *idx_host, blt_tensor *io);
 void blt_indexed_row_scatter_add_cuda(const blt_tensor *grad_table, const uint32_t *idx_host,
                                       const blt_tensor *grad_out, float scale);
@@ -486,12 +486,12 @@ void *blt_container_alloc(blt_arena *arena, size_t bytes) {
 
 // GATHER / SCATTER
 
-void blt_embedding_lookup(const blt_tensor *table, const uint8_t *ids_host, blt_tensor *out) {
+void blt_embedding_lookup(const blt_tensor *table, const uint32_t *ids_host, blt_tensor *out) {
     BLT_DISPATCH(table, blt_embedding_lookup_cpu(table, ids_host, out),
                  blt_embedding_lookup_cuda(table, ids_host, out));
 }
 
-void blt_embedding_scatter_add(const blt_tensor *grad_table, const uint8_t *ids_host, const blt_tensor *grad_out) {
+void blt_embedding_scatter_add(const blt_tensor *grad_table, const uint32_t *ids_host, const blt_tensor *grad_out) {
     BLT_DISPATCH(grad_table, blt_embedding_scatter_add_cpu(grad_table, ids_host, grad_out),
                  blt_embedding_scatter_add_cuda(grad_table, ids_host, grad_out));
 }
