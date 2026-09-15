@@ -1,7 +1,8 @@
 # CI workflow for fBLT — Fast Byte Latent Transformer
 # Runs on every push to main and on pull requests targeting main.
 # Jobs: Linux build+test, macOS build+test, sanitizer (ASan+UBSan),
-#       CUDA syntax check (compile-only, no GPU required).
+#       CUDA syntax check (compile-only, no GPU required),
+#       Windows CPU test, Windows CUDA build (MSVC), Windows Python tests.
 
 name: CI
 
@@ -30,6 +31,7 @@ jobs:
   # Verifies the baseline build and test suite on the primary platform.
   linux-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,6 +73,7 @@ jobs:
   #
   # macos-test:
   #   runs-on: macos-latest
+  #   timeout-minutes: 15
   #   steps:
   #     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
   #     - run: brew install libomp
@@ -86,6 +89,7 @@ jobs:
   sanitizer:
     name: Sanitizers (ASan + UBSan)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -120,9 +124,15 @@ jobs:
         if: always()
         run: make clean
 
+  # ====================================================================
+  # 4. CUDA syntax check (Linux, compile-only, no GPU)
+  # ====================================================================
+  # Installs only nvcc (no driver/runtime) and syntax-checks every .cu
+  # file.  Catches compile errors without needing a GPU.
   cuda-syntax:
     name: CUDA syntax check (compile-only, no GPU)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install CUDA toolkit (compiler only)
@@ -156,9 +166,13 @@ jobs:
           fi
           echo "All CUDA files pass syntax check."
 
+  # ====================================================================
+  # 5. clang-format
+  # ====================================================================
   format-check:
     name: clang-format
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install clang-format
@@ -168,9 +182,13 @@ jobs:
           find csrc tests run bench fblt -name '*.c' -o -name '*.h' -o -name '*.cu' | \
             xargs clang-format --dry-run --Werror
 
+  # ====================================================================
+  # 6. Python lint + tests (Linux)
+  # ====================================================================
   python-ci:
     name: Python lint + tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -198,11 +216,13 @@ jobs:
         run: pytest tests/
 
   # ====================================================================
-  # 6. Windows build + test (MSYS2 UCRT64, MinGW gcc)
+  # 7. Windows build + test (MSYS2 UCRT64, MinGW gcc)
   # ====================================================================
   # Verifies Windows portability with the MinGW toolchain.
   windows-test:
+    name: Windows CPU test (MSYS2/MinGW)
     runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -240,3 +260,97 @@ jobs:
         if: always()
         shell: msys2 {0}
         run: make clean
+
+  # ====================================================================
+  # 8. Windows CUDA build (MSVC host, compile-only, no GPU)
+  # ====================================================================
+  # Proves the CUDA path compiles under MSVC + nvcc on Windows.
+  # GitHub runners have no NVIDIA GPU, so this is build-only.
+  #
+  # Key details:
+  #   - windows-2022 (NOT windows-latest): CUDA host_config.h rejects
+  #     VS 2022+ hosts — this is a real constraint, not a CI quirk.
+  #   - ilammy/msvc-dev-cmd puts cl.exe on PATH for nvcc -ccbin.
+  #   - Jimver/cuda-toolkit installs only nvcc + cudart (no driver).
+  #   - MSYS2 provides `make` for the build shell.
+  windows-cuda-build:
+    name: Windows CUDA build (MSVC, compile-only)
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # MSVC environment: puts cl.exe on PATH so nvcc -ccbin can find it.
+      - name: MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+
+      # CUDA toolkit: nvcc + cudart headers.  The default install path
+      # contains "Program Files" (spaces) — this is exactly the #314
+      # regression pattern that Colibri's CI caught.
+      - name: Install CUDA toolkit
+        uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
+        with:
+          cuda: '12.6.2'
+          method: network
+          sub-packages: '["nvcc", "cudart"]'
+
+      # MSYS2 provides `make`.  path-type: inherit lets the recipe see
+      # cl.exe (from msvc-dev-cmd) and nvcc (from cuda-toolkit) on the
+      # Windows PATH.
+      - name: Set up MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          path-type: inherit
+          install: make mingw-w64-ucrt-x86_64-gcc
+
+      - name: Show build config
+        shell: msys2 {0}
+        run: make info
+
+      # Build + run tests.  CUDA=1 forces the nvcc path; the MSVC host
+      # compiler is already on PATH from msvc-dev-cmd.  No GPU means
+      # kernel tests skip, but the compilation and CPU fallback paths
+      # are exercised.
+      - name: Build and run tests (CUDA=1)
+        shell: msys2 {0}
+        run: make CUDA=1 CC=gcc test
+
+      - name: Clean build artifacts
+        if: always()
+        shell: msys2 {0}
+        run: make CUDA=1 clean
+
+  # ====================================================================
+  # 9. Windows Python tests
+  # ====================================================================
+  # Catches path-separator issues, Windows-specific Python behavior,
+  # and .exe suffix resolution that Linux-only Python CI misses.
+  windows-python:
+    name: Python tests (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff pytest
+          pip install -e . || true
+
+      - name: Lint and Format Check with Ruff
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Run Python Tests via Pytest
+        run: pytest tests/
