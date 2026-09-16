@@ -9,7 +9,7 @@ Based on two papers from Meta FAIR (with Stanford and University of Washington c
 - [Byte Latent Transformer](https://arxiv.org/abs/2412.09871) - Byte modeling with entropy-based dynamic patching. Matches token-based LLM scaling, no vocabulary needed.
 - [Fast Byte Latent Transformer](https://arxiv.org/abs/2605.08044) - Faster inference with diffusion decoding and self-speculation.
 
-*Status*: research prototype
+**Status**: research prototype
 
 ## Table of contents
 
@@ -245,13 +245,31 @@ Architecture and schedule ablations at 2.97M parameters (embed=192, hidden=384, 
 |---|---|---|
 | Step budget | 40k | Safe convergence floor; masked acc > 0.99 across seeds (cliff sits somewhere at 25k-35k) |
 | Mask-warmup | 83% of steps | 95% is a minor improvement, not required |
-| Decoder depth | 2 layers | Deeper decoder (3-4 layers) doesn't help — 2/2/2 is optimal |
-| Encoder depth | 2 layers | Deeper encoder (3/2/2) is harmful — 2 layers is best |
-| Cross-attn | all or last | base (all) and xlast (last) tied at 83% warmup — xlast ~15% faster |
+| Decoder depth | 2 layers | Deeper decoder (3-4 layers) doesn't help, 2/2/2 is optimal |
+| Encoder depth | 2 layers | Deeper encoder (3/2/2) is harmful, 2 layers is best |
+| Cross-attn | all or last | base (all) and xlast (last) tied at 83% warmup, xlast ~15% faster |
 | High-t warmup | on | Improves BPB by 0.33 (2.7x noise floor), no instability |
 | Mask-late | off | No benefit found |
 
 Full tables, raw numbers, and production config: [ABLATIONS.md](docs/ABLATIONS.md).
+
+## Experiments
+
+fBLT is small and I have more ideas than time to test them. If you change
+something and see what happens, tell me about it. It does not matter if it
+worked or not.
+
+Try a different hyperparameter, run it on another corpus, push it to a
+bigger scale, or look into the CUDA non-determinism from Known issues. You
+do not need a plan. Just curiosity and a GPU, or a patient CPU.
+
+Open an issue with what you changed, your hardware, and the command you
+used. Attach the `resolved_config.yaml` from your run directory so others
+can repeat it. If you have numbers, add them even if they are rough: BPB,
+acceptance rate, wall-clock, anything.
+
+Negative results count too. They save the next
+person from trying it too ;D
 
 ## TODO
 
@@ -279,9 +297,9 @@ Full tables, raw numbers, and production config: [ABLATIONS.md](docs/ABLATIONS.m
 - Windows support
 
 **Todo:**
+- Inference improvements
 - Multi-GPU / larger-scale training runs
 - MacOS support
-- Inference improvements
 - Test acceptance rates on larger checkpoints (root-cause investigation)
 
 ## Docs
