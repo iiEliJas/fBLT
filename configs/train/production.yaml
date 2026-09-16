@@ -18,4 +18,3 @@ t-hi-start: 0.8
 mask-warmup: 33200
 mask-scale: 0.3
 cross-attn: all
-save-weights: runs/my_checkpoint.fblt

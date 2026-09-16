@@ -1498,6 +1498,10 @@ int main(int argc, char **argv) {
             blt_tensor_download(&loss, &lv, sizeof(float));
             if (loss_fp) fprintf(loss_fp, "%zu %.6f\n", step + 1, (double)lv);
             running += lv;
+            running_n++;
+
+            blt_model_backward(model, &bytes_in, patches, M, NULL, 0, grad, scratch);
+
             if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
                 log_gradient_activation_dump(adump_fp, step + 1, model, grad);
         }

@@ -414,9 +414,6 @@ int main(int argc, char **argv) {
     uint8_t *output = (uint8_t *)malloc(total_out);
     BLT_REQUIRE(output != NULL, "infer: output buffer alloc failed");
 
-    // Copy prompt into output prefix.
-    memcpy(output, prompt_bytes, prompt_len);
-
     // Generation dispatch.
     blt_infer_stats st;
     memset(&st, 0, sizeof(st));
@@ -425,7 +422,7 @@ int main(int argc, char **argv) {
 
     switch (a.method) {
     case M_GREEDY:
-        blt_generate_greedy(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output + prompt_len, scratch);
+        blt_generate_greedy(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, scratch);
         st.nfe_encoder_global = a.new_bytes;
         st.nfe_decoder = a.new_bytes;
         break;
@@ -434,8 +431,8 @@ int main(int argc, char **argv) {
         memset(&sc, 0, sizeof(sc));
         sc.window_k = a.k;
         sc.d0_mode = BLT_D0_LEARNED;
-        blt_generate_greedy_selfspec(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output + prompt_len, &sc,
-                                     &st, scratch);
+        blt_generate_greedy_selfspec(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, &sc, &st,
+                                     scratch);
         break;
     }
     case M_BLOCKDIFF: {
@@ -452,8 +449,8 @@ int main(int argc, char **argv) {
             gc.accept_target = a.accept_target;
             gc.adapt_window = a.adapt_window;
         }
-        blt_generate_greedy_blockdiff(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output + prompt_len, &gc,
-                                      &st, scratch);
+        blt_generate_greedy_blockdiff(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, &gc, &st,
+                                      scratch);
         break;
     }
     case M_BLOCKDV: {
@@ -471,8 +468,8 @@ int main(int argc, char **argv) {
             gc.accept_target = a.accept_target;
             gc.adapt_window = a.adapt_window;
         }
-        blt_generate_greedy_blockdiff_verify(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes,
-                                             output + prompt_len, &gc, &st, scratch);
+        blt_generate_greedy_blockdiff_verify(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, &gc, &st,
+                                             scratch);
         break;
     }
     }

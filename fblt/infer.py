@@ -54,6 +54,23 @@ _SHAPE_FIELDS: typing.Tuple[str, ...] = (
 )
 
 
+def _find_resolved_config(checkpoint_path: str) -> typing.Optional[str]:
+    start = os.path.dirname(os.path.abspath(checkpoint_path))
+
+    # check checkpoint dir and parents
+    cur = start
+    while True:
+        candidate = os.path.join(cur, "resolved_config.yaml")
+        if os.path.isfile(candidate):
+            return candidate
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+
+    return None
+
+
 def main() -> None:
     args = _parse_args()
 
@@ -64,10 +81,16 @@ def main() -> None:
     # Build config
     cfg = load_config(InferConfig, args.config, args.override)
 
-    # auto shape-matching from resolved_config.yaml next to checkpoint
-    checkpoint_dir = os.path.dirname(args.checkpoint)
-    resolved_path = os.path.join(checkpoint_dir, "resolved_config.yaml")
-    if os.path.isfile(resolved_path):
+    # track which fields were explicitly overridden via CLI
+    overridden_fields: typing.Set[str] = set()
+    if args.override:
+        for ov in args.override:
+            if "=" in ov:
+                overridden_fields.add(ov.split("=", 1)[0].replace("-", "_"))
+
+    # auto shape-matching from resolved_config.yaml — walk up from checkpoint
+    resolved_path = _find_resolved_config(args.checkpoint)
+    if resolved_path is not None and os.path.isfile(resolved_path):
         with open(resolved_path, "r") as fh:
             resolved = yaml.safe_load(fh) or {}
         if isinstance(resolved, dict):
@@ -77,13 +100,24 @@ def main() -> None:
                     resolved[key] = resolved["layers"]
             updated = False
             for field_name in _SHAPE_FIELDS:
+                if field_name in overridden_fields:
+                    continue
                 current = getattr(cfg, field_name)
                 default_val = defaults[field_name]
                 if current == default_val and field_name in resolved:
                     setattr(cfg, field_name, resolved[field_name])
                     updated = True
+            # auto-detect patching strategy: training without --entropy-patches
+            # uses fixed-stride-4, so inference should match
+            if (
+                "fixed_patches" not in overridden_fields
+                and not cfg.fixed_patches
+                and not resolved.get("entropy_patches", False)
+            ):
+                cfg.fixed_patches = True
+                updated = True
             if updated:
-                print("note: auto-detected shape from resolved_config.yaml", file=sys.stderr)
+                print("note: auto-detected config from resolved_config.yaml", file=sys.stderr)
 
     # CLI overrides — these always win
     cfg.backend = args.backend
