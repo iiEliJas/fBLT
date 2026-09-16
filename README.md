@@ -9,6 +9,8 @@ Based on two papers from Meta FAIR (with Stanford and University of Washington c
 - [Byte Latent Transformer](https://arxiv.org/abs/2412.09871) - Byte modeling with entropy-based dynamic patching. Matches token-based LLM scaling, no vocabulary needed.
 - [Fast Byte Latent Transformer](https://arxiv.org/abs/2605.08044) - Faster inference with diffusion decoding and self-speculation.
 
+*Status*: research prototype
+
 ## Table of contents
 
 - [How it works](#how-it-works)
