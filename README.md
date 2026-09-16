@@ -56,8 +56,7 @@ python fblt/scripts/build_sample_corpus.py  # generate sample training data from
 fblt-train --config configs/train/debug.yaml --backend cpu
 
 # Generate text from the trained checkpoint (auto-shapes from resolved_config.yaml)
-CKPT=$(ls runs/debug-*/checkpoint.fblt | head -1)
-fblt-infer --checkpoint "$CKPT" --backend cpu --prompt "int main"
+fblt-infer --checkpoint "runs/debug-*/checkpoint.fblt" --backend cpu --prompt "int main"
 ```
 
 The sample corpus is generated from the repo's own `.c`/`.h` source files (~1.1 MB) under the Apache 2.0 license. The debug config trains a small model in seconds. For production training, use `configs/train/production.yaml` with your own larger corpus (e.g., the stack-smol-C-derived dataset used for the benchmark results).
@@ -275,10 +274,11 @@ Full tables, raw numbers, and production config: [ABLATIONS.md](docs/ABLATIONS.m
 - Auto shape-matching from resolved_config.yaml
 - Run-directory management with resolved config snapshots
 - YAML configs for training and inference
+- Windows support
 
 **Todo:**
 - Multi-GPU / larger-scale training runs
-- Windows and MacOS support
+- MacOS support
 - Inference improvements
 - Test acceptance rates on larger checkpoints (root-cause investigation)
 
