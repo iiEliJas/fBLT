@@ -22,12 +22,7 @@ __pycache__/
 # Model files and data
 *.safetensors
 *.log
-data/dummy_entropy.bin
-data/the-stack-smol
-data/tests/
-data/train.bin
-data/heldout.bin
-data/sample_corpus_manifest.json
+data/
 
 # Generated files
 configs/sweep_state.json
@@ -39,8 +34,6 @@ tmp/
 reports/
 runs/
 logs/
-graphify-out/
-omo/
 
 # Editor/IDE
 .vscode/
@@ -51,7 +44,3 @@ omo/
 
 # macOS
 .DS_Store
-
-# Papers
-docs/bltransformerPAPER.md
-docs/fast_bltPAPER.md

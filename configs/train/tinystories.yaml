@@ -1,0 +1,25 @@
+# BLT-D training on TinyStories (2 enc / 6 global / 2 dec)
+corpus: data/tinystories/train.bin
+eval-corpus: data/tinystories/heldout.bin
+embed: 256
+hidden: 512
+enc-layers: 2
+glob-layers: 6
+dec-layers: 2
+steps: 240000
+lr: 0.05
+lr-decay: 1
+optimizer: sgd
+diffusion: 1
+block-size: 4
+window: 256
+t-min: 0.1
+t-warmup-hi: 0.25
+t-hi-start: 0.8
+mask-warmup: 120000
+mask-scale: 0.3
+cross-attn: all
+report-every: 500
+cuda-scratch-mb: 1024
+save-weights: runs/tinystories.fblt
+save-every: 5000
