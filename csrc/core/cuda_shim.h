@@ -21,8 +21,10 @@ void blt_cuda_memset(void *dst, int value, size_t bytes);
 void blt_cuda_memcpy_h2d(void *dst, const void *src, size_t bytes);
 void blt_cuda_memcpy_d2h(void *dst, const void *src, size_t bytes);
 
-// Scratch arena: avoids per-call cudaMalloc/free. 256MB, thread-local, init on first use.
+// Scratch arena: avoids per-call cudaMalloc/free. Thread-local, init on first use.
+// Call blt_cuda_set_scratch_size before first use to override the default (512MB).
 blt_arena *blt_cuda_get_scratch_arena(void);
+void blt_cuda_set_scratch_size(size_t bytes);
 void blt_cuda_scratch_reset(void);
 
 // Flush stream + check for kernel errors.

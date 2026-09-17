@@ -121,6 +121,7 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 | Flag | Description |
 |------|-------------|
 | `--save-weights PATH` | Write weights after training |
+| `--save-every N` | Save checkpoint every N steps (0 = only at end) |
 | `--load-weights PATH` | Load weights before training (steps=0 → eval only) |
 | `--eval-corpus FILE` | Held-out corpus for causal BPB eval |
 | `--eval-windows N` | Eval window count (default 200) |
@@ -150,9 +151,10 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 
 ### Backend
 
-| Flag | Description |
-|------|-------------|
-| `--backend cpu\|cuda` | Select backend |
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--backend cpu\|cuda` | cpu | Select backend |
+| `--cuda-scratch-mb N` | 512 | CUDA scratch arena size in MB (temp allocations during ops) |
 
 ### Per-Submodule Overrides
 

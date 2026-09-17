@@ -44,7 +44,7 @@ def domain_of(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input", default="data/raw/the-stack-smol/data/c/data.json")
+    ap.add_argument("--input", default="data/the-stack-smol/data/c/data.json")
     ap.add_argument("--out-dir", default="data")
     args = ap.parse_args()
 

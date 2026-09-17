@@ -39,6 +39,7 @@
 #include "models/block_diffusion.h"
 #include "ops/optim.h"
 #include "ops/vecmath.h"
+#include "core/cuda_shim.h"
 
 typedef struct {
     const char *corpus_path;
@@ -56,6 +57,7 @@ typedef struct {
     const char *eval_path; // held-out corpus for causal-BPB eval
     size_t eval_windows;
     const char *save_path; // write weights here after training/eval setup
+    size_t save_every;     // periodic checkpoint interval (0 = only at end)
     const char *load_path; // load weights before training (steps=0 -> eval only)
     size_t eval_skip;      // bytes to skip before the first eval window
 
@@ -99,6 +101,8 @@ typedef struct {
     size_t eval_every;               // run causal BPB eval every N steps (0 = disabled)
     const char *loss_log;            // write per-step loss to FILE
     int deterministic;               // single-GPU bit-reproducible training
+    size_t cuda_scratch_mb;          // CUDA scratch arena size in MB (default 512)
+    size_t model_mb;                 // CUDA model arena size in MB (default 1024)
 } args_t;
 
 static void usage(void) {
@@ -118,6 +122,8 @@ static void usage(void) {
                     "  --max-norm F            gradient clip threshold (default 5.0)\n"
                     "  --seed S                RNG seed (default 7)\n"
                     "  --backend cpu|cuda      backend (default cpu)\n"
+                    "  --cuda-scratch-mb N     CUDA scratch arena size in MB (default 512)\n"
+                    "  --model-mb N           CUDA model arena size in MB (default 1024)\n"
                     "  --deterministic         bit-reproducible training (slower)\n"
                     "\n"
                     "model:\n"
@@ -162,6 +168,7 @@ static void usage(void) {
                     "\n"
                     "I/O:\n"
                     "  --save-weights PATH     write weights after training\n"
+                    "  --save-every N          save checkpoint every N steps (0 = only at end)\n"
                     "  --load-weights PATH     load weights before training\n"
                     "  --report-every K        print every K steps (default 25)\n"
                     "\n"
@@ -969,6 +976,7 @@ int main(int argc, char **argv) {
                 .eval_path = NULL,
                 .eval_windows = 200,
                 .save_path = NULL,
+                .save_every = 0,
                 .load_path = NULL,
                 .eval_skip = 0,
                 .t_min = 0.1f,
@@ -1002,7 +1010,9 @@ int main(int argc, char **argv) {
                 .batch_log = NULL,
                 .eval_every = 0,
                 .loss_log = NULL,
-                .deterministic = 0};
+                .deterministic = 0,
+                .cuda_scratch_mb = 0,
+                .model_mb = 0};
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--corpus") && i + 1 < argc) a.corpus_path = argv[++i];
@@ -1018,6 +1028,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--report-every") && i + 1 < argc) a.report_every = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--diffusion") && i + 1 < argc) a.diffusion = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--save-weights") && i + 1 < argc) a.save_path = argv[++i];
+        else if (!strcmp(argv[i], "--save-every") && i + 1 < argc) a.save_every = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--load-weights") && i + 1 < argc) a.load_path = argv[++i];
         else if (!strcmp(argv[i], "--eval-corpus") && i + 1 < argc) a.eval_path = argv[++i];
         else if (!strcmp(argv[i], "--eval-windows") && i + 1 < argc) a.eval_windows = strtoull(argv[++i], NULL, 10);
@@ -1080,6 +1091,9 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "--activation-dump-log") && i + 1 < argc) a.activation_dump_log = argv[++i];
         else if (!strcmp(argv[i], "--batch-log") && i + 1 < argc) a.batch_log = argv[++i];
         else if (!strcmp(argv[i], "--loss-log") && i + 1 < argc) a.loss_log = argv[++i];
+        else if (!strcmp(argv[i], "--cuda-scratch-mb") && i + 1 < argc)
+            a.cuda_scratch_mb = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--model-mb") && i + 1 < argc) a.model_mb = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--deterministic")) a.deterministic = 1;
         else {
             usage();
@@ -1137,6 +1151,9 @@ int main(int argc, char **argv) {
     }
     const blt_backend dev = a.use_cuda ? BLT_BACKEND_CUDA : BLT_BACKEND_CPU;
     g_blt_deterministic = a.deterministic;
+#ifdef BLT_WITH_CUDA
+    if (a.use_cuda && a.cuda_scratch_mb > 0) blt_cuda_set_scratch_size(a.cuda_scratch_mb * 1024ULL * 1024);
+#endif
 
     blt_arena *model_arena = blt_arena_create(a.use_cuda ? 1024ULL * 1024 * 1024 : 64 * 1024 * 1024, dev);
     blt_arena *scratch = blt_arena_create(256 * 1024 * 1024, dev);
@@ -1359,6 +1376,9 @@ int main(int argc, char **argv) {
     for (size_t step = 0; step < a.steps; step++) {
         if (timing) ts0 = blt_time_sec();
         blt_arena_reset(scratch);
+#ifdef BLT_WITH_CUDA
+        if (a.use_cuda) blt_cuda_scratch_reset();
+#endif
 
         const size_t w = step % num_windows;
         const uint8_t *text = corpus + w * a.window;
@@ -1458,7 +1478,8 @@ int main(int argc, char **argv) {
 
             float lv;
             blt_tensor_download(&loss, &lv, sizeof(float));
-            if (loss_fp) fprintf(loss_fp, "%zu %.6f\n", step + 1, (double)lv);
+            if (loss_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
+                fprintf(loss_fp, "%zu %.6f\n", step + 1, (double)lv);
             if (timing) {
                 tsB = blt_time_sec();
                 t_fwd += tsB - tsA;
@@ -1496,7 +1517,8 @@ int main(int argc, char **argv) {
 
             float lv;
             blt_tensor_download(&loss, &lv, sizeof(float));
-            if (loss_fp) fprintf(loss_fp, "%zu %.6f\n", step + 1, (double)lv);
+            if (loss_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
+                fprintf(loss_fp, "%zu %.6f\n", step + 1, (double)lv);
             running += lv;
             running_n++;
 
@@ -1518,9 +1540,11 @@ int main(int argc, char **argv) {
         }
 
         if (timing) tsC = blt_time_sec();
-        if (cnorm_fp) log_component_norms(cnorm_fp, step + 1, model, grad);
+        if (cnorm_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
+            log_component_norms(cnorm_fp, step + 1, model, grad);
         float pre_clip_norm = clip_all(model, grad, a.max_norm);
-        if (gnorm_fp) fprintf(gnorm_fp, "%zu %.6f\n", step + 1, pre_clip_norm);
+        if (gnorm_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
+            fprintf(gnorm_fp, "%zu %.6f\n", step + 1, pre_clip_norm);
         if (unorm_fp && pre_clip_norm > 100.0f) {
             float post_clip = pre_clip_norm <= a.max_norm ? pre_clip_norm : a.max_norm;
             float u_norm;
@@ -1535,7 +1559,8 @@ int main(int argc, char **argv) {
             } else {
                 u_norm = lr * post_clip;
             }
-            fprintf(unorm_fp, "%zu %.6f %.6f\n", step + 1, post_clip, u_norm);
+            if ((step + 1) % a.report_every == 0 || step + 1 == a.steps)
+                fprintf(unorm_fp, "%zu %.6f %.6f\n", step + 1, post_clip, u_norm);
         }
         if (a.optimizer == 1) {
             blt_adamw_config cfg = {
@@ -1562,6 +1587,12 @@ int main(int argc, char **argv) {
             fflush(stdout);
             running = 0.0;
             running_n = 0;
+        }
+
+        if (a.save_path && a.save_every > 0 && (step + 1) % a.save_every == 0) {
+            blt_model_save(model, a.save_path);
+            printf("[CKPT] periodic save step %zu -> %s\n", step + 1, a.save_path);
+            fflush(stdout);
         }
 
         // Periodic eval: run causal BPB on the held-out corpus every N steps
