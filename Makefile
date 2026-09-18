@@ -84,7 +84,12 @@ CORE_SRCS := \
 	$(SRC_DIR)/models/global_transformer.c \
 	$(SRC_DIR)/models/model.c \
 	$(SRC_DIR)/models/model_builder.c \
+	$(SRC_DIR)/train_args.c \
+	$(SRC_DIR)/train_optim.c \
+	$(SRC_DIR)/train_diag.c \
+	$(SRC_DIR)/train_eval.c \
 	$(SRC_DIR)/models/checkpoint.c \
+	$(SRC_DIR)/models/param_visitor.c \
 	$(SRC_DIR)/infer/stats.c \
 	$(SRC_DIR)/infer/rope_gather.c \
 	$(SRC_DIR)/infer/kv_cache.c \
