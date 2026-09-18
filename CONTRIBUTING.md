@@ -4,8 +4,7 @@ Thanks for your interest in contributing to fBLT.
 
 ## Branches
 
-- **`main`** is the stable branch. It always builds and passes `make test`.
-- **`dev`** is the integration branch. Open your PR against `dev`.
+- **`main`** is the stable branch. It always builds and passes `make test`. Open your PR against `main`.
 
 ## Local checks
 
