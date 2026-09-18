@@ -13,6 +13,7 @@
 #include "models/entropy.h"
 #include "models/local_encoder.h"
 #include "models/global_transformer.h"
+#include "models/model_builder.h"
 #include "models/local_decoder.h"
 #include "models/patcher.h"
 #include "models/block_diffusion.h"
