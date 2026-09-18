@@ -59,21 +59,6 @@ static uint64_t t_rng_next(uint64_t *state) {
     return z ^ (z >> 31);
 }
 
-static void layer_grads(blt_local_layer_grad *l, blt_tensor *ts[12]) {
-    ts[0] = &l->norm1_weight;
-    ts[1] = &l->attn_qkv_w;
-    ts[2] = &l->attn_proj_w;
-    ts[3] = &l->norm2_weight;
-    ts[4] = &l->ffn_up_w;
-    ts[5] = &l->ffn_gate_w;
-    ts[6] = &l->ffn_down_w;
-    ts[7] = &l->cross_norm_weight;
-    ts[8] = &l->cross_weight_q;
-    ts[9] = &l->cross_weight_k;
-    ts[10] = &l->cross_weight_v;
-    ts[11] = &l->cross_weight_proj;
-}
-
 int main(int argc, char **argv) {
     args_t a = parse_args(argc, argv);
 
@@ -542,7 +527,7 @@ int main(int argc, char **argv) {
             double remaining = (double)(a.steps - step - 1) / rate;
             size_t rem_h = (size_t)remaining / 3600;
             size_t rem_m = ((size_t)remaining % 3600) / 60;
-            printf("step %6zu/%zu  epoch %zu/%zu  avg_loss %.4f  ETA %zuh%02um\n", step + 1, a.steps, epoch,
+            printf("step %6zu/%zu  epoch %zu/%zu  avg_loss %.4f  ETA %zuh%02zum\n", step + 1, a.steps, epoch,
                    total_epochs, running / running_n, rem_h, rem_m);
             fflush(stdout);
             running = 0.0;
