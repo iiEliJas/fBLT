@@ -40,6 +40,9 @@
 #include "ops/optim.h"
 #include "ops/vecmath.h"
 #include "core/cuda_shim.h"
+#include "models/param_visitor.h"
+
+#define BLT_MAX_PARAMS 4096
 
 typedef struct {
     const char *corpus_path;
@@ -195,10 +198,6 @@ static uint64_t t_rng_next(uint64_t *state) {
     return z ^ (z >> 31);
 }
 
-static float grad_sq(blt_tensor *t) {
-    return blt_vec_dot(t->backend, (const float *)t->data, (const float *)t->data, t->numel);
-}
-
 static void layer_grads(blt_local_layer_grad *l, blt_tensor *ts[12]) {
     ts[0] = &l->norm1_weight;
     ts[1] = &l->attn_qkv_w;
@@ -214,51 +213,32 @@ static void layer_grads(blt_local_layer_grad *l, blt_tensor *ts[12]) {
     ts[11] = &l->cross_weight_proj;
 }
 
+struct clip_sq_ctx {
+    float sq;
+};
+
+static void clip_sq_fn(float *p, const blt_param_info *info, void *ctx) {
+    struct clip_sq_ctx *c = (struct clip_sq_ctx *)ctx;
+    c->sq += blt_vec_dot(info->backend, (const float *)p, (const float *)p, info->numel);
+}
+
+struct clip_scale_ctx {
+    float scale;
+};
+
+static void clip_scale_fn(float *p, const blt_param_info *info, void *ctx) {
+    struct clip_scale_ctx *c = (struct clip_scale_ctx *)ctx;
+    for (size_t i = 0; i < info->numel; i++) p[i] *= c->scale;
+}
+
 static float clip_all(blt_model *m, blt_model_grad *g, float max_norm) {
-    float sq = grad_sq(&g->encoder_grad->embedding_grad);
-    for (size_t i = 0; i < m->encoder->ngram_weights.num_tables; i++)
-        sq += grad_sq(&g->encoder_grad->ngram_grads.tables[i]);
-    blt_tensor *ts[12];
-    for (size_t i = 0; i < m->encoder->config.num_layers; i++) {
-        layer_grads(&g->encoder_grad->layer_grads[i], ts);
-        for (size_t j = 0; j < 12; j++) sq += grad_sq(ts[j]);
-    }
-    for (size_t i = 0; i < m->global->stack.num_layers; i++) {
-        blt_transformer_layer_grad *l = &g->global_grad->stack_grad->layer_grads[i];
-        blt_tensor *tt[7] = {&l->norm1_weight, &l->attn_qkv_w, &l->attn_proj_w, &l->norm2_weight,
-                             &l->ffn_up_w,     &l->ffn_gate_w, &l->ffn_down_w};
-        for (size_t j = 0; j < 7; j++) sq += grad_sq(tt[j]);
-    }
-    for (size_t i = 0; i < m->decoder->config.num_layers; i++) {
-        layer_grads(&g->decoder_grad->layer_grads[i], ts);
-        for (size_t j = 0; j < 12; j++) sq += grad_sq(ts[j]);
-    }
-    sq += grad_sq(&g->decoder_grad->lm_head_grad);
-    sq += grad_sq(&g->decoder_grad->d0_embed_grad);
+    struct clip_sq_ctx sq_ctx = {0.0f};
+    blt_model_visit_params(m, g, clip_sq_fn, &sq_ctx, 1);
 
-    const float norm = sqrtf(sq);
+    const float norm = sqrtf(sq_ctx.sq);
     if (norm <= max_norm || norm == 0.0f) return norm;
-    const float scale = max_norm / norm;
-
-    blt_scale(&g->encoder_grad->embedding_grad, scale);
-    for (size_t i = 0; i < m->encoder->ngram_weights.num_tables; i++)
-        blt_scale(&g->encoder_grad->ngram_grads.tables[i], scale);
-    for (size_t i = 0; i < m->encoder->config.num_layers; i++) {
-        layer_grads(&g->encoder_grad->layer_grads[i], ts);
-        for (size_t j = 0; j < 12; j++) blt_scale(ts[j], scale);
-    }
-    for (size_t i = 0; i < m->global->stack.num_layers; i++) {
-        blt_transformer_layer_grad *l = &g->global_grad->stack_grad->layer_grads[i];
-        blt_tensor *tt[7] = {&l->norm1_weight, &l->attn_qkv_w, &l->attn_proj_w, &l->norm2_weight,
-                             &l->ffn_up_w,     &l->ffn_gate_w, &l->ffn_down_w};
-        for (size_t j = 0; j < 7; j++) blt_scale(tt[j], scale);
-    }
-    for (size_t i = 0; i < m->decoder->config.num_layers; i++) {
-        layer_grads(&g->decoder_grad->layer_grads[i], ts);
-        for (size_t j = 0; j < 12; j++) blt_scale(ts[j], scale);
-    }
-    blt_scale(&g->decoder_grad->lm_head_grad, scale);
-    blt_scale(&g->decoder_grad->d0_embed_grad, scale);
+    struct clip_scale_ctx sc_ctx = {max_norm / norm};
+    blt_model_visit_params(m, g, clip_scale_fn, &sc_ctx, 1);
     return norm;
 }
 
@@ -266,126 +246,87 @@ static float clip_all(blt_model *m, blt_model_grad *g, float max_norm) {
 // Encoder split into embedding / ngram / per-layer to pinpoint
 // which sub-tensor is responsible for encoder-dominated gradient spikes.
 // Decoder layers split into self_attn / cross_attn / ffn for the same reason.
+struct comp_norm_ctx {
+    float enc_embed_sq;
+    float enc_ngram_sq;
+    float enc_layers_sq;
+    float glob_sq;
+    float dec_self_sq;
+    float dec_cross_sq;
+    float dec_ffn_sq;
+    float head_sq;
+    int embed_seen;
+};
+
+static void comp_norm_fn(float *p, const blt_param_info *info, void *ctx) {
+    struct comp_norm_ctx *c = (struct comp_norm_ctx *)ctx;
+    float sq = blt_vec_dot(info->backend, (const float *)p, (const float *)p, info->numel);
+    switch (info->component_group) {
+    case BLT_GROUP_EMBED:
+        if (!c->embed_seen) {
+            c->enc_embed_sq += sq;
+            c->embed_seen = 1;
+        } else {
+            c->enc_ngram_sq += sq;
+        }
+        break;
+    case BLT_GROUP_ENC_SELF:
+    case BLT_GROUP_ENC_CROSS:
+        c->enc_layers_sq += sq;
+        break;
+    case BLT_GROUP_GLOB:
+        c->glob_sq += sq;
+        break;
+    case BLT_GROUP_DEC_SELF:
+        if (info->param_in_layer <= 2) c->dec_self_sq += sq;
+        else c->dec_ffn_sq += sq;
+        break;
+    case BLT_GROUP_DEC_CROSS:
+        c->dec_cross_sq += sq;
+        break;
+    case BLT_GROUP_HEAD:
+        c->head_sq += sq;
+        break;
+    }
+}
+
 static void log_component_norms(FILE *fp, size_t step, blt_model *m, blt_model_grad *g) {
-    float enc_embed_sq = grad_sq(&g->encoder_grad->embedding_grad);
+    struct comp_norm_ctx ctx = {0};
+    blt_model_visit_params(m, g, comp_norm_fn, &ctx, 1);
 
-    float enc_ngram_sq = 0.0f;
-    for (size_t i = 0; i < m->encoder->ngram_weights.num_tables; i++)
-        enc_ngram_sq += grad_sq(&g->encoder_grad->ngram_grads.tables[i]);
+    const float total_norm = sqrtf(ctx.enc_embed_sq + ctx.enc_ngram_sq + ctx.enc_layers_sq + ctx.glob_sq +
+                                   ctx.dec_self_sq + ctx.dec_cross_sq + ctx.dec_ffn_sq + ctx.head_sq);
 
-    float enc_layers_sq = 0.0f;
-    blt_tensor *ts[12];
-    for (size_t i = 0; i < m->encoder->config.num_layers; i++) {
-        layer_grads(&g->encoder_grad->layer_grads[i], ts);
-        for (size_t j = 0; j < 12; j++) enc_layers_sq += grad_sq(ts[j]);
-    }
+    fprintf(fp, "%zu %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f\n", step, sqrtf(ctx.enc_embed_sq),
+            sqrtf(ctx.enc_ngram_sq), sqrtf(ctx.enc_layers_sq), sqrtf(ctx.glob_sq), sqrtf(ctx.dec_self_sq),
+            sqrtf(ctx.dec_cross_sq), sqrtf(ctx.dec_ffn_sq), sqrtf(ctx.head_sq), total_norm);
+}
 
-    float glob_sq = 0.0f;
-    for (size_t i = 0; i < m->global->stack.num_layers; i++) {
-        blt_transformer_layer_grad *l = &g->global_grad->stack_grad->layer_grads[i];
-        blt_tensor *tt[7] = {&l->norm1_weight, &l->attn_qkv_w, &l->attn_proj_w, &l->norm2_weight,
-                             &l->ffn_up_w,     &l->ffn_gate_w, &l->ffn_down_w};
-        for (size_t j = 0; j < 7; j++) glob_sq += grad_sq(tt[j]);
-    }
-    const float glob_norm = sqrtf(glob_sq);
+struct sgd_ctx {
+    float lr;
+};
 
-    float dec_self_sq = 0.0f, dec_cross_sq = 0.0f, dec_ffn_sq = 0.0f;
-    for (size_t i = 0; i < m->decoder->config.num_layers; i++) {
-        layer_grads(&g->decoder_grad->layer_grads[i], ts);
-        dec_self_sq += grad_sq(ts[0]) + grad_sq(ts[1]) + grad_sq(ts[2]);
-        dec_cross_sq += grad_sq(ts[7]) + grad_sq(ts[8]) + grad_sq(ts[9]) + grad_sq(ts[10]) + grad_sq(ts[11]);
-        dec_ffn_sq += grad_sq(ts[3]) + grad_sq(ts[4]) + grad_sq(ts[5]) + grad_sq(ts[6]);
-    }
-    const float dec_self_norm = sqrtf(dec_self_sq);
-    const float dec_cross_norm = sqrtf(dec_cross_sq);
-    const float dec_ffn_norm = sqrtf(dec_ffn_sq);
-
-    float head_sq = grad_sq(&g->decoder_grad->lm_head_grad) + grad_sq(&g->decoder_grad->d0_embed_grad);
-    const float head_norm = sqrtf(head_sq);
-
-    const float total_norm = sqrtf(enc_embed_sq + enc_ngram_sq + enc_layers_sq + glob_sq + dec_self_sq + dec_cross_sq +
-                                   dec_ffn_sq + head_sq);
-
-    fprintf(fp, "%zu %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f\n", step, sqrtf(enc_embed_sq), sqrtf(enc_ngram_sq),
-            sqrtf(enc_layers_sq), glob_norm, dec_self_norm, dec_cross_norm, dec_ffn_norm, head_norm, total_norm);
+static void sgd_pair_fn(float *w, float *g, const blt_param_info *info, void *ctx) {
+    float lr = ((struct sgd_ctx *)ctx)->lr;
+    for (size_t i = 0; i < info->numel; i++) w[i] -= lr * g[i];
 }
 
 static void sgd_all(blt_model *m, blt_model_grad *g, float lr) {
-    blt_local_encoder *enc = m->encoder;
-    blt_local_encoder_grad *eg = g->encoder_grad;
-    blt_sgd_step(&enc->byte_embedding_weight, &eg->embedding_grad, lr);
-    for (size_t i = 0; i < enc->ngram_weights.num_tables; i++)
-        blt_sgd_step(&enc->ngram_weights.tables[i], &eg->ngram_grads.tables[i], lr);
-
-    blt_tensor *ws[12];
-    blt_tensor *gs[12];
-    for (size_t i = 0; i < enc->config.num_layers; i++) {
-        blt_local_layer_storage *w = &enc->layers[i];
-        ws[0] = &w->norm1_weight;
-        ws[1] = &w->attn_qkv_w;
-        ws[2] = &w->attn_proj_w;
-        ws[3] = &w->norm2_weight;
-        ws[4] = &w->ffn_up_w;
-        ws[5] = &w->ffn_gate_w;
-        ws[6] = &w->ffn_down_w;
-        ws[7] = &w->cross_norm_weight;
-        ws[8] = &w->cross_weight_q;
-        ws[9] = &w->cross_weight_k;
-        ws[10] = &w->cross_weight_v;
-        ws[11] = &w->cross_weight_proj;
-        layer_grads(&eg->layer_grads[i], gs);
-        for (size_t j = 0; j < 12; j++) blt_sgd_step(ws[j], gs[j], lr);
-    }
-    for (size_t i = 0; i < m->global->stack.num_layers; i++) {
-        blt_transformer_layer_storage *w = &m->global->stack.layer_storage[i];
-        blt_transformer_layer_grad *gg = &g->global_grad->stack_grad->layer_grads[i];
-        blt_tensor *tt[7] = {&w->norm1_weight, &w->attn_qkv_w, &w->attn_proj_w, &w->norm2_weight,
-                             &w->ffn_up_w,     &w->ffn_gate_w, &w->ffn_down_w};
-        blt_tensor *tg[7] = {&gg->norm1_weight, &gg->attn_qkv_w, &gg->attn_proj_w, &gg->norm2_weight,
-                             &gg->ffn_up_w,     &gg->ffn_gate_w, &gg->ffn_down_w};
-        for (size_t j = 0; j < 7; j++) blt_sgd_step(tt[j], tg[j], lr);
-    }
-    for (size_t i = 0; i < m->decoder->config.num_layers; i++) {
-        blt_local_layer_storage *w = &m->decoder->layers[i];
-        ws[0] = &w->norm1_weight;
-        ws[1] = &w->attn_qkv_w;
-        ws[2] = &w->attn_proj_w;
-        ws[3] = &w->norm2_weight;
-        ws[4] = &w->ffn_up_w;
-        ws[5] = &w->ffn_gate_w;
-        ws[6] = &w->ffn_down_w;
-        ws[7] = &w->cross_norm_weight;
-        ws[8] = &w->cross_weight_q;
-        ws[9] = &w->cross_weight_k;
-        ws[10] = &w->cross_weight_v;
-        ws[11] = &w->cross_weight_proj;
-        layer_grads(&g->decoder_grad->layer_grads[i], gs);
-        for (size_t j = 0; j < 12; j++) blt_sgd_step(ws[j], gs[j], lr);
-    }
-    blt_sgd_step(&m->decoder->lm_head_weight, &g->decoder_grad->lm_head_grad, lr);
-    blt_sgd_step(&m->decoder->d0_embed_weight, &g->decoder_grad->d0_embed_grad, lr);
+    struct sgd_ctx ctx = {lr};
+    blt_model_visit_param_pairs(m, g, sgd_pair_fn, &ctx);
 }
 
 // AdamW state: one exp_avg + one exp_avg_sq per parameter tensor.
 // Allocated once before training; zero-initialized by arena.
 typedef struct {
-    blt_tensor em;  // exp_avg
-    blt_tensor esq; // exp_avg_sq
+    blt_tensor em;
+    blt_tensor esq;
 } adamw_pair;
 
 typedef struct {
-    adamw_pair emb;             // byte_embedding
-    adamw_pair *ngram;          // [num_tables]
-    adamw_pair enc_layer[128];  // 12 per encoder layer, indexed enc_layer[layer*12+j]
-    adamw_pair glob_layer[128]; // 7 per global layer
-    adamw_pair dec_layer[128];  // 12 per decoder layer
-    adamw_pair lm_head;
-    adamw_pair d0_embed;
-    size_t n_enc_layers;
-    size_t n_glob_layers;
-    size_t n_dec_layers;
-    size_t n_ngram;
-    size_t step; // 1-based step counter for bias correction
+    adamw_pair flat[BLT_MAX_PARAMS];
+    size_t n;
+    size_t step;
 } adamw_state;
 
 static adamw_pair mk_pair(blt_arena *arena, const blt_tensor *ref) {
@@ -398,228 +339,127 @@ static adamw_pair mk_pair(blt_arena *arena, const blt_tensor *ref) {
 static adamw_state *adamw_state_create(blt_arena *arena, blt_model *m) {
     adamw_state *s = (adamw_state *)malloc(sizeof(adamw_state));
     memset(s, 0, sizeof(*s));
-    s->n_enc_layers = m->encoder->config.num_layers;
-    s->n_glob_layers = m->global->stack.num_layers;
-    s->n_dec_layers = m->decoder->config.num_layers;
-    s->n_ngram = m->encoder->ngram_weights.num_tables;
     s->step = 0;
+    int idx = 0;
 
-    s->emb = mk_pair(arena, &m->encoder->byte_embedding_weight);
-    s->ngram = (adamw_pair *)malloc(sizeof(adamw_pair) * s->n_ngram);
-    memset(s->ngram, 0, sizeof(adamw_pair) * s->n_ngram);
-    for (size_t i = 0; i < s->n_ngram; i++) s->ngram[i] = mk_pair(arena, &m->encoder->ngram_weights.tables[i]);
-
-    for (size_t i = 0; i < s->n_enc_layers; i++) {
+    s->flat[idx++] = mk_pair(arena, &m->encoder->byte_embedding_weight);
+    for (size_t i = 0; i < m->encoder->ngram_weights.num_tables; i++)
+        s->flat[idx++] = mk_pair(arena, &m->encoder->ngram_weights.tables[i]);
+    for (size_t i = 0; i < m->encoder->config.num_layers; i++) {
         blt_local_layer_storage *w = &m->encoder->layers[i];
-        s->enc_layer[i * 12 + 0] = mk_pair(arena, &w->norm1_weight);
-        s->enc_layer[i * 12 + 1] = mk_pair(arena, &w->attn_qkv_w);
-        s->enc_layer[i * 12 + 2] = mk_pair(arena, &w->attn_proj_w);
-        s->enc_layer[i * 12 + 3] = mk_pair(arena, &w->norm2_weight);
-        s->enc_layer[i * 12 + 4] = mk_pair(arena, &w->ffn_up_w);
-        s->enc_layer[i * 12 + 5] = mk_pair(arena, &w->ffn_gate_w);
-        s->enc_layer[i * 12 + 6] = mk_pair(arena, &w->ffn_down_w);
-        s->enc_layer[i * 12 + 7] = mk_pair(arena, &w->cross_norm_weight);
-        s->enc_layer[i * 12 + 8] = mk_pair(arena, &w->cross_weight_q);
-        s->enc_layer[i * 12 + 9] = mk_pair(arena, &w->cross_weight_k);
-        s->enc_layer[i * 12 + 10] = mk_pair(arena, &w->cross_weight_v);
-        s->enc_layer[i * 12 + 11] = mk_pair(arena, &w->cross_weight_proj);
+        s->flat[idx++] = mk_pair(arena, &w->norm1_weight);
+        s->flat[idx++] = mk_pair(arena, &w->attn_qkv_w);
+        s->flat[idx++] = mk_pair(arena, &w->attn_proj_w);
+        s->flat[idx++] = mk_pair(arena, &w->norm2_weight);
+        s->flat[idx++] = mk_pair(arena, &w->ffn_up_w);
+        s->flat[idx++] = mk_pair(arena, &w->ffn_gate_w);
+        s->flat[idx++] = mk_pair(arena, &w->ffn_down_w);
+        s->flat[idx++] = mk_pair(arena, &w->cross_norm_weight);
+        s->flat[idx++] = mk_pair(arena, &w->cross_weight_q);
+        s->flat[idx++] = mk_pair(arena, &w->cross_weight_k);
+        s->flat[idx++] = mk_pair(arena, &w->cross_weight_v);
+        s->flat[idx++] = mk_pair(arena, &w->cross_weight_proj);
     }
-    for (size_t i = 0; i < s->n_glob_layers; i++) {
+    for (size_t i = 0; i < m->global->stack.num_layers; i++) {
         blt_transformer_layer_storage *w = &m->global->stack.layer_storage[i];
-        s->glob_layer[i * 7 + 0] = mk_pair(arena, &w->norm1_weight);
-        s->glob_layer[i * 7 + 1] = mk_pair(arena, &w->attn_qkv_w);
-        s->glob_layer[i * 7 + 2] = mk_pair(arena, &w->attn_proj_w);
-        s->glob_layer[i * 7 + 3] = mk_pair(arena, &w->norm2_weight);
-        s->glob_layer[i * 7 + 4] = mk_pair(arena, &w->ffn_up_w);
-        s->glob_layer[i * 7 + 5] = mk_pair(arena, &w->ffn_gate_w);
-        s->glob_layer[i * 7 + 6] = mk_pair(arena, &w->ffn_down_w);
+        s->flat[idx++] = mk_pair(arena, &w->norm1_weight);
+        s->flat[idx++] = mk_pair(arena, &w->attn_qkv_w);
+        s->flat[idx++] = mk_pair(arena, &w->attn_proj_w);
+        s->flat[idx++] = mk_pair(arena, &w->norm2_weight);
+        s->flat[idx++] = mk_pair(arena, &w->ffn_up_w);
+        s->flat[idx++] = mk_pair(arena, &w->ffn_gate_w);
+        s->flat[idx++] = mk_pair(arena, &w->ffn_down_w);
     }
-    for (size_t i = 0; i < s->n_dec_layers; i++) {
+    for (size_t i = 0; i < m->decoder->config.num_layers; i++) {
         blt_local_layer_storage *w = &m->decoder->layers[i];
-        s->dec_layer[i * 12 + 0] = mk_pair(arena, &w->norm1_weight);
-        s->dec_layer[i * 12 + 1] = mk_pair(arena, &w->attn_qkv_w);
-        s->dec_layer[i * 12 + 2] = mk_pair(arena, &w->attn_proj_w);
-        s->dec_layer[i * 12 + 3] = mk_pair(arena, &w->norm2_weight);
-        s->dec_layer[i * 12 + 4] = mk_pair(arena, &w->ffn_up_w);
-        s->dec_layer[i * 12 + 5] = mk_pair(arena, &w->ffn_gate_w);
-        s->dec_layer[i * 12 + 6] = mk_pair(arena, &w->ffn_down_w);
-        s->dec_layer[i * 12 + 7] = mk_pair(arena, &w->cross_norm_weight);
-        s->dec_layer[i * 12 + 8] = mk_pair(arena, &w->cross_weight_q);
-        s->dec_layer[i * 12 + 9] = mk_pair(arena, &w->cross_weight_k);
-        s->dec_layer[i * 12 + 10] = mk_pair(arena, &w->cross_weight_v);
-        s->dec_layer[i * 12 + 11] = mk_pair(arena, &w->cross_weight_proj);
+        s->flat[idx++] = mk_pair(arena, &w->norm1_weight);
+        s->flat[idx++] = mk_pair(arena, &w->attn_qkv_w);
+        s->flat[idx++] = mk_pair(arena, &w->attn_proj_w);
+        s->flat[idx++] = mk_pair(arena, &w->norm2_weight);
+        s->flat[idx++] = mk_pair(arena, &w->ffn_up_w);
+        s->flat[idx++] = mk_pair(arena, &w->ffn_gate_w);
+        s->flat[idx++] = mk_pair(arena, &w->ffn_down_w);
+        s->flat[idx++] = mk_pair(arena, &w->cross_norm_weight);
+        s->flat[idx++] = mk_pair(arena, &w->cross_weight_q);
+        s->flat[idx++] = mk_pair(arena, &w->cross_weight_k);
+        s->flat[idx++] = mk_pair(arena, &w->cross_weight_v);
+        s->flat[idx++] = mk_pair(arena, &w->cross_weight_proj);
     }
-    s->lm_head = mk_pair(arena, &m->decoder->lm_head_weight);
-    s->d0_embed = mk_pair(arena, &m->decoder->d0_embed_weight);
+    s->flat[idx++] = mk_pair(arena, &m->decoder->lm_head_weight);
+    s->flat[idx++] = mk_pair(arena, &m->decoder->d0_embed_weight);
+    s->n = (size_t)idx;
     return s;
 }
 
-static void adamw_step_pair(blt_tensor *param, blt_tensor *grad, adamw_pair *p, const blt_adamw_config *cfg) {
-    blt_adamw_step(param, grad, &p->em, &p->esq, cfg);
+struct adamw_pair_ctx {
+    adamw_state *s;
+    blt_adamw_config cfg;
+};
+
+static void adamw_pair_fn(float *w, float *g, const blt_param_info *info, void *ctx) {
+    struct adamw_pair_ctx *c = (struct adamw_pair_ctx *)ctx;
+    adamw_pair *p = &c->s->flat[info->idx];
+    float *m = (float *)p->em.data;
+    float *v = (float *)p->esq.data;
+    const float lr = c->cfg.lr;
+    const float b1 = c->cfg.beta1;
+    const float b2 = c->cfg.beta2;
+    const float eps = c->cfg.eps;
+    const float wd = c->cfg.weight_decay;
+    const float bc1 = 1.0f - powf(b1, (float)c->cfg.step);
+    const float bc2 = 1.0f - powf(b2, (float)c->cfg.step);
+    for (size_t i = 0; i < info->numel; i++) {
+        m[i] = b1 * m[i] + (1.0f - b1) * g[i];
+        v[i] = b2 * v[i] + (1.0f - b2) * g[i] * g[i];
+        const float mhat = m[i] / bc1;
+        const float vhat = v[i] / bc2;
+        w[i] -= lr * (mhat / (sqrtf(vhat) + eps) + wd * w[i]);
+    }
 }
 
 static void adamw_all(blt_model *m, blt_model_grad *g, adamw_state *s, const blt_adamw_config *cfg) {
     s->step++;
-    blt_adamw_config c = *cfg;
-    c.step = s->step;
-
-    blt_local_encoder *enc = m->encoder;
-    blt_local_encoder_grad *eg = g->encoder_grad;
-    adamw_step_pair(&enc->byte_embedding_weight, &eg->embedding_grad, &s->emb, &c);
-    for (size_t i = 0; i < enc->ngram_weights.num_tables; i++)
-        adamw_step_pair(&enc->ngram_weights.tables[i], &eg->ngram_grads.tables[i], &s->ngram[i], &c);
-
-    blt_tensor *ws[12];
-    blt_tensor *gs[12];
-    for (size_t i = 0; i < enc->config.num_layers; i++) {
-        blt_local_layer_storage *w = &enc->layers[i];
-        ws[0] = &w->norm1_weight;
-        ws[1] = &w->attn_qkv_w;
-        ws[2] = &w->attn_proj_w;
-        ws[3] = &w->norm2_weight;
-        ws[4] = &w->ffn_up_w;
-        ws[5] = &w->ffn_gate_w;
-        ws[6] = &w->ffn_down_w;
-        ws[7] = &w->cross_norm_weight;
-        ws[8] = &w->cross_weight_q;
-        ws[9] = &w->cross_weight_k;
-        ws[10] = &w->cross_weight_v;
-        ws[11] = &w->cross_weight_proj;
-        layer_grads(&eg->layer_grads[i], gs);
-        for (size_t j = 0; j < 12; j++) adamw_step_pair(ws[j], gs[j], &s->enc_layer[i * 12 + j], &c);
-    }
-    for (size_t i = 0; i < m->global->stack.num_layers; i++) {
-        blt_transformer_layer_storage *w = &m->global->stack.layer_storage[i];
-        blt_transformer_layer_grad *gg = &g->global_grad->stack_grad->layer_grads[i];
-        blt_tensor *tt[7] = {&w->norm1_weight, &w->attn_qkv_w, &w->attn_proj_w, &w->norm2_weight,
-                             &w->ffn_up_w,     &w->ffn_gate_w, &w->ffn_down_w};
-        blt_tensor *tg[7] = {&gg->norm1_weight, &gg->attn_qkv_w, &gg->attn_proj_w, &gg->norm2_weight,
-                             &gg->ffn_up_w,     &gg->ffn_gate_w, &gg->ffn_down_w};
-        for (size_t j = 0; j < 7; j++) adamw_step_pair(tt[j], tg[j], &s->glob_layer[i * 7 + j], &c);
-    }
-    for (size_t i = 0; i < m->decoder->config.num_layers; i++) {
-        blt_local_layer_storage *w = &m->decoder->layers[i];
-        ws[0] = &w->norm1_weight;
-        ws[1] = &w->attn_qkv_w;
-        ws[2] = &w->attn_proj_w;
-        ws[3] = &w->norm2_weight;
-        ws[4] = &w->ffn_up_w;
-        ws[5] = &w->ffn_gate_w;
-        ws[6] = &w->ffn_down_w;
-        ws[7] = &w->cross_norm_weight;
-        ws[8] = &w->cross_weight_q;
-        ws[9] = &w->cross_weight_k;
-        ws[10] = &w->cross_weight_v;
-        ws[11] = &w->cross_weight_proj;
-        layer_grads(&g->decoder_grad->layer_grads[i], gs);
-        for (size_t j = 0; j < 12; j++) adamw_step_pair(ws[j], gs[j], &s->dec_layer[i * 12 + j], &c);
-    }
-    adamw_step_pair(&m->decoder->lm_head_weight, &g->decoder_grad->lm_head_grad, &s->lm_head, &c);
-    adamw_step_pair(&m->decoder->d0_embed_weight, &g->decoder_grad->d0_embed_grad, &s->d0_embed, &c);
+    struct adamw_pair_ctx ctx = {.s = s, .cfg = *cfg};
+    ctx.cfg.step = s->step;
+    blt_model_visit_param_pairs(m, g, adamw_pair_fn, &ctx);
 }
 
-// Compute ||update||^2 contribution from one parameter tensor (AdamW).
-// update_i = m_hat_i/(sqrt(v_hat_i)+eps) + wd*p_i.
-// Does NOT modify any tensor — reads only.
-static float adamw_unorm_one(blt_tensor *param, blt_tensor *grad, blt_tensor *em, blt_tensor *esq, float beta1,
-                             float beta2, float eps, float wd, size_t step) {
-    float bc1 = 1.0f - powf(beta1, (float)step);
-    float bc2 = 1.0f - powf(beta2, (float)step);
-    size_t n = param->numel;
-    float *pp = (float *)malloc(n * sizeof(float));
-    float *gg = (float *)malloc(n * sizeof(float));
-    float *mm = (float *)malloc(n * sizeof(float));
-    float *vv = (float *)malloc(n * sizeof(float));
-    blt_tensor_copy_to_host(param, pp, n * sizeof(float));
-    blt_tensor_copy_to_host(grad, gg, n * sizeof(float));
-    blt_tensor_copy_to_host(em, mm, n * sizeof(float));
-    blt_tensor_copy_to_host(esq, vv, n * sizeof(float));
-    float sq = 0.0f;
-    for (size_t i = 0; i < n; i++) {
-        float m_new = beta1 * mm[i] + (1.0f - beta1) * gg[i];
-        float v_new = beta2 * vv[i] + (1.0f - beta2) * gg[i] * gg[i];
+struct adamw_unorm_ctx {
+    adamw_state *s;
+    float b1, b2, ep, wd;
+    size_t step;
+    float sq;
+};
+
+static void adamw_unorm_fn(float *w, float *g, const blt_param_info *info, void *ctx) {
+    struct adamw_unorm_ctx *c = (struct adamw_unorm_ctx *)ctx;
+    adamw_pair *p = &c->s->flat[info->idx];
+    float *m = (float *)p->em.data;
+    float *v = (float *)p->esq.data;
+    const float bc1 = 1.0f - powf(c->b1, (float)c->step);
+    const float bc2 = 1.0f - powf(c->b2, (float)c->step);
+    for (size_t i = 0; i < info->numel; i++) {
+        float m_new = c->b1 * m[i] + (1.0f - c->b1) * g[i];
+        float v_new = c->b2 * v[i] + (1.0f - c->b2) * g[i] * g[i];
         float m_hat = m_new / bc1;
         float v_hat = v_new / bc2;
-        float u = m_hat / (sqrtf(v_hat) + eps) + wd * pp[i];
-        sq += u * u;
+        float u = m_hat / (sqrtf(v_hat) + c->ep) + c->wd * w[i];
+        c->sq += u * u;
     }
-    free(pp);
-    free(gg);
-    free(mm);
-    free(vv);
-    return sq;
 }
 
-// Total ||update|| across all model parameters (AdamW). Returns ||Δp||.
 static float adamw_update_norm(blt_model *m, blt_model_grad *g, adamw_state *s, const blt_adamw_config *cfg) {
-    size_t step = s->step + 1;
-    float b1 = cfg->beta1, b2 = cfg->beta2, ep = cfg->eps, wd = cfg->weight_decay;
-    float sq = 0.0f;
-
-    sq += adamw_unorm_one(&m->encoder->byte_embedding_weight, &g->encoder_grad->embedding_grad, &s->emb.em, &s->emb.esq,
-                          b1, b2, ep, wd, step);
-
-    for (size_t i = 0; i < m->encoder->ngram_weights.num_tables; i++)
-        sq += adamw_unorm_one(&m->encoder->ngram_weights.tables[i], &g->encoder_grad->ngram_grads.tables[i],
-                              &s->ngram[i].em, &s->ngram[i].esq, b1, b2, ep, wd, step);
-
-    blt_tensor *ws[12];
-    blt_tensor *gs[12];
-    for (size_t i = 0; i < m->encoder->config.num_layers; i++) {
-        blt_local_layer_storage *w = &m->encoder->layers[i];
-        ws[0] = &w->norm1_weight;
-        ws[1] = &w->attn_qkv_w;
-        ws[2] = &w->attn_proj_w;
-        ws[3] = &w->norm2_weight;
-        ws[4] = &w->ffn_up_w;
-        ws[5] = &w->ffn_gate_w;
-        ws[6] = &w->ffn_down_w;
-        ws[7] = &w->cross_norm_weight;
-        ws[8] = &w->cross_weight_q;
-        ws[9] = &w->cross_weight_k;
-        ws[10] = &w->cross_weight_v;
-        ws[11] = &w->cross_weight_proj;
-        layer_grads(&g->encoder_grad->layer_grads[i], gs);
-        for (size_t j = 0; j < 12; j++)
-            sq += adamw_unorm_one(ws[j], gs[j], &s->enc_layer[i * 12 + j].em, &s->enc_layer[i * 12 + j].esq, b1, b2, ep,
-                                  wd, step);
-    }
-    for (size_t i = 0; i < m->global->stack.num_layers; i++) {
-        blt_transformer_layer_storage *w = &m->global->stack.layer_storage[i];
-        blt_transformer_layer_grad *gg = &g->global_grad->stack_grad->layer_grads[i];
-        blt_tensor *tt[7] = {&w->norm1_weight, &w->attn_qkv_w, &w->attn_proj_w, &w->norm2_weight,
-                             &w->ffn_up_w,     &w->ffn_gate_w, &w->ffn_down_w};
-        blt_tensor *tg[7] = {&gg->norm1_weight, &gg->attn_qkv_w, &gg->attn_proj_w, &gg->norm2_weight,
-                             &gg->ffn_up_w,     &gg->ffn_gate_w, &gg->ffn_down_w};
-        for (size_t j = 0; j < 7; j++)
-            sq += adamw_unorm_one(tt[j], tg[j], &s->glob_layer[i * 7 + j].em, &s->glob_layer[i * 7 + j].esq, b1, b2, ep,
-                                  wd, step);
-    }
-    for (size_t i = 0; i < m->decoder->config.num_layers; i++) {
-        blt_local_layer_storage *w = &m->decoder->layers[i];
-        ws[0] = &w->norm1_weight;
-        ws[1] = &w->attn_qkv_w;
-        ws[2] = &w->attn_proj_w;
-        ws[3] = &w->norm2_weight;
-        ws[4] = &w->ffn_up_w;
-        ws[5] = &w->ffn_gate_w;
-        ws[6] = &w->ffn_down_w;
-        ws[7] = &w->cross_norm_weight;
-        ws[8] = &w->cross_weight_q;
-        ws[9] = &w->cross_weight_k;
-        ws[10] = &w->cross_weight_v;
-        ws[11] = &w->cross_weight_proj;
-        layer_grads(&g->decoder_grad->layer_grads[i], gs);
-        for (size_t j = 0; j < 12; j++)
-            sq += adamw_unorm_one(ws[j], gs[j], &s->dec_layer[i * 12 + j].em, &s->dec_layer[i * 12 + j].esq, b1, b2, ep,
-                                  wd, step);
-    }
-    sq += adamw_unorm_one(&m->decoder->lm_head_weight, &g->decoder_grad->lm_head_grad, &s->lm_head.em, &s->lm_head.esq,
-                          b1, b2, ep, wd, step);
-    sq += adamw_unorm_one(&m->decoder->d0_embed_weight, &g->decoder_grad->d0_embed_grad, &s->d0_embed.em,
-                          &s->d0_embed.esq, b1, b2, ep, wd, step);
-
-    return sqrtf(sq) * cfg->lr;
+    struct adamw_unorm_ctx ctx = {
+        .s = s,
+        .b1 = cfg->beta1,
+        .b2 = cfg->beta2,
+        .ep = cfg->eps,
+        .wd = cfg->weight_decay,
+        .step = s->step + 1,
+        .sq = 0.0f,
+    };
+    blt_model_visit_param_pairs(m, g, adamw_unorm_fn, &ctx);
+    return sqrtf(ctx.sq) * cfg->lr;
 }
 
 // Mean next-byte CE (nats/byte) over the clean rows of one window, computed
@@ -833,83 +673,82 @@ static void log_forward_activation_dump(FILE *fp, size_t step, const blt_tensor 
     if (logits) scan_log_tensor(fp, step, "fwd/logits", logits);
 }
 
-// Log gradient activation stats (after backward). Scans decoder head,
-// decoder layers, global layers, and encoder gradients.
+struct grad_dump_ctx {
+    FILE *fp;
+    size_t step;
+    float lm_head_max;
+    size_t lm_head_nan, lm_head_inf;
+    float d0_embed_max;
+    size_t d0_embed_nan, d0_embed_inf;
+    float dec_max;
+    size_t dec_nan, dec_inf;
+    float glob_max;
+    size_t glob_nan, glob_inf;
+    float enc_max;
+    size_t enc_nan, enc_inf;
+    int head_seen;
+};
+
+static void scan_floats(const float *data, size_t numel, float *max_abs, size_t *nan_count, size_t *inf_count) {
+    *max_abs = 0.0f;
+    *nan_count = 0;
+    *inf_count = 0;
+    for (size_t i = 0; i < numel; i++) {
+        float v = data[i];
+        float a = fabsf(v);
+        if (a > *max_abs) *max_abs = a;
+        if (isnan(v)) (*nan_count)++;
+        else if (isinf(v)) (*inf_count)++;
+    }
+}
+
+static void grad_dump_fn(float *p, const blt_param_info *info, void *ctx) {
+    struct grad_dump_ctx *c = (struct grad_dump_ctx *)ctx;
+    if (info->backend != BLT_BACKEND_CPU) return;
+    float mx;
+    size_t nn, ni;
+    scan_floats(p, info->numel, &mx, &nn, &ni);
+    float *max_p = NULL;
+    size_t *nan_p = NULL, *inf_p = NULL;
+    if (info->component_group == BLT_GROUP_HEAD) {
+        if (c->head_seen == 0) {
+            max_p = &c->lm_head_max;
+            nan_p = &c->lm_head_nan;
+            inf_p = &c->lm_head_inf;
+        } else {
+            max_p = &c->d0_embed_max;
+            nan_p = &c->d0_embed_nan;
+            inf_p = &c->d0_embed_inf;
+        }
+        c->head_seen++;
+    } else if (info->component_group == BLT_GROUP_DEC_SELF || info->component_group == BLT_GROUP_DEC_CROSS) {
+        max_p = &c->dec_max;
+        nan_p = &c->dec_nan;
+        inf_p = &c->dec_inf;
+    } else if (info->component_group == BLT_GROUP_GLOB) {
+        max_p = &c->glob_max;
+        nan_p = &c->glob_nan;
+        inf_p = &c->glob_inf;
+    } else {
+        max_p = &c->enc_max;
+        nan_p = &c->enc_nan;
+        inf_p = &c->enc_inf;
+    }
+    if (mx > *max_p) *max_p = mx;
+    *nan_p += nn;
+    *inf_p += ni;
+}
+
 static void log_gradient_activation_dump(FILE *fp, size_t step, blt_model *m, blt_model_grad *g) {
-    // Decoder head gradients
-    scan_log_tensor(fp, step, "grad/dec_lm_head", &g->decoder_grad->lm_head_grad);
-    scan_log_tensor(fp, step, "grad/dec_d0_embed", &g->decoder_grad->d0_embed_grad);
-
-    // Decoder layer gradients: max across all layers and weight tensors
-    {
-        float layer_max = 0.0f;
-        size_t layer_nan = 0, layer_inf = 0;
-        for (size_t i = 0; i < m->decoder->config.num_layers; i++) {
-            blt_tensor *ts[12];
-            layer_grads(&g->decoder_grad->layer_grads[i], ts);
-            for (size_t j = 0; j < 12; j++) {
-                float mx;
-                size_t nn, ni;
-                tensor_stats(ts[j], &mx, &nn, &ni);
-                if (mx > layer_max) layer_max = mx;
-                layer_nan += nn;
-                layer_inf += ni;
-            }
-        }
-        fprintf(fp, "%zu grad/dec_layers %.6f %zu %zu\n", step, layer_max, layer_nan, layer_inf);
-    }
-
-    // Global transformer gradients
-    {
-        float layer_max = 0.0f;
-        size_t layer_nan = 0, layer_inf = 0;
-        for (size_t i = 0; i < m->global->stack.num_layers; i++) {
-            blt_transformer_layer_grad *l = &g->global_grad->stack_grad->layer_grads[i];
-            blt_tensor *tt[7] = {&l->norm1_weight, &l->attn_qkv_w, &l->attn_proj_w, &l->norm2_weight,
-                                 &l->ffn_up_w,     &l->ffn_gate_w, &l->ffn_down_w};
-            for (size_t j = 0; j < 7; j++) {
-                float mx;
-                size_t nn, ni;
-                tensor_stats(tt[j], &mx, &nn, &ni);
-                if (mx > layer_max) layer_max = mx;
-                layer_nan += nn;
-                layer_inf += ni;
-            }
-        }
-        fprintf(fp, "%zu grad/glob_layers %.6f %zu %zu\n", step, layer_max, layer_nan, layer_inf);
-    }
-
-    // Encoder gradients
-    {
-        float enc_max = 0.0f;
-        size_t enc_nan = 0, enc_inf = 0;
-        float mx;
-        size_t nn, ni;
-
-        tensor_stats(&g->encoder_grad->embedding_grad, &mx, &nn, &ni);
-        if (mx > enc_max) enc_max = mx;
-        enc_nan += nn;
-        enc_inf += ni;
-
-        for (size_t i = 0; i < m->encoder->ngram_weights.num_tables; i++) {
-            tensor_stats(&g->encoder_grad->ngram_grads.tables[i], &mx, &nn, &ni);
-            if (mx > enc_max) enc_max = mx;
-            enc_nan += nn;
-            enc_inf += ni;
-        }
-
-        for (size_t i = 0; i < m->encoder->config.num_layers; i++) {
-            blt_tensor *ts[12];
-            layer_grads(&g->encoder_grad->layer_grads[i], ts);
-            for (size_t j = 0; j < 12; j++) {
-                tensor_stats(ts[j], &mx, &nn, &ni);
-                if (mx > enc_max) enc_max = mx;
-                enc_nan += nn;
-                enc_inf += ni;
-            }
-        }
-        fprintf(fp, "%zu grad/encoder %.6f %zu %zu\n", step, enc_max, enc_nan, enc_inf);
-    }
+    struct grad_dump_ctx c = {0};
+    c.fp = fp;
+    c.step = step;
+    blt_model_visit_params(m, g, grad_dump_fn, &c, 1);
+    fprintf(fp, "%zu grad/dec_lm_head %.6f %zu %zu\n", step, c.lm_head_max, c.lm_head_nan, c.lm_head_inf);
+    fprintf(fp, "%zu grad/dec_d0_embed %.6f %zu %zu\n", step, c.d0_embed_max, c.d0_embed_nan, c.d0_embed_inf);
+    fprintf(fp, "%zu grad/dec_layers %.6f %zu %zu\n", step, c.dec_max, c.dec_nan, c.dec_inf);
+    fprintf(fp, "%zu grad/glob_layers %.6f %zu %zu\n", step, c.glob_max, c.glob_nan, c.glob_inf);
+    fprintf(fp, "%zu grad/encoder %.6f %zu %zu\n", step, c.enc_max, c.enc_nan, c.enc_inf);
 }
 
 //----------------------------------------------------------------------
@@ -958,6 +797,13 @@ static void log_batch_properties(FILE *fp, size_t step, size_t window_offset, co
     fprintf(fp, "%zu %zu %016llx %zu %.3f %zu %zu %.4f %.6f %.6f %.6f\n", step, window_offset,
             (unsigned long long)whash, num_patches, avg_patch_len, n_valid, n_masked, masked_frac, t, loss_scale,
             eff_weight);
+}
+
+static void zero_norm_fn(float *p, const blt_param_info *info, void *ctx) {
+    (void)ctx;
+    if (info->is_norm) {
+        for (size_t i = 0; i < info->numel; i++) p[i] = 0.0f;
+    }
 }
 
 int main(int argc, char **argv) {
@@ -1445,21 +1291,7 @@ int main(int argc, char **argv) {
         for (size_t i = 0; i < model->encoder->ngram_weights.num_tables; i++)
             zero_tensor(&grad->encoder_grad->ngram_grads.tables[i]);
         zero_tensor(&grad->decoder_grad->d0_embed_grad);
-
-        for (size_t i = 0; i < model->encoder->config.num_layers; i++) {
-            zero_tensor(&grad->encoder_grad->layer_grads[i].norm1_weight);
-            zero_tensor(&grad->encoder_grad->layer_grads[i].norm2_weight);
-            zero_tensor(&grad->encoder_grad->layer_grads[i].cross_norm_weight);
-        }
-        for (size_t i = 0; i < model->global->stack.num_layers; i++) {
-            zero_tensor(&grad->global_grad->stack_grad->layer_grads[i].norm1_weight);
-            zero_tensor(&grad->global_grad->stack_grad->layer_grads[i].norm2_weight);
-        }
-        for (size_t i = 0; i < model->decoder->config.num_layers; i++) {
-            zero_tensor(&grad->decoder_grad->layer_grads[i].norm1_weight);
-            zero_tensor(&grad->decoder_grad->layer_grads[i].norm2_weight);
-            zero_tensor(&grad->decoder_grad->layer_grads[i].cross_norm_weight);
-        }
+        blt_model_visit_params(model, grad, zero_norm_fn, NULL, 1);
 
         if (a.diffusion) {
             size_t p_shape2[2] = {M, a.embed};
@@ -1727,10 +1559,7 @@ int main(int argc, char **argv) {
     blt_arena_destroy(model_arena);
     blt_arena_destroy(scratch);
     if (adamw_state_arena) blt_arena_destroy(adamw_state_arena);
-    if (aw) {
-        free(aw->ngram);
-        free(aw);
-    }
+    if (aw) free(aw);
     if (gnorm_fp) fclose(gnorm_fp);
     if (unorm_fp) fclose(unorm_fp);
     if (cnorm_fp) fclose(cnorm_fp);

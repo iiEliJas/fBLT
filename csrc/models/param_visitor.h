@@ -30,10 +30,15 @@ typedef struct {
     int layer_idx;       // layer index within submodel
     int param_in_layer;  // index within layer (0-6 self, 0-4 cross)
     int component_group; // BLT_GROUP_*
+    size_t numel;        // number of elements in tensor
+    int backend;         // BLT_BACKEND_CPU or BLT_BACKEND_CUDA
 } blt_param_info;
 
 // Callback type for blt_model_visit_params().
 typedef void (*blt_param_visitor_fn)(float *tensor, const blt_param_info *info, void *ctx);
+
+// Callback type for blt_model_visit_param_pairs(): receives both weight and grad pointers.
+typedef void (*blt_param_pair_visitor_fn)(float *weight, float *grad, const blt_param_info *info, void *ctx);
 
 // Visit every parameter (or gradient) tensor in the model.
 // Iteration order matches checkpoint.c blt_model_tensor_at():
@@ -45,6 +50,11 @@ typedef void (*blt_param_visitor_fn)(float *tensor, const blt_param_info *info, 
 // When visit_grads == 0, grad may be NULL.
 void blt_model_visit_params(const blt_model *model, blt_model_grad *grad, blt_param_visitor_fn fn, void *ctx,
                             int visit_grads);
+
+// Visit each parameter ONCE, providing both weight and grad pointer.
+// Same iteration order as blt_model_visit_params. info->numel and
+// info->backend come from the weight tensor.
+void blt_model_visit_param_pairs(const blt_model *model, blt_model_grad *grad, blt_param_pair_visitor_fn fn, void *ctx);
 
 #ifdef __cplusplus
 }
