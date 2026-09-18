@@ -1130,9 +1130,9 @@ int main(int argc, char **argv) {
     }
     fclose(fp);
 
-    size_t MS = 512; // max_seq_len headroom for clean + blocks
-    if (a.window < 8 || a.window > 256) {
-        fprintf(stderr, "--window must be in [8, 256]\n");
+    size_t MS = 1024; // max_seq_len headroom for clean + blocks
+    if (a.window < 8 || a.window > 512) {
+        fprintf(stderr, "--window must be in [8, 512]\n");
         return 1;
     }
 #if !defined(BLT_WITH_CUDA)
@@ -1156,7 +1156,7 @@ int main(int argc, char **argv) {
 #endif
 
     blt_arena *model_arena = blt_arena_create(a.use_cuda ? 1024ULL * 1024 * 1024 : 64 * 1024 * 1024, dev);
-    blt_arena *scratch = blt_arena_create(256 * 1024 * 1024, dev);
+    blt_arena *scratch = blt_arena_create(512 * 1024 * 1024, dev);
     blt_arena *adamw_state_arena = NULL;
     if (a.optimizer == 1) adamw_state_arena = blt_arena_create(32ULL * 1024 * 1024, dev);
     // Host arena for the segmentation LM + patcher (host-only by design),
@@ -1350,6 +1350,9 @@ int main(int argc, char **argv) {
     size_t num_windows = (size_t)fsize / a.window;
     BLT_REQUIRE(num_windows >= 1, "corpus smaller than one training window");
 
+    size_t total_epochs = (a.steps + num_windows - 1) / num_windows;
+    printf("train_blt_d: %zu windows (~%zu epochs)\n", num_windows, total_epochs);
+
     adamw_state *aw = NULL;
     if (a.optimizer == 1) aw = adamw_state_create(adamw_state_arena, model);
 
@@ -1372,6 +1375,8 @@ int main(int argc, char **argv) {
     double t_fwd = 0.0, t_bwd = 0.0, t_opt = 0.0, t_step = 0.0;
     double ts0, tsA, tsB, tsC, tsD;
     const int timing = (getenv("BLT_TRAIN_TIMING") != NULL);
+
+    double train_start = blt_time_sec();
 
     for (size_t step = 0; step < a.steps; step++) {
         if (timing) ts0 = blt_time_sec();
@@ -1582,8 +1587,14 @@ int main(int argc, char **argv) {
         }
 
         if ((step + 1) % a.report_every == 0 || step + 1 == a.steps) {
-            printf("step %6zu/%zu  window %zu/%zu  avg_loss %.4f\n", step + 1, a.steps, w + 1, num_windows,
-                   running / running_n);
+            size_t epoch = step / num_windows;
+            double elapsed = blt_time_sec() - train_start;
+            double rate = (double)(step + 1) / elapsed;
+            double remaining = (double)(a.steps - step - 1) / rate;
+            size_t rem_h = (size_t)remaining / 3600;
+            size_t rem_m = ((size_t)remaining % 3600) / 60;
+            printf("step %6zu/%zu  epoch %zu/%zu  avg_loss %.4f  ETA %zuh%02um\n", step + 1, a.steps, epoch,
+                   total_epochs, running / running_n, rem_h, rem_m);
             fflush(stdout);
             running = 0.0;
             running_n = 0;
