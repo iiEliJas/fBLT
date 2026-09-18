@@ -87,6 +87,7 @@ CORE_SRCS := \
 	$(SRC_DIR)/train_args.c \
 	$(SRC_DIR)/train_optim.c \
 	$(SRC_DIR)/train_diag.c \
+	$(SRC_DIR)/train_eval.c \
 	$(SRC_DIR)/models/checkpoint.c \
 	$(SRC_DIR)/models/param_visitor.c \
 	$(SRC_DIR)/infer/stats.c \
