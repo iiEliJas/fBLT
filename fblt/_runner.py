@@ -11,13 +11,15 @@ def _stream_output(proc: subprocess.Popen[bytes]) -> None:
     assert stderr_stream is not None
 
     def _read_stdout() -> None:
-        for chunk in iter(lambda: stdout_stream.read(4096), b""):
-            sys.stdout.buffer.write(chunk)
+        assert stdout_stream is not None
+        for line in iter(stdout_stream.readline, b""):
+            sys.stdout.buffer.write(line)
             sys.stdout.buffer.flush()
 
     def _read_stderr() -> None:
-        for chunk in iter(lambda: stderr_stream.read(4096), b""):
-            sys.stderr.buffer.write(chunk)
+        assert stderr_stream is not None
+        for line in iter(stderr_stream.readline, b""):
+            sys.stderr.buffer.write(line)
             sys.stderr.buffer.flush()
 
     t_out = threading.Thread(target=_read_stdout)
