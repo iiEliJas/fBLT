@@ -201,3 +201,107 @@ extern "C" void blt_fill_constant_cuda(blt_backend backend, float *data, size_t 
     blt_fill_constant_kernel<<<blocks, 256>>>(data, n, v);
     blt_cuda_launch_check("blt_fill_constant");
 }
+
+__global__ void blt_vec_scale_kernel(float *data, size_t n, float s) {
+    size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid < n) data[tid] *= s;
+}
+
+extern "C" void blt_cuda_vec_scale(float *data, float s, size_t n) {
+    unsigned blocks = (unsigned)((n + 255) / 256);
+    if (blocks > 4096) blocks = 4096;
+    if (blocks == 0) blocks = 1;
+    blt_vec_scale_kernel<<<blocks, 256>>>(data, n, s);
+    blt_cuda_launch_check("blt_vec_scale_kernel");
+}
+
+// ---------------------------------------------------------------------------
+// SGD: w[i] -= lr * g[i]
+// ---------------------------------------------------------------------------
+
+__global__ void blt_visitor_sgd_kernel(float *w, const float *g, float lr, size_t n) {
+    size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t stride = (size_t)gridDim.x * blockDim.x;
+    for (; i < n; i += stride) w[i] -= lr * g[i];
+}
+
+extern "C" void blt_cuda_sgd_step(float *w, const float *g, float lr, size_t n) {
+    unsigned blocks = (unsigned)((n + 255) / 256);
+    if (blocks > 4096) blocks = 4096;
+    if (blocks == 0) blocks = 1;
+    blt_visitor_sgd_kernel<<<blocks, 256>>>(w, g, lr, n);
+    blt_cuda_launch_check("blt_visitor_sgd_kernel");
+}
+
+// ---------------------------------------------------------------------------
+// AdamW step: full update per element
+// ---------------------------------------------------------------------------
+
+__global__ void blt_visitor_adamw_kernel(float *w, const float *g, float *m, float *v, float lr, float b1, float b2,
+                                         float eps, float wd, float bc1, float bc2, size_t n) {
+    size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t stride = (size_t)gridDim.x * blockDim.x;
+    for (; i < n; i += stride) {
+        float gi = g[i];
+        m[i] = b1 * m[i] + (1.0f - b1) * gi;
+        v[i] = b2 * v[i] + (1.0f - b2) * gi * gi;
+        float mhat = m[i] / bc1;
+        float vhat = v[i] / bc2;
+        w[i] -= lr * (mhat / (sqrtf(vhat) + eps) + wd * w[i]);
+    }
+}
+
+extern "C" void blt_cuda_adamw_step(float *w, const float *g, float *m, float *v, float lr, float b1, float b2,
+                                    float eps, float wd, float bc1, float bc2, size_t n) {
+    unsigned blocks = (unsigned)((n + 255) / 256);
+    if (blocks > 4096) blocks = 4096;
+    if (blocks == 0) blocks = 1;
+    blt_visitor_adamw_kernel<<<blocks, 256>>>(w, g, m, v, lr, b1, b2, eps, wd, bc1, bc2, n);
+    blt_cuda_launch_check("blt_visitor_adamw_kernel");
+}
+
+// ---------------------------------------------------------------------------
+// AdamW squared-norm reduction: sum_i u_i^2 where
+// u_i = m_hat/(sqrt(v_hat)+eps) + wd*w[i]
+// Uses same single-block strided pattern as blt_vec_dot_kernel.
+// ---------------------------------------------------------------------------
+
+__global__ void blt_adamw_sqnorm_kernel(const float *w, const float *g, const float *m, const float *v, float b1,
+                                        float b2, float eps, float wd, float bc1, float bc2, size_t n, float *out) {
+    __shared__ float partial[BLT_VEC_DOT_BLOCK];
+    const size_t tid = threadIdx.x;
+
+    float sum = 0.0f;
+    for (size_t i = tid; i < n; i += BLT_VEC_DOT_BLOCK) {
+        float mi = b1 * m[i] + (1.0f - b1) * g[i];
+        float vi = b2 * v[i] + (1.0f - b2) * g[i] * g[i];
+        float mhat = mi / bc1;
+        float vhat = vi / bc2;
+        float u = mhat / (sqrtf(vhat) + eps) + wd * w[i];
+        sum += u * u;
+    }
+    partial[tid] = sum;
+    __syncthreads();
+
+    for (size_t stride = BLT_VEC_DOT_BLOCK / 2; stride > 0; stride >>= 1) {
+        if (tid < stride) partial[tid] += partial[tid + stride];
+        __syncthreads();
+    }
+
+    if (tid == 0) out[0] = partial[0];
+}
+
+extern "C" float blt_cuda_adamw_sqnorm(const float *w, const float *g, const float *m, const float *v, float b1,
+                                       float b2, float eps, float wd, float bc1, float bc2, size_t n) {
+    static float *d_out = NULL;
+    if (d_out == NULL) {
+        cudaError_t err = cudaMalloc(&d_out, sizeof(float));
+        if (err != cudaSuccess) BLT_FATAL("blt_cuda_adamw_sqnorm: cudaMalloc failed: %s", cudaGetErrorString(err));
+    }
+    blt_adamw_sqnorm_kernel<<<1, BLT_VEC_DOT_BLOCK>>>(w, g, m, v, b1, b2, eps, wd, bc1, bc2, n, d_out);
+    blt_cuda_launch_check("blt_adamw_sqnorm_kernel");
+    float result = 0.0f;
+    cudaError_t err = cudaMemcpy(&result, d_out, sizeof(float), cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) BLT_FATAL("blt_cuda_adamw_sqnorm: copy failed: %s", cudaGetErrorString(err));
+    return result;
+}

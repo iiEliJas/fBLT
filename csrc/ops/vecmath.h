@@ -6,6 +6,10 @@
 #include <stdbool.h>
 #include "core/tensor.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // sum(a[i] * b[i]) for i in [0, n).
 float blt_vec_dot(blt_backend backend, const float *a, const float *b, size_t n);
 
@@ -29,5 +33,25 @@ void blt_strided_copy(blt_backend backend, float *dst, size_t dst_stride, const 
 
 void blt_fill_uniform(blt_backend backend, float *data, size_t n, uint64_t *rng_state);
 void blt_fill_constant(blt_backend backend, float *data, size_t n, float v);
+
+// Element-wise scale: data[i] *= s for i in [0, n). CUDA-aware.
+void blt_cuda_vec_scale(float *data, float s, size_t n);
+
+// In-place SGD: w[i] -= lr * g[i] for i in [0, n). Device pointers.
+void blt_cuda_sgd_step(float *w, const float *g, float lr, size_t n);
+
+// In-place AdamW step on device pointers. Computes bias-corrected
+// AdamW update for each element: w, m, v are all device pointers.
+void blt_cuda_adamw_step(float *w, const float *g, float *m, float *v, float lr, float b1, float b2, float eps,
+                         float wd, float bc1, float bc2, size_t n);
+
+// Reduction: returns sum of squared AdamW updates over [0, n).
+// All pointers are device pointers.
+float blt_cuda_adamw_sqnorm(const float *w, const float *g, const float *m, const float *v, float b1, float b2,
+                            float eps, float wd, float bc1, float bc2, size_t n);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // BLT_OPS_VECMATH_H

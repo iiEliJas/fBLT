@@ -3,6 +3,8 @@
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
+#include "ops/vecmath.h"
+#include "core/cuda_shim.h"
 
 struct sgd_ctx {
     float lr;
@@ -10,7 +12,13 @@ struct sgd_ctx {
 
 static void sgd_pair_fn(float *w, float *g, const blt_param_info *info, void *ctx) {
     float lr = ((struct sgd_ctx *)ctx)->lr;
-    for (size_t i = 0; i < info->numel; i++) w[i] -= lr * g[i];
+    if (info->backend == BLT_BACKEND_CUDA) {
+#ifdef BLT_WITH_CUDA
+        blt_cuda_sgd_step(w, (const float *)g, lr, info->numel);
+#endif
+    } else {
+        for (size_t i = 0; i < info->numel; i++) w[i] -= lr * g[i];
+    }
 }
 
 void sgd_all(blt_model *m, blt_model_grad *g, float lr) {
@@ -91,8 +99,6 @@ struct adamw_pair_ctx {
 static void adamw_pair_fn(float *w, float *g, const blt_param_info *info, void *ctx) {
     struct adamw_pair_ctx *c = (struct adamw_pair_ctx *)ctx;
     adamw_pair *p = &c->s->flat[info->idx];
-    float *m = (float *)p->em.data;
-    float *v = (float *)p->esq.data;
     const float lr = c->cfg.lr;
     const float b1 = c->cfg.beta1;
     const float b2 = c->cfg.beta2;
@@ -100,12 +106,21 @@ static void adamw_pair_fn(float *w, float *g, const blt_param_info *info, void *
     const float wd = c->cfg.weight_decay;
     const float bc1 = 1.0f - powf(b1, (float)c->cfg.step);
     const float bc2 = 1.0f - powf(b2, (float)c->cfg.step);
-    for (size_t i = 0; i < info->numel; i++) {
-        m[i] = b1 * m[i] + (1.0f - b1) * g[i];
-        v[i] = b2 * v[i] + (1.0f - b2) * g[i] * g[i];
-        const float mhat = m[i] / bc1;
-        const float vhat = v[i] / bc2;
-        w[i] -= lr * (mhat / (sqrtf(vhat) + eps) + wd * w[i]);
+    if (info->backend == BLT_BACKEND_CUDA) {
+#ifdef BLT_WITH_CUDA
+        blt_cuda_adamw_step(w, (const float *)g, (float *)p->em.data, (float *)p->esq.data, lr, b1, b2, eps, wd, bc1,
+                            bc2, info->numel);
+#endif
+    } else {
+        float *m = (float *)p->em.data;
+        float *v = (float *)p->esq.data;
+        for (size_t i = 0; i < info->numel; i++) {
+            m[i] = b1 * m[i] + (1.0f - b1) * g[i];
+            v[i] = b2 * v[i] + (1.0f - b2) * g[i] * g[i];
+            const float mhat = m[i] / bc1;
+            const float vhat = v[i] / bc2;
+            w[i] -= lr * (mhat / (sqrtf(vhat) + eps) + wd * w[i]);
+        }
     }
 }
 
@@ -126,17 +141,24 @@ struct adamw_unorm_ctx {
 static void adamw_unorm_fn(float *w, float *g, const blt_param_info *info, void *ctx) {
     struct adamw_unorm_ctx *c = (struct adamw_unorm_ctx *)ctx;
     adamw_pair *p = &c->s->flat[info->idx];
-    float *m = (float *)p->em.data;
-    float *v = (float *)p->esq.data;
     const float bc1 = 1.0f - powf(c->b1, (float)c->step);
     const float bc2 = 1.0f - powf(c->b2, (float)c->step);
-    for (size_t i = 0; i < info->numel; i++) {
-        float m_new = c->b1 * m[i] + (1.0f - c->b1) * g[i];
-        float v_new = c->b2 * v[i] + (1.0f - c->b2) * g[i] * g[i];
-        float m_hat = m_new / bc1;
-        float v_hat = v_new / bc2;
-        float u = m_hat / (sqrtf(v_hat) + c->ep) + c->wd * w[i];
-        c->sq += u * u;
+    if (info->backend == BLT_BACKEND_CUDA) {
+#ifdef BLT_WITH_CUDA
+        c->sq += blt_cuda_adamw_sqnorm((const float *)w, (const float *)g, (const float *)p->em.data,
+                                       (const float *)p->esq.data, c->b1, c->b2, c->ep, c->wd, bc1, bc2, info->numel);
+#endif
+    } else {
+        float *m = (float *)p->em.data;
+        float *v = (float *)p->esq.data;
+        for (size_t i = 0; i < info->numel; i++) {
+            float m_new = c->b1 * m[i] + (1.0f - c->b1) * g[i];
+            float v_new = c->b2 * v[i] + (1.0f - c->b2) * g[i] * g[i];
+            float m_hat = m_new / bc1;
+            float v_hat = v_new / bc2;
+            float u = m_hat / (sqrtf(v_hat) + c->ep) + c->wd * w[i];
+            c->sq += u * u;
+        }
     }
 }
 
