@@ -345,6 +345,7 @@ int main(int argc, char **argv) {
                                   : fixed_stride(N, 4, patches);
         BLT_REQUIRE(M >= 2, "training window produced < 2 patches");
         if (M < 2) continue;
+        if (M >= 128) continue;
 
         blt_block_batch batch;
         if (a.diffusion) {
