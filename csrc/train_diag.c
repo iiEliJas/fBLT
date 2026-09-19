@@ -7,6 +7,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include "ops/vecmath.h"
+#include "core/cuda_shim.h"
 
 //----------------------------------------------------------------------
 // Gradient clipping + SGD/AdamW over every parameter in the model
@@ -26,7 +27,13 @@ struct clip_scale_ctx {
 
 static void clip_scale_fn(float *p, const blt_param_info *info, void *ctx) {
     struct clip_scale_ctx *c = (struct clip_scale_ctx *)ctx;
-    for (size_t i = 0; i < info->numel; i++) p[i] *= c->scale;
+    if (info->backend == BLT_BACKEND_CUDA) {
+#ifdef BLT_WITH_CUDA
+        blt_cuda_vec_scale(p, c->scale, info->numel);
+#endif
+    } else {
+        for (size_t i = 0; i < info->numel; i++) p[i] *= c->scale;
+    }
 }
 
 float clip_all(blt_model *m, blt_model_grad *g, float max_norm) {
@@ -279,6 +286,12 @@ void log_batch_properties(FILE *fp, size_t step, size_t window_offset, const uin
 void zero_norm_fn(float *p, const blt_param_info *info, void *ctx) {
     (void)ctx;
     if (info->is_norm) {
-        for (size_t i = 0; i < info->numel; i++) p[i] = 0.0f;
+        if (info->backend == BLT_BACKEND_CUDA) {
+#ifdef BLT_WITH_CUDA
+            blt_cuda_memset(p, 0, info->numel * sizeof(float));
+#endif
+        } else {
+            for (size_t i = 0; i < info->numel; i++) p[i] = 0.0f;
+        }
     }
 }
