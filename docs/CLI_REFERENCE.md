@@ -8,7 +8,7 @@ All commands assume the repo root as working directory. CUDA builds output to `b
 
 | Command | Description |
 |---------|-------------|
-| `make test` | Build + run full C test suite (68 tests, ~4s) |
+| `make test` | Build + run full C test suite (69 tests, ~4s) |
 | `make CUDA=1 test` | Same, CUDA backend |
 | `make main` | Build minimal main (linking stub) |
 | `make CUDA=1 main` | Same, CUDA |
@@ -16,6 +16,9 @@ All commands assume the repo root as working directory. CUDA builds output to `b
 | `make sandbox` | Build + run scratch playground (`run/sandbox.c`) |
 | `make cuda-smoke` | Device sanity check (H2D → kernel → D2H) |
 | `make cuda-sanitize` | Run tests under `compute-sanitizer` (native Linux) |
+| `make sanity-check` | Build `sanity_check` diagnostic tool |
+| `make last-row-acc` | Build `last_row_acc` diagnostic tool |
+| `make pos-accuracy` | Build `pos_accuracy` diagnostic tool |
 | `pytest tests/` | Python test suite (config round-trips, YAML, overrides, entry points) |
 | `ruff check .` | Python lint |
 | `ruff format --check .` | Python format check |
@@ -323,6 +326,86 @@ Exit codes: 0 on success, 1 on error.
 | `--iters N` | Iterations per micro-benchmark |
 | `--ckpt FILE` | Checkpoint for macro gen (default runs/plain_40k.fblt) |
 | `--results FILE` | Output results file |
+
+---
+
+## Diagnostic Tools
+
+Evaluation tools for measuring prediction accuracy on held-out data. All three share common flags.
+
+### Common Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--checkpoint FILE` | *required* | Model checkpoint (.fblt) |
+| `--corpus FILE` | *required* | Held-out byte corpus for evaluation |
+| `--window N` | 512 | Sequence length (must match training) |
+| `--embed N` | 256 | Embed dim (must match checkpoint) |
+| `--hidden N` | 512 | Hidden dim (must match checkpoint) |
+| `--enc-layers N` | 2 | Encoder layers (must match checkpoint) |
+| `--glob-layers N` | 6 | Global transformer layers (must match checkpoint) |
+| `--dec-layers N` | 2 | Decoder layers (must match checkpoint) |
+| `--cross-attn all\|last` | all | Cross-attention placement (must match checkpoint) |
+| `--diffusion 0\|1` | 1 | 0 = plain BLT, 1 = BLT-D |
+| `--num-windows N` | varies | Number of windows to evaluate |
+| `--skip N` | 0 | Bytes to skip before first window |
+| `--entropy-lm FILE` | (none) | Trained entropy-LM weights for patching |
+
+Build: `make sanity-check`, `make last-row-acc`, `make pos-accuracy`
+
+---
+
+### `sanity_check` — Interior accuracy
+
+Teacher-forced evaluation: feeds real held-out bytes with true history and reports argmax predictions vs actual next bytes. Measures accuracy across all positions (rows 0 through N-1) to verify the model learned the training distribution.
+
+```
+bin/sanity_check --checkpoint MODEL --corpus FILE [options]
+```
+
+**Output:** Mean CE, Mean BPB, Top-1/5/10 accuracy across all positions. Prints sample predictions for first 3 windows.
+
+```bash
+bin/sanity_check --checkpoint runs/my_model.fblt \
+  --corpus data/tinystories/heldout.bin --window 512 --num-windows 50 \
+  --entropy-lm runs/entropylm/entropy_lm.fblt
+```
+
+---
+
+### `last_row_acc` — Last-row accuracy
+
+Same forward pass as `sanity_check`, but only evaluates prediction accuracy at row N-1 (the byte immediately after the window). Useful for detecting whether the last position receives proper gradient during training.
+
+```
+bin/last_row_acc --checkpoint MODEL --corpus FILE [options]
+```
+
+**Output:** Mean CE, Mean BPB, Top-1/5/10 accuracy at the last position only. Per-sample details for first 10 windows.
+
+```bash
+bin/last_row_acc --checkpoint runs/my_model.fblt \
+  --corpus data/tinystories/heldout.bin --window 512 --num-windows 100 \
+  --entropy-lm runs/entropylm/entropy_lm.fblt
+```
+
+---
+
+### `pos_accuracy` — Per-position accuracy
+
+Reports top-1 accuracy at every row (0 through N-1) separately. Reveals whether accuracy drops at specific positions (e.g., the last-row cliff from the off-by-one training loss bug).
+
+```
+bin/pos_accuracy --checkpoint MODEL --corpus FILE [options]
+```
+
+**Output:** Per-position accuracy table, plus min/max/mean summary.
+
+```bash
+bin/pos_accuracy --checkpoint runs/my_model.fblt \
+  --corpus data/tinystories/heldout.bin --window 512 --num-windows 10 \
+  --entropy-lm runs/entropylm/entropy_lm.fblt
+```
 
 ---
 
