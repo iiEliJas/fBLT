@@ -244,6 +244,14 @@ sweep: $(BIN_DIR)/train_sweep$(EXE_EXT)
 cuda-smoke: $(BIN_DIR)/cuda_smoke$(EXE_EXT)
 	@echo [CUDA] Built successfully: $(BIN_DIR)/cuda_smoke$(EXE_EXT)
 	@./$(BIN_DIR)/cuda_smoke$(EXE_EXT)
+sanity-check: $(BIN_DIR)/sanity_check$(EXE_EXT)
+	@echo "[SANITY] Built successfully: $(BIN_DIR)/sanity_check$(EXE_EXT)"
+logits-compare: $(BIN_DIR)/logits_compare$(EXE_EXT)
+	@echo "[CMP] Built successfully: $(BIN_DIR)/logits_compare$(EXE_EXT)"
+last-row-acc: $(BIN_DIR)/last_row_acc$(EXE_EXT)
+	@echo "[LAST_ROW] Built successfully: $(BIN_DIR)/last_row_acc$(EXE_EXT)"
+pos-accuracy: $(BIN_DIR)/pos_accuracy$(EXE_EXT)
+	@echo "[POS_ACC] Built successfully: $(BIN_DIR)/pos_accuracy$(EXE_EXT)"
 
 infer: $(BIN_DIR)/infer$(EXE_EXT)
 	@echo [INFER] Built successfully: $(BIN_DIR)/infer$(EXE_EXT)
@@ -350,6 +358,33 @@ $(BIN_DIR)/infer$(EXE_EXT): $(SRC_DIR)/infer.c $(CORE_OBJS)
 	$(MKDIR_BIN)
 	@echo "[CC] $< -> $@"
 	@$(CC) $(CFLAGS) $(SRC_DIR)/infer.c $(CORE_OBJS) -o $@ $(LDLIBS)
+
+# Link sanity check tool
+$(BIN_DIR)/sanity_check$(EXE_EXT): $(SRC_DIR)/tools/sanity_check.c $(CORE_OBJS)
+	$(MKDIR_BIN)
+	@echo "[CC] $< -> $@"
+	@$(CC) $(CFLAGS) $(SRC_DIR)/tools/sanity_check.c $(CORE_OBJS) -o $@ $(LDLIBS)
+
+.PHONY: sanity-check
+
+# Link logits comparison tool
+$(BIN_DIR)/logits_compare$(EXE_EXT): $(SRC_DIR)/tools/logits_compare.c $(CORE_OBJS)
+	$(MKDIR_BIN)
+	@echo "[CC] $< -> $@"
+	@$(CC) $(CFLAGS) $(SRC_DIR)/tools/logits_compare.c $(CORE_OBJS) -o $@ $(LDLIBS)
+
+.PHONY: logits-compare last-row-acc pos-accuracy
+# Link last-row accuracy tool
+$(BIN_DIR)/last_row_acc$(EXE_EXT): $(SRC_DIR)/tools/last_row_acc.c $(CORE_OBJS)
+	$(MKDIR_BIN)
+	@echo "[CC] $< -> $@"
+	@$(CC) $(CFLAGS) $(SRC_DIR)/tools/last_row_acc.c $(CORE_OBJS) -o $@ $(LDLIBS)
+
+# Link per-position accuracy tool
+$(BIN_DIR)/pos_accuracy$(EXE_EXT): $(SRC_DIR)/tools/pos_accuracy.c $(CORE_OBJS)
+	$(MKDIR_BIN)
+	@echo "[CC] $< -> $@"
+	@$(CC) $(CFLAGS) $(SRC_DIR)/tools/pos_accuracy.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
 # Link end-to-end driver
 $(BIN_DIR)/e2e_blt_dv$(EXE_EXT): $(SRC_DIR)/e2e_blt_dv.c $(CORE_OBJS)

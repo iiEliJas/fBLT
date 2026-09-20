@@ -295,7 +295,7 @@ int main(int argc, char **argv) {
     // Training loop: non-overlapping windows over the corpus, fixed-stride
     // patches, freshly sampled corruption per visit.
 
-    size_t num_windows = (size_t)fsize / a.window;
+    size_t num_windows = (size_t)(fsize - a.window) / a.window;
     BLT_REQUIRE(num_windows >= 1, "corpus smaller than one training window");
 
     size_t total_epochs = (a.steps + num_windows - 1) / num_windows;
@@ -389,6 +389,11 @@ int main(int argc, char **argv) {
         blt_tensor bytes_in = blt_tensor_create(scratch, bshape, 1, BLT_DTYPE_UINT8);
         blt_tensor_upload(&bytes_in, text, N);
 
+        // Targets for L_clean: window+1 bytes so the last row has a prediction target
+        size_t tshape[1] = {N + 1};
+        blt_tensor targets = blt_tensor_create(scratch, tshape, 1, BLT_DTYPE_UINT8);
+        blt_tensor_upload(&targets, text, N + 1);
+
         size_t h_shape[2] = {N, a.embed};
         size_t sc_shape[1] = {1};
 
@@ -412,7 +417,7 @@ int main(int argc, char **argv) {
             size_t lg_shape[2] = {S, 256};
             blt_tensor logits = blt_tensor_create(scratch, lg_shape, 2, BLT_DTYPE_FP32);
             blt_tensor loss = blt_tensor_create(scratch, sc_shape, 1, BLT_DTYPE_FP32);
-            blt_local_decoder_forward_diffusion(model->decoder, &h, &O, patches, M, text, &batch,
+            blt_local_decoder_forward_diffusion(model->decoder, &h, &O, patches, M, text, &targets, &batch,
                                                 a.d0_learned ? BLT_D0_LEARNED : BLT_D0_ZEROS, &logits, &loss, scratch);
 
             if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
@@ -431,7 +436,7 @@ int main(int argc, char **argv) {
 
             blt_tensor grad_h = blt_tensor_create(scratch, h_shape, 2, BLT_DTYPE_FP32);
             blt_tensor grad_O = blt_tensor_create(scratch, p_shape2, 2, BLT_DTYPE_FP32);
-            blt_local_decoder_backward_diffusion(model->decoder, &h, &O, patches, M, text, &batch,
+            blt_local_decoder_backward_diffusion(model->decoder, &h, &O, patches, M, text, &targets, &batch,
                                                  a.d0_learned ? BLT_D0_LEARNED : BLT_D0_ZEROS, &grad_h, &grad_O,
                                                  grad->decoder_grad, scratch);
 
@@ -452,7 +457,7 @@ int main(int argc, char **argv) {
             size_t lg_shape[2] = {N, 256};
             blt_tensor logits = blt_tensor_create(scratch, lg_shape, 2, BLT_DTYPE_FP32);
             blt_tensor loss = blt_tensor_create(scratch, sc_shape, 1, BLT_DTYPE_FP32);
-            blt_model_forward(model, &bytes_in, patches, M, NULL, 0, &logits, &loss, scratch);
+            blt_model_forward(model, &bytes_in, &targets, patches, M, NULL, 0, &logits, &loss, scratch);
 
             if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
                 log_forward_activation_dump(adump_fp, step + 1, NULL, NULL, NULL, &logits);
@@ -464,7 +469,7 @@ int main(int argc, char **argv) {
             running += lv;
             running_n++;
 
-            blt_model_backward(model, &bytes_in, patches, M, NULL, 0, grad, scratch);
+            blt_model_backward(model, &bytes_in, &targets, patches, M, NULL, 0, grad, scratch);
 
             if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
                 log_gradient_activation_dump(adump_fp, step + 1, model, grad);

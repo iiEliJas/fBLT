@@ -213,13 +213,13 @@ int run_local_decoder_overfit(void) {
     for (int step = 0; step < num_steps; step++) {
         blt_arena_reset(compute_arena);
 
-        blt_local_decoder_forward(model, &byte_hidden_in, &patch_in, patches, num_patches, &bytes_in, NULL, 0,
+        blt_local_decoder_forward(model, &byte_hidden_in, &patch_in, patches, num_patches, &bytes_in, NULL, NULL, 0,
                                   &logits_out, &loss_out, compute_arena);
         float loss_val = ((float *)loss_out.data)[0];
         if (step == 0) first_loss = loss_val;
         last_loss = loss_val;
 
-        blt_local_decoder_backward(model, &byte_hidden_in, &patch_in, patches, num_patches, &bytes_in, NULL, 0,
+        blt_local_decoder_backward(model, &byte_hidden_in, &patch_in, patches, num_patches, &bytes_in, NULL, NULL, 0,
                                    &grad_byte_hidden_in, &grad_patch_in, grad, compute_arena);
 
         sgd_update_local_decoder(model, grad, lr);
@@ -323,14 +323,14 @@ int run_local_decoder_k_split(void) {
     for (int step = 0; step < num_steps; step++) {
         blt_arena_reset(compute_arena);
 
-        blt_local_decoder_forward(model, &byte_hidden_in, &patch_in, patches, num_patches, &bytes_in, NULL, 0,
+        blt_local_decoder_forward(model, &byte_hidden_in, &patch_in, patches, num_patches, &bytes_in, NULL, NULL, 0,
                                   &logits_out, &loss_out, compute_arena);
         float loss_val = ((float *)loss_out.data)[0];
         TEST_ASSERT(!isnan(loss_val) && !isinf(loss_val));
         if (step == 0) first_loss = loss_val;
         last_loss = loss_val;
 
-        blt_local_decoder_backward(model, &byte_hidden_in, &patch_in, patches, num_patches, &bytes_in, NULL, 0,
+        blt_local_decoder_backward(model, &byte_hidden_in, &patch_in, patches, num_patches, &bytes_in, NULL, NULL, 0,
                                    &grad_byte_hidden_in, &grad_patch_in, grad, compute_arena);
 
         // grad_patch_in must come back at the full patch_dim width, not E

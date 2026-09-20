@@ -234,12 +234,12 @@ int run_cuda_parity_training_step(void) {
         // ---- forward + loss ----
         blt_tensor cpu_logits = blt_tensor_create(host, logits_shape, 2, BLT_DTYPE_FP32);
         blt_tensor cpu_loss = blt_tensor_create(host, (size_t[1]){1}, 1, BLT_DTYPE_FP32);
-        blt_local_decoder_forward_diffusion(cpu_d, &h, &patch_in, patches, num_patches, clean_bytes, &batch,
+        blt_local_decoder_forward_diffusion(cpu_d, &h, &patch_in, patches, num_patches, clean_bytes, NULL, &batch,
                                             BLT_D0_LEARNED, &cpu_logits, &cpu_loss, host);
 
         blt_tensor dev_logits = blt_tensor_create(dev, logits_shape, 2, BLT_DTYPE_FP32);
         blt_tensor dev_loss = blt_tensor_create(dev, (size_t[1]){1}, 1, BLT_DTYPE_FP32);
-        blt_local_decoder_forward_diffusion(dev_d, &d_h, &d_patch, patches, num_patches, clean_bytes, &batch,
+        blt_local_decoder_forward_diffusion(dev_d, &d_h, &d_patch, patches, num_patches, clean_bytes, NULL, &batch,
                                             BLT_D0_LEARNED, &dev_logits, &dev_loss, dev);
 
         if (step == 1) {
@@ -256,12 +256,12 @@ int run_cuda_parity_training_step(void) {
         }
         blt_tensor g_bh = blt_tensor_create(host, (size_t[2]){batch.num_clean, cfg.embed_dim}, 2, BLT_DTYPE_FP32);
         blt_tensor g_pi = blt_tensor_create(host, (size_t[2]){num_patches, cfg.patch_dim}, 2, BLT_DTYPE_FP32);
-        blt_local_decoder_backward_diffusion(cpu_d, &h, &patch_in, patches, num_patches, clean_bytes, &batch,
+        blt_local_decoder_backward_diffusion(cpu_d, &h, &patch_in, patches, num_patches, clean_bytes, NULL, &batch,
                                              BLT_D0_LEARNED, &g_bh, &g_pi, cpu_g, host);
 
         blt_tensor d_gbh = blt_tensor_create(dev, (size_t[2]){batch.num_clean, cfg.embed_dim}, 2, BLT_DTYPE_FP32);
         blt_tensor d_gpi = blt_tensor_create(dev, (size_t[2]){num_patches, cfg.patch_dim}, 2, BLT_DTYPE_FP32);
-        blt_local_decoder_backward_diffusion(dev_d, &d_h, &d_patch, patches, num_patches, clean_bytes, &batch,
+        blt_local_decoder_backward_diffusion(dev_d, &d_h, &d_patch, patches, num_patches, clean_bytes, NULL, &batch,
                                              BLT_D0_LEARNED, &d_gbh, &d_gpi, dev_g, dev);
 
         // Global-norm style clipping is a pure scaling of every grad; a

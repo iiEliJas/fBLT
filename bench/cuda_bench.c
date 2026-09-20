@@ -360,7 +360,7 @@ static void meso_cell(blt_arena *host, blt_arena *arena, size_t seq, size_t iter
         blt_tensor logits = blt_tensor_create(scratch, (size_t[2]){seq, 256}, 2, BLT_DTYPE_FP32);
         blt_tensor loss = blt_tensor_create(scratch, (size_t[1]){1}, 1, BLT_DTYPE_FP32);
         if (i < 2) continue;
-        blt_model_forward(sc.model, &sc.bytes_in, sc.patches, sc.num_patches, NULL, 0, &logits, &loss, scratch);
+        blt_model_forward(sc.model, &sc.bytes_in, NULL, sc.patches, sc.num_patches, NULL, 0, &logits, &loss, scratch);
         backend_sync(&logits);
         if (i == 2) bench_timer_start(); // restart after warmup
     }
@@ -369,7 +369,7 @@ static void meso_cell(blt_arena *host, blt_arena *arena, size_t seq, size_t iter
     bench_timer_start();
     for (size_t i = 0; i < iters; i++) {
         blt_arena_reset(scratch);
-        blt_model_backward(sc.model, &sc.bytes_in, sc.patches, sc.num_patches, NULL, 0, sc.grad, scratch);
+        blt_model_backward(sc.model, &sc.bytes_in, NULL, sc.patches, sc.num_patches, NULL, 0, sc.grad, scratch);
     }
     backend_sync((const blt_tensor *)&sc.model->decoder->lm_head_weight);
     const double sec_bwd = bench_timer_stop_sec() / (double)iters;
@@ -427,7 +427,7 @@ static void meso_cell_bf16(blt_arena *host, blt_arena *arena, size_t seq, size_t
         blt_tensor logits = blt_tensor_create(scratch, (size_t[2]){seq, 256}, 2, BLT_DTYPE_FP32);
         blt_tensor loss = blt_tensor_create(scratch, (size_t[1]){1}, 1, BLT_DTYPE_FP32);
         if (i < 2) continue;
-        blt_model_forward(sc.model, &sc.bytes_in, sc.patches, sc.num_patches, NULL, 0, &logits, &loss, scratch);
+        blt_model_forward(sc.model, &sc.bytes_in, NULL, sc.patches, sc.num_patches, NULL, 0, &logits, &loss, scratch);
         backend_sync(&logits);
         if (i == 2) bench_timer_start();
     }
@@ -436,7 +436,7 @@ static void meso_cell_bf16(blt_arena *host, blt_arena *arena, size_t seq, size_t
     bench_timer_start();
     for (size_t i = 0; i < iters; i++) {
         blt_arena_reset(scratch);
-        blt_model_backward(sc.model, &sc.bytes_in, sc.patches, sc.num_patches, NULL, 0, sc.grad, scratch);
+        blt_model_backward(sc.model, &sc.bytes_in, NULL, sc.patches, sc.num_patches, NULL, 0, sc.grad, scratch);
     }
     backend_sync((const blt_tensor *)&sc.model->decoder->lm_head_weight);
     const double sec_bwd = bench_timer_stop_sec() / (double)iters;
@@ -536,8 +536,8 @@ static void macro_training_cell(blt_arena *host, blt_arena *arena, size_t seq, s
         blt_tensor logits = blt_tensor_create(scratch, (size_t[2]){seq, 256}, 2, BLT_DTYPE_FP32);
         blt_tensor loss = blt_tensor_create(scratch, (size_t[1]){1}, 1, BLT_DTYPE_FP32);
         if (i < 2) continue; // warmup, unmeasured
-        blt_model_forward(sc.model, &sc.bytes_in, sc.patches, sc.num_patches, NULL, 0, &logits, &loss, scratch);
-        blt_model_backward(sc.model, &sc.bytes_in, sc.patches, sc.num_patches, NULL, 0, sc.grad, scratch);
+        blt_model_forward(sc.model, &sc.bytes_in, NULL, sc.patches, sc.num_patches, NULL, 0, &logits, &loss, scratch);
+        blt_model_backward(sc.model, &sc.bytes_in, NULL, sc.patches, sc.num_patches, NULL, 0, sc.grad, scratch);
         if (i == 2) bench_timer_start(); // restart after warmup
     }
     backend_sync((const blt_tensor *)&sc.model->decoder->lm_head_weight);
@@ -648,7 +648,7 @@ static void macro_generation_cell(blt_arena *arena, const bench_args *a, const c
         blt_tensor_upload(&bytes_in, out, total);
         blt_tensor logits = blt_tensor_create(scratch, (size_t[2]){total, 256}, 2, BLT_DTYPE_FP32);
         blt_tensor loss = blt_tensor_create(scratch, (size_t[1]){1}, 1, BLT_DTYPE_FP32);
-        blt_model_forward(model, &bytes_in, dummy, nd, NULL, 0, &logits, &loss, scratch);
+        blt_model_forward(model, &bytes_in, NULL, dummy, nd, NULL, 0, &logits, &loss, scratch);
         float last[256];
         blt_tensor row_view;
         view_1d(&row_view, (float *)logits.data + b * 256, 256, BLT_DTYPE_FP32, logits.backend);

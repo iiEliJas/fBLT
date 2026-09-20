@@ -587,7 +587,7 @@ static size_t make_patches(const train_ctx *tc, const uint8_t *window_bytes, siz
 static void forward_model(const train_ctx *tc, blt_tensor *bytes_in, const blt_patch_info *patches, size_t num_patches,
                           blt_tensor *logits, blt_tensor *loss, blt_arena *arena) {
     size_t doc_boundaries[1] = {0};
-    blt_model_forward(tc->model, bytes_in, patches, num_patches, doc_boundaries, 1, logits, loss, arena);
+    blt_model_forward(tc->model, bytes_in, NULL, patches, num_patches, doc_boundaries, 1, logits, loss, arena);
 }
 
 // Grad clipping + SGD (mirrors tests/unit/models/unit_model.c wiring)
@@ -1098,7 +1098,7 @@ int main(int argc, char **argv) {
 
         zero_scatter_grads(grad, model->encoder, &mc);
         size_t doc_boundaries[1] = {0};
-        blt_model_backward(model, &bytes_in, patches, num_patches, doc_boundaries, 1, grad, scratch);
+        blt_model_backward(model, &bytes_in, NULL, patches, num_patches, doc_boundaries, 1, grad, scratch);
         clip_model_grads(grad, model);
         sgd_apply_model(model, grad, (float)cfg.lr);
 

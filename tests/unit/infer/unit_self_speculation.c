@@ -382,14 +382,14 @@ static void train_snippets(blt_model *model, blt_model_grad *grad, blt_arena *sc
             size_t scalar_shape[1] = {1};
             blt_tensor loss = blt_tensor_create(scratch, scalar_shape, 1, BLT_DTYPE_FP32);
 
-            blt_model_forward(model, &bytes_in, patches, num_patches, NULL, 0, &logits, &loss, scratch);
+            blt_model_forward(model, &bytes_in, NULL, patches, num_patches, NULL, 0, &logits, &loss, scratch);
 
             // zero scatter-add grads before backward
             zero_tensor(&grad->encoder_grad->embedding_grad);
             for (size_t i = 0; i < model->encoder->ngram_weights.num_tables; i++) {
                 zero_tensor(&grad->encoder_grad->ngram_grads.tables[i]);
             }
-            blt_model_backward(model, &bytes_in, patches, num_patches, NULL, 0, grad, scratch);
+            blt_model_backward(model, &bytes_in, NULL, patches, num_patches, NULL, 0, grad, scratch);
 
             // plain SGD over all weights (no clipping: toy memorization task)
             apply_sgd_step_all(model, grad, lr);

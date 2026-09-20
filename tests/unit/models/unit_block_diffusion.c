@@ -186,8 +186,8 @@ static float gc_loss(blt_arena *arena, blt_local_decoder *dec, const gc_scenario
     blt_tensor logits = blt_tensor_create(arena, lg_shape, 2, BLT_DTYPE_FP32);
     size_t sc_shape[1] = {1};
     blt_tensor loss = blt_tensor_create(arena, sc_shape, 1, BLT_DTYPE_FP32);
-    blt_local_decoder_forward_diffusion(dec, &sc->h, &sc->pin, sc->patches, sc->num_patches, sc->bytes, &sc->batch,
-                                        mode, &logits, &loss, arena);
+    blt_local_decoder_forward_diffusion(dec, &sc->h, &sc->pin, sc->patches, sc->num_patches, sc->bytes, NULL,
+                                        &sc->batch, mode, &logits, &loss, arena);
     return ((const float *)loss.data)[0];
 }
 
@@ -240,8 +240,8 @@ int run_block_diffusion_gradcheck(void) {
     size_t gp_shape[2] = {sc.num_patches, dims.embed_dim};
     blt_tensor grad_p = blt_tensor_create(scratch, gp_shape, 2, BLT_DTYPE_FP32);
 
-    blt_local_decoder_backward_diffusion(dec, &sc.h, &sc.pin, sc.patches, sc.num_patches, sc.bytes, &sc.batch, mode,
-                                         &grad_h, &grad_p, grad, scratch);
+    blt_local_decoder_backward_diffusion(dec, &sc.h, &sc.pin, sc.patches, sc.num_patches, sc.bytes, NULL, &sc.batch,
+                                         mode, &grad_h, &grad_p, grad, scratch);
 
     TEST_ASSERT(sc.batch.t > 0.01f && sc.batch.t < 0.99f); // meaningful masking
     size_t masked_cells = 0;
@@ -610,7 +610,7 @@ int run_block_diffusion_overfit_gate(void) {
             blt_tensor logits = blt_tensor_create(scratch, lg_shape, 2, BLT_DTYPE_FP32);
             size_t sc_shape[1] = {1};
             blt_tensor loss = blt_tensor_create(scratch, sc_shape, 1, BLT_DTYPE_FP32);
-            blt_local_decoder_forward_diffusion(model->decoder, &h, &O, patches, M, text, &batch, BLT_D0_LEARNED,
+            blt_local_decoder_forward_diffusion(model->decoder, &h, &O, patches, M, text, NULL, &batch, BLT_D0_LEARNED,
                                                 &logits, &loss, scratch);
 
             const float lv = ((const float *)loss.data)[0];
@@ -625,7 +625,7 @@ int run_block_diffusion_overfit_gate(void) {
 
             blt_tensor grad_h = blt_tensor_create(scratch, h_shape, 2, BLT_DTYPE_FP32);
             blt_tensor grad_O = blt_tensor_create(scratch, p_shape, 2, BLT_DTYPE_FP32);
-            blt_local_decoder_backward_diffusion(model->decoder, &h, &O, patches, M, text, &batch, BLT_D0_LEARNED,
+            blt_local_decoder_backward_diffusion(model->decoder, &h, &O, patches, M, text, NULL, &batch, BLT_D0_LEARNED,
                                                  &grad_h, &grad_O, grad->decoder_grad, scratch);
 
             blt_tensor grad_P = blt_tensor_create(scratch, p_shape, 2, BLT_DTYPE_FP32);

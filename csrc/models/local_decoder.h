@@ -89,6 +89,7 @@ void blt_local_decoder_forward(const blt_local_decoder *model,
                                const blt_tensor *patch_in,       // [num_patches, embed_dim] — O from global transformer
                                const blt_patch_info *patches, size_t num_patches,
                                const blt_tensor *bytes_in,   // [seq_len] UINT8 — needed only for the loss targets
+                               const blt_tensor *targets,    // [seq_len] UINT8 — CE targets; NULL = use bytes_in
                                const size_t *doc_boundaries, // byte-indexed
                                size_t num_docs,
                                blt_tensor *logits_out, // [seq_len, vocab_size]
@@ -111,6 +112,7 @@ void blt_local_decoder_forward_ext(
     const blt_patch_info *patches,    // must tile [0, num_hfinal_rows) exactly
     size_t num_patches,
     const blt_tensor *bytes_in,   // [seq_len] UINT8 or NULL (iff loss_out == NULL)
+    const blt_tensor *targets,    // [seq_len] UINT8 — CE targets; NULL = use bytes_in
     const size_t *doc_boundaries, // byte-indexed
     size_t num_docs, const blt_local_decoder_d0_opts *d0_opts,
     blt_tensor *logits_out, // [seq_len, vocab_size]
@@ -119,7 +121,8 @@ void blt_local_decoder_forward_ext(
 
 void blt_local_decoder_backward(const blt_local_decoder *model, const blt_tensor *byte_hidden_in,
                                 const blt_tensor *patch_in, const blt_patch_info *patches, size_t num_patches,
-                                const blt_tensor *bytes_in, const size_t *doc_boundaries, size_t num_docs,
+                                const blt_tensor *bytes_in, const blt_tensor *targets, const size_t *doc_boundaries,
+                                size_t num_docs,
                                 blt_tensor *grad_byte_hidden_in, // [seq_len, embed_dim]
                                 blt_tensor *grad_patch_in,       // [num_patches, embed_dim]
                                 blt_local_decoder_grad *grad, blt_arena *arena);

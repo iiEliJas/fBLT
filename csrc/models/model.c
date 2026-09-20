@@ -90,9 +90,9 @@ void blt_model_encode(const blt_model *model, const blt_tensor *bytes_in, const 
 }
 
 void blt_model_decode(const blt_model *model, const blt_model_enc_out *enc, const blt_patch_info *patches,
-                      size_t num_patches, const blt_tensor *bytes_in, const size_t *doc_boundaries, size_t num_docs,
-                      const blt_local_decoder_d0_opts *d0_opts, blt_tensor *logits_out, blt_tensor *loss_out,
-                      blt_arena *arena) {
+                      size_t num_patches, const blt_tensor *bytes_in, const blt_tensor *targets,
+                      const size_t *doc_boundaries, size_t num_docs, const blt_local_decoder_d0_opts *d0_opts,
+                      blt_tensor *logits_out, blt_tensor *loss_out, blt_arena *arena) {
     BLT_REQUIRE(model != NULL && enc != NULL && patches != NULL && logits_out != NULL && arena != NULL,
                 "blt_model_decode: model, enc, patches, logits_out and arena cannot be NULL");
     BLT_REQUIRE(num_patches >= 1, "blt_model_decode: num_patches must be >= 1");
@@ -111,26 +111,26 @@ void blt_model_decode(const blt_model *model, const blt_model_enc_out *enc, cons
     }
 
     blt_local_decoder_forward_ext(model->decoder, &enc->byte_hidden_out, &enc->global_out, patches, num_patches,
-                                  bytes_in, doc_boundaries, num_docs, d0_opts, logits_out, loss_out, arena);
+                                  bytes_in, targets, doc_boundaries, num_docs, d0_opts, logits_out, loss_out, arena);
 }
 
-void blt_model_forward(const blt_model *model, const blt_tensor *bytes_in, const blt_patch_info *patches,
-                       size_t num_patches, const size_t *doc_boundaries, size_t num_docs, blt_tensor *logits_out,
-                       blt_tensor *loss_out, blt_arena *arena) {
+void blt_model_forward(const blt_model *model, const blt_tensor *bytes_in, const blt_tensor *targets,
+                       const blt_patch_info *patches, size_t num_patches, const size_t *doc_boundaries, size_t num_docs,
+                       blt_tensor *logits_out, blt_tensor *loss_out, blt_arena *arena) {
     BLT_REQUIRE(model != NULL && bytes_in != NULL && patches != NULL && logits_out != NULL && arena != NULL,
                 "blt_model_forward: arguments cannot be NULL");
 
     blt_model_enc_out enc;
     blt_model_encode(model, bytes_in, patches, num_patches, doc_boundaries, num_docs, &enc, arena);
-    blt_model_decode(model, &enc, patches, num_patches, bytes_in, doc_boundaries, num_docs, NULL, logits_out, loss_out,
-                     arena);
+    blt_model_decode(model, &enc, patches, num_patches, bytes_in, targets, doc_boundaries, num_docs, NULL, logits_out,
+                     loss_out, arena);
     blt_backend_pass_sync(bytes_in->backend);
 }
 
 // Backward path — recomputes forward intermediates (memory over speed tradeoff).
-void blt_model_backward(const blt_model *model, const blt_tensor *bytes_in, const blt_patch_info *patches,
-                        size_t num_patches, const size_t *doc_boundaries, size_t num_docs, blt_model_grad *grad,
-                        blt_arena *arena) {
+void blt_model_backward(const blt_model *model, const blt_tensor *bytes_in, const blt_tensor *targets,
+                        const blt_patch_info *patches, size_t num_patches, const size_t *doc_boundaries,
+                        size_t num_docs, blt_model_grad *grad, blt_arena *arena) {
     BLT_REQUIRE(model != NULL && bytes_in != NULL && patches != NULL && grad != NULL && arena != NULL,
                 "blt_model_backward: arguments cannot be NULL");
     BLT_REQUIRE(bytes_in->ndim == 1 && bytes_in->dtype == BLT_DTYPE_UINT8,
@@ -163,7 +163,7 @@ void blt_model_backward(const blt_model *model, const blt_tensor *bytes_in, cons
     blt_tensor grad_byte_hidden = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
     blt_tensor grad_global_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
 
-    blt_local_decoder_backward(model->decoder, &byte_hidden_out, &global_out, patches, num_patches, bytes_in,
+    blt_local_decoder_backward(model->decoder, &byte_hidden_out, &global_out, patches, num_patches, bytes_in, targets,
                                doc_boundaries, num_docs, &grad_byte_hidden, &grad_global_out, grad->decoder_grad,
                                arena);
 

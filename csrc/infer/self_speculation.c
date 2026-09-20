@@ -146,7 +146,7 @@ size_t blt_verify_draft(const blt_model *model, const blt_entropy_lm *entropy_mo
     blt_tensor logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
     // logits-only: loss/bytes unused by verification
     blt_local_decoder_forward_ext(model->decoder, &enc.byte_hidden_out, &enc.global_out, patches, num_patches, NULL,
-                                  NULL, 0, NULL, &logits, NULL, arena);
+                                  NULL, NULL, 0, NULL, &logits, NULL, arena);
     if (stats != NULL) {
         stats->nfe_decoder++;
     }
@@ -221,7 +221,7 @@ size_t blt_verify_draft_aligned(const blt_model *model, const blt_entropy_lm *en
     size_t logits_shape[2] = {cand_len, vocab_size};
     blt_tensor logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
     blt_local_decoder_forward_ext(model->decoder, &enc.byte_hidden_out, &enc.global_out, patches, num_patches, NULL,
-                                  NULL, 0, NULL, &logits, NULL, arena);
+                                  NULL, NULL, 0, NULL, &logits, NULL, arena);
     if (stats != NULL) {
         stats->nfe_decoder++;
     }
