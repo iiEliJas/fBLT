@@ -89,8 +89,9 @@ void blt_block_batch_build_t(blt_block_batch *out, blt_arena *arena, const uint8
 //   loss_out       scalar: L_clean + L_mask/t   (Fast-BLT Eq. 7)
 void blt_local_decoder_forward_diffusion(const blt_local_decoder *model, const blt_tensor *byte_hidden_in,
                                          const blt_tensor *patch_in, const blt_patch_info *patches, size_t num_patches,
-                                         const uint8_t *clean_bytes, const blt_block_batch *batch, blt_d0_mode d0_mode,
-                                         blt_tensor *logits_out, blt_tensor *loss_out, blt_arena *arena);
+                                         const uint8_t *clean_bytes, const blt_tensor *targets,
+                                         const blt_block_batch *batch, blt_d0_mode d0_mode, blt_tensor *logits_out,
+                                         blt_tensor *loss_out, blt_arena *arena);
 
 // Backward pass for the forward above.
 //
@@ -101,7 +102,8 @@ void blt_local_decoder_forward_diffusion(const blt_local_decoder *model, const b
 //   grad                parameter gradients (lm_head, layers, d0 table)
 void blt_local_decoder_backward_diffusion(const blt_local_decoder *model, const blt_tensor *byte_hidden_in,
                                           const blt_tensor *patch_in, const blt_patch_info *patches, size_t num_patches,
-                                          const uint8_t *clean_bytes, const blt_block_batch *batch, blt_d0_mode d0_mode,
+                                          const uint8_t *clean_bytes, const blt_tensor *targets,
+                                          const blt_block_batch *batch, blt_d0_mode d0_mode,
                                           blt_tensor *grad_byte_hidden_in, blt_tensor *grad_patch_in,
                                           blt_local_decoder_grad *grad, blt_arena *arena);
 

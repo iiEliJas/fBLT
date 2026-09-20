@@ -421,12 +421,13 @@ int run_blt_model_overfit(void) {
             size_t scalar_shape[1] = {1};
             blt_tensor loss = blt_tensor_create(scratch_arena, scalar_shape, 1, BLT_DTYPE_FP32);
 
-            blt_model_forward(model, &bytes_in, patches, num_patches, doc_boundaries, 1, &logits, &loss, scratch_arena);
+            blt_model_forward(model, &bytes_in, NULL, patches, num_patches, doc_boundaries, 1, &logits, &loss,
+                              scratch_arena);
 
             avg_loss += ((float *)loss.data)[0];
 
             zero_scatter_grads(grad, model->encoder);
-            blt_model_backward(model, &bytes_in, patches, num_patches, doc_boundaries, 1, grad, scratch_arena);
+            blt_model_backward(model, &bytes_in, NULL, patches, num_patches, doc_boundaries, 1, grad, scratch_arena);
 
             clip_model_grad_global_norm(grad, model, max_grad_norm);
             apply_sgd_to_model(model, grad, lr);
@@ -506,10 +507,11 @@ int run_blt_model_generate_sanity(void) {
             size_t scalar_shape[1] = {1};
             blt_tensor loss = blt_tensor_create(scratch_arena, scalar_shape, 1, BLT_DTYPE_FP32);
 
-            blt_model_forward(model, &bytes_in, patches, num_patches, doc_boundaries, 1, &logits, &loss, scratch_arena);
+            blt_model_forward(model, &bytes_in, NULL, patches, num_patches, doc_boundaries, 1, &logits, &loss,
+                              scratch_arena);
 
             zero_scatter_grads(grad, model->encoder);
-            blt_model_backward(model, &bytes_in, patches, num_patches, doc_boundaries, 1, grad, scratch_arena);
+            blt_model_backward(model, &bytes_in, NULL, patches, num_patches, doc_boundaries, 1, grad, scratch_arena);
 
             clip_model_grad_global_norm(grad, model, max_grad_norm);
             apply_sgd_to_model(model, grad, lr);

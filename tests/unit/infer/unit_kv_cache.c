@@ -174,7 +174,8 @@ static int run_pattern_case(const dec_dims *dims) {
     // Dense reference (legacy semantics: all rows are h_final)
     size_t ref_shape[2] = {S, V};
     blt_tensor ref = blt_tensor_create(arena, ref_shape, 2, BLT_DTYPE_FP32);
-    blt_local_decoder_forward_ext(dec, &h, &patch_in, patches, num_patches, NULL, NULL, 0, NULL, &ref, NULL, arena);
+    blt_local_decoder_forward_ext(dec, &h, &patch_in, patches, num_patches, NULL, NULL, NULL, 0, NULL, &ref, NULL,
+                                  arena);
 
     size_t got_shape[2] = {S, V};
 
@@ -298,7 +299,7 @@ int run_kv_cache_rollback_commit(void) {
     // Dense reference over the new sequence
     size_t ref2_shape[2] = {S2, V};
     blt_tensor ref2 = blt_tensor_create(arena, ref2_shape, 2, BLT_DTYPE_FP32);
-    blt_local_decoder_forward_ext(dec, &h2, &pin2, p2, np1, NULL, NULL, 0, NULL, &ref2, NULL, arena);
+    blt_local_decoder_forward_ext(dec, &h2, &pin2, p2, np1, NULL, NULL, NULL, 0, NULL, &ref2, NULL, arena);
 
     // Cache path: LCP against the previous round's boundaries must be 2
     size_t common = blt_kv_cache_common_patches(cache, p2, np1);

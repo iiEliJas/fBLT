@@ -396,8 +396,9 @@ static void make_bytes_tensor(blt_arena *arena, const uint8_t *bytes, size_t len
 
 void blt_local_decoder_forward_diffusion(const blt_local_decoder *model, const blt_tensor *byte_hidden_in,
                                          const blt_tensor *patch_in, const blt_patch_info *patches, size_t num_patches,
-                                         const uint8_t *clean_bytes, const blt_block_batch *batch, blt_d0_mode d0_mode,
-                                         blt_tensor *logits_out, blt_tensor *loss_out, blt_arena *arena) {
+                                         const uint8_t *clean_bytes, const blt_tensor *targets,
+                                         const blt_block_batch *batch, blt_d0_mode d0_mode, blt_tensor *logits_out,
+                                         blt_tensor *loss_out, blt_arena *arena) {
     BLT_REQUIRE(model != NULL && clean_bytes != NULL && logits_out != NULL && loss_out != NULL && arena != NULL,
                 "forward_diffusion: arguments cannot be NULL");
 
@@ -420,14 +421,22 @@ void blt_local_decoder_forward_diffusion(const blt_local_decoder *model, const b
 
     if (c.N >= 2) {
         blt_tensor logits_view;
-        blt_tensor_view_2d(&logits_view, logits.data, c.N - 1, c.V, logits.backend);
+        // When targets is provided (N+1 bytes), use c.N rows (all clean positions)
+        // When targets is NULL, use c.N - 1 rows (legacy behavior)
+        const size_t clean_rows = (targets != NULL) ? c.N : c.N - 1;
+        blt_tensor_view_2d(&logits_view, logits.data, clean_rows, c.V, logits.backend);
 
-        blt_tensor bytes_t;
-        make_bytes_tensor(arena, clean_bytes, c.N, &bytes_t);
-        blt_tensor targets_view;
-        view_1d_offset(&targets_view, &bytes_t, 1, c.N - 1);
+        blt_tensor targets_t;
+        if (targets != NULL) {
+            // targets has c.N + 1 bytes: targets[1..c.N] covers all clean prediction positions
+            view_1d_offset(&targets_t, targets, 1, clean_rows);
+        } else {
+            blt_tensor bytes_t;
+            make_bytes_tensor(arena, clean_bytes, c.N, &bytes_t);
+            view_1d_offset(&targets_t, &bytes_t, 1, c.N - 1);
+        }
 
-        blt_cross_entropy_forward(&logits_view, &targets_view, loss_out);
+        blt_cross_entropy_forward(&logits_view, &targets_t, loss_out);
         blt_tensor_download(loss_out, &loss, sizeof(float));
     }
 
@@ -465,7 +474,8 @@ void blt_local_decoder_forward_diffusion(const blt_local_decoder *model, const b
 
 void blt_local_decoder_backward_diffusion(const blt_local_decoder *model, const blt_tensor *byte_hidden_in,
                                           const blt_tensor *patch_in, const blt_patch_info *patches, size_t num_patches,
-                                          const uint8_t *clean_bytes, const blt_block_batch *batch, blt_d0_mode d0_mode,
+                                          const uint8_t *clean_bytes, const blt_tensor *targets,
+                                          const blt_block_batch *batch, blt_d0_mode d0_mode,
                                           blt_tensor *grad_byte_hidden_in, blt_tensor *grad_patch_in,
                                           blt_local_decoder_grad *grad, blt_arena *arena) {
     BLT_REQUIRE(model != NULL && clean_bytes != NULL && grad_byte_hidden_in != NULL && grad_patch_in != NULL &&
@@ -492,18 +502,23 @@ void blt_local_decoder_backward_diffusion(const blt_local_decoder *model, const 
 
     if (c.N >= 2) {
         blt_tensor logits_view;
-        blt_tensor_view_2d(&logits_view, logits.data, c.N - 1, c.V, logits.backend);
+        const size_t clean_rows = (targets != NULL) ? c.N : c.N - 1;
+        blt_tensor_view_2d(&logits_view, logits.data, clean_rows, c.V, logits.backend);
 
-        blt_tensor bytes_t;
-        make_bytes_tensor(arena, clean_bytes, c.N, &bytes_t);
-        blt_tensor targets_view;
-        view_1d_offset(&targets_view, &bytes_t, 1, c.N - 1);
+        blt_tensor targets_t;
+        if (targets != NULL) {
+            view_1d_offset(&targets_t, targets, 1, clean_rows);
+        } else {
+            blt_tensor bytes_t;
+            make_bytes_tensor(arena, clean_bytes, c.N, &bytes_t);
+            view_1d_offset(&targets_t, &bytes_t, 1, c.N - 1);
+        }
 
-        size_t gv_shape[2] = {c.N - 1, c.V};
+        size_t gv_shape[2] = {clean_rows, c.V};
         blt_tensor grad_view = blt_tensor_create(arena, gv_shape, 2, BLT_DTYPE_FP32);
-        blt_cross_entropy_backward(&logits_view, &targets_view, &grad_view);
-        blt_strided_copy(grad_view.backend, (float *)grad_logits.data, c.V, (const float *)grad_view.data, c.V, c.N - 1,
-                         c.V);
+        blt_cross_entropy_backward(&logits_view, &targets_t, &grad_view);
+        blt_strided_copy(grad_view.backend, (float *)grad_logits.data, c.V, (const float *)grad_view.data, c.V,
+                         clean_rows, c.V);
     }
 
     if (batch->t > 0.0f && batch->loss_scale != 0.0f) {

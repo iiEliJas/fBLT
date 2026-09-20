@@ -44,7 +44,7 @@ double window_causal_ce(blt_arena *arena, const blt_model *model, const uint8_t 
         blt_tensor logits = blt_tensor_create(arena, lg, 2, BLT_DTYPE_FP32);
         size_t sc[1] = {1};
         blt_tensor loss = blt_tensor_create(arena, sc, 1, BLT_DTYPE_FP32);
-        blt_local_decoder_forward_diffusion(model->decoder, &h, &O, patches, M, text, batch_or_null, d0m, &logits,
+        blt_local_decoder_forward_diffusion(model->decoder, &h, &O, patches, M, text, NULL, batch_or_null, d0m, &logits,
                                             &loss, arena);
         float *L = (float *)malloc(logits.numel * sizeof(float));
         BLT_REQUIRE(L != NULL, "window_causal_ce: logits staging alloc failed");
@@ -95,7 +95,7 @@ double window_causal_ce(blt_arena *arena, const blt_model *model, const uint8_t 
         blt_tensor logits = blt_tensor_create(arena, lg, 2, BLT_DTYPE_FP32);
         size_t sc[1] = {1};
         blt_tensor loss = blt_tensor_create(arena, sc, 1, BLT_DTYPE_FP32);
-        blt_local_decoder_forward(model->decoder, &h, &O, patches, M, &bytes_in, NULL, 0, &logits, &loss, arena);
+        blt_local_decoder_forward(model->decoder, &h, &O, patches, M, &bytes_in, NULL, NULL, 0, &logits, &loss, arena);
         float *L = (float *)malloc(logits.numel * sizeof(float));
         BLT_REQUIRE(L != NULL, "window_causal_ce: logits staging alloc failed");
         blt_tensor_download(&logits, L, logits.numel * sizeof(float));

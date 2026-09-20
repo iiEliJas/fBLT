@@ -81,7 +81,7 @@ void blt_generate_greedy(const blt_model *model, const blt_entropy_lm *entropy_m
         blt_tensor model_logits = blt_tensor_create(arena, vocab_shape, 2, BLT_DTYPE_FP32);
 
         blt_tensor discard_loss = blt_tensor_create(arena, scalar_shape, 1, BLT_DTYPE_FP32);
-        blt_model_forward(model, &bytes_in, patches, num_patches, NULL, 0, &model_logits, &discard_loss, arena);
+        blt_model_forward(model, &bytes_in, NULL, patches, num_patches, NULL, 0, &model_logits, &discard_loss, arena);
 
         // 4. Greedy argmax of the last position's logits
         float *last_row = (float *)malloc(vocab_size * sizeof(float));

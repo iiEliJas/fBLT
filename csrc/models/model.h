@@ -58,6 +58,7 @@ void blt_model_encode(const blt_model *model,
 void blt_model_decode(const blt_model *model, const blt_model_enc_out *enc, const blt_patch_info *patches,
                       size_t num_patches,
                       const blt_tensor *bytes_in,   // [seq_len] UINT8 or NULL (iff loss_out == NULL)
+                      const blt_tensor *targets,    // [seq_len] UINT8 or NULL (for loss against alternate targets)
                       const size_t *doc_boundaries, // byte-indexed
                       size_t num_docs, const blt_local_decoder_d0_opts *d0_opts,
                       blt_tensor *logits_out, // [seq_len, vocab_size]
@@ -66,6 +67,7 @@ void blt_model_decode(const blt_model *model, const blt_model_enc_out *enc, cons
 
 void blt_model_forward(const blt_model *model,
                        const blt_tensor *bytes_in, // [seq_len] UINT8
+                       const blt_tensor *targets,  // [seq_len] UINT8 or NULL
                        const blt_patch_info *patches, size_t num_patches,
                        const size_t *doc_boundaries, // byte-indexed
                        size_t num_docs,
@@ -73,9 +75,9 @@ void blt_model_forward(const blt_model *model,
                        blt_tensor *loss_out,   // scalar
                        blt_arena *arena);
 
-void blt_model_backward(const blt_model *model, const blt_tensor *bytes_in, const blt_patch_info *patches,
-                        size_t num_patches, const size_t *doc_boundaries, size_t num_docs, blt_model_grad *grad,
-                        blt_arena *arena);
+void blt_model_backward(const blt_model *model, const blt_tensor *bytes_in, const blt_tensor *targets,
+                        const blt_patch_info *patches, size_t num_patches, const size_t *doc_boundaries,
+                        size_t num_docs, blt_model_grad *grad, blt_arena *arena);
 
 #ifdef __cplusplus
 }

@@ -166,8 +166,8 @@ static int run_local_decoder_parity_case(bool cross_attn_all_layers) {
     size_t loss_shape[1] = {1};
     blt_tensor loss_out = blt_tensor_create(arena, loss_shape, 1, BLT_DTYPE_FP32);
 
-    blt_local_decoder_forward(model, &byte_hidden_in, &patch_in, patches, num_patches, &bytes_in, NULL, 0, &logits_out,
-                              &loss_out, arena);
+    blt_local_decoder_forward(model, &byte_hidden_in, &patch_in, patches, num_patches, &bytes_in, NULL, NULL, 0,
+                              &logits_out, &loss_out, arena);
 
     TEST_ASSERT_CLOSE(&logits_out, &expected_logits, 1e-3f);
     TEST_ASSERT_CLOSE(&loss_out, &expected_loss, 1e-3f);
@@ -176,7 +176,7 @@ static int run_local_decoder_parity_case(bool cross_attn_all_layers) {
         blt_tensor_create(arena, byte_hidden_in.shape, byte_hidden_in.ndim, BLT_DTYPE_FP32);
     blt_tensor grad_patch_in = blt_tensor_create(arena, patch_in.shape, patch_in.ndim, BLT_DTYPE_FP32);
 
-    blt_local_decoder_backward(model, &byte_hidden_in, &patch_in, patches, num_patches, &bytes_in, NULL, 0,
+    blt_local_decoder_backward(model, &byte_hidden_in, &patch_in, patches, num_patches, &bytes_in, NULL, NULL, 0,
                                &grad_byte_hidden_in, &grad_patch_in, grad, arena);
 
     TEST_ASSERT_CLOSE(&grad_byte_hidden_in, &expected_grad_hidden, 1e-3f);

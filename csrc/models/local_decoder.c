@@ -229,8 +229,8 @@ blt_local_decoder_grad *blt_local_decoder_grad_create(blt_arena *arena, const bl
 
 void blt_local_decoder_forward_ext(const blt_local_decoder *model, const blt_tensor *byte_hidden_in,
                                    const blt_tensor *patch_in, const blt_patch_info *patches, size_t num_patches,
-                                   const blt_tensor *bytes_in, const size_t *doc_boundaries, size_t num_docs,
-                                   const blt_local_decoder_d0_opts *d0_opts, blt_tensor *logits_out,
+                                   const blt_tensor *bytes_in, const blt_tensor *targets, const size_t *doc_boundaries,
+                                   size_t num_docs, const blt_local_decoder_d0_opts *d0_opts, blt_tensor *logits_out,
                                    blt_tensor *loss_out, blt_arena *arena) {
     BLT_REQUIRE(logits_out != NULL, "blt_local_decoder_forward_ext: logits_out cannot be NULL");
     BLT_REQUIRE(loss_out != NULL || bytes_in == NULL,
@@ -346,11 +346,12 @@ void blt_local_decoder_forward_ext(const blt_local_decoder *model, const blt_ten
     blt_matmul(&d, &model->lm_head_weight, logits_out);
 
     if (loss_out != NULL) {
+        const blt_tensor *ce_targets = (targets != NULL) ? targets : bytes_in;
         blt_tensor logits_view;
         blt_tensor_view_2d(&logits_view, logits_out->data, seq_len - 1, V, logits_out->backend);
 
         blt_tensor targets_view;
-        view_1d_offset(&targets_view, bytes_in, 1, seq_len - 1);
+        view_1d_offset(&targets_view, ce_targets, 1, seq_len - 1);
 
         blt_cross_entropy_forward(&logits_view, &targets_view, loss_out);
     }
@@ -358,12 +359,12 @@ void blt_local_decoder_forward_ext(const blt_local_decoder *model, const blt_ten
 
 void blt_local_decoder_forward(const blt_local_decoder *model, const blt_tensor *byte_hidden_in,
                                const blt_tensor *patch_in, const blt_patch_info *patches, size_t num_patches,
-                               const blt_tensor *bytes_in, const size_t *doc_boundaries, size_t num_docs,
-                               blt_tensor *logits_out, blt_tensor *loss_out, blt_arena *arena) {
+                               const blt_tensor *bytes_in, const blt_tensor *targets, const size_t *doc_boundaries,
+                               size_t num_docs, blt_tensor *logits_out, blt_tensor *loss_out, blt_arena *arena) {
     BLT_REQUIRE(logits_out != NULL && loss_out != NULL,
                 "blt_local_decoder_forward: logits_out and loss_out cannot be NULL");
-    blt_local_decoder_forward_ext(model, byte_hidden_in, patch_in, patches, num_patches, bytes_in, doc_boundaries,
-                                  num_docs, NULL, logits_out, loss_out, arena);
+    blt_local_decoder_forward_ext(model, byte_hidden_in, patch_in, patches, num_patches, bytes_in, targets,
+                                  doc_boundaries, num_docs, NULL, logits_out, loss_out, arena);
 }
 
 typedef struct {
@@ -375,8 +376,8 @@ typedef struct {
 
 void blt_local_decoder_backward(const blt_local_decoder *model, const blt_tensor *byte_hidden_in,
                                 const blt_tensor *patch_in, const blt_patch_info *patches, size_t num_patches,
-                                const blt_tensor *bytes_in, const size_t *doc_boundaries, size_t num_docs,
-                                blt_tensor *grad_byte_hidden_in, blt_tensor *grad_patch_in,
+                                const blt_tensor *bytes_in, const blt_tensor *targets, const size_t *doc_boundaries,
+                                size_t num_docs, blt_tensor *grad_byte_hidden_in, blt_tensor *grad_patch_in,
                                 blt_local_decoder_grad *grad, blt_arena *arena) {
     size_t seq_len;
     validate_call(model, byte_hidden_in, patch_in, patches, num_patches, bytes_in, arena, &seq_len);
@@ -462,8 +463,9 @@ void blt_local_decoder_backward(const blt_local_decoder *model, const blt_tensor
     blt_tensor logits_view;
     blt_tensor_view_2d(&logits_view, logits.data, seq_len - 1, V, logits.backend);
 
+    const blt_tensor *ce_targets = (targets != NULL) ? targets : bytes_in;
     blt_tensor targets_view;
-    view_1d_offset(&targets_view, bytes_in, 1, seq_len - 1);
+    view_1d_offset(&targets_view, ce_targets, 1, seq_len - 1);
 
     // Terminal gradient dL/dlogits -- only the first seq_len-1 rows were
     // used in the loss; the last position's row gets zero gradient.

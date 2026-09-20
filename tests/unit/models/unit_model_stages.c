@@ -198,7 +198,7 @@ int run_model_stage_split_equivalence(void) {
         // full forward
         blt_tensor logits_f = blt_tensor_create(scratch, logits_shape, 2, BLT_DTYPE_FP32);
         blt_tensor loss_f = blt_tensor_create(scratch, scalar_shape, 1, BLT_DTYPE_FP32);
-        blt_model_forward(model, &bytes_in, patches, num_patches, NULL, 0, &logits_f, &loss_f, scratch);
+        blt_model_forward(model, &bytes_in, NULL, patches, num_patches, NULL, 0, &logits_f, &loss_f, scratch);
 
         // staged
         blt_model_enc_out enc;
@@ -209,7 +209,8 @@ int run_model_stage_split_equivalence(void) {
 
         blt_tensor logits_d = blt_tensor_create(scratch, logits_shape, 2, BLT_DTYPE_FP32);
         blt_tensor loss_d = blt_tensor_create(scratch, scalar_shape, 1, BLT_DTYPE_FP32);
-        blt_model_decode(model, &enc, patches, num_patches, &bytes_in, NULL, 0, NULL, &logits_d, &loss_d, scratch);
+        blt_model_decode(model, &enc, patches, num_patches, &bytes_in, NULL, NULL, 0, NULL, &logits_d, &loss_d,
+                         scratch);
 
         tensors_equal_exact(&logits_f, &logits_d);
         tensors_equal_exact(&loss_f, &loss_d);
@@ -231,7 +232,7 @@ int run_model_stage_split_equivalence(void) {
 
         blt_tensor logits_f = blt_tensor_create(scratch, logits_shape, 2, BLT_DTYPE_FP32);
         blt_tensor loss_f = blt_tensor_create(scratch, scalar_shape, 1, BLT_DTYPE_FP32);
-        blt_model_forward(model, &bytes_in, patches, num_patches, doc_boundaries, 2, &logits_f, &loss_f, scratch);
+        blt_model_forward(model, &bytes_in, NULL, patches, num_patches, doc_boundaries, 2, &logits_f, &loss_f, scratch);
 
         blt_model_enc_out enc;
         blt_model_encode(model, &bytes_in, patches, num_patches, doc_boundaries, 2, &enc, scratch);
@@ -240,8 +241,8 @@ int run_model_stage_split_equivalence(void) {
 
         blt_tensor logits_d = blt_tensor_create(scratch, logits_shape, 2, BLT_DTYPE_FP32);
         blt_tensor loss_d = blt_tensor_create(scratch, scalar_shape, 1, BLT_DTYPE_FP32);
-        blt_model_decode(model, &enc, patches, num_patches, &bytes_in, doc_boundaries, 2, NULL, &logits_d, &loss_d,
-                         scratch);
+        blt_model_decode(model, &enc, patches, num_patches, &bytes_in, NULL, doc_boundaries, 2, NULL, &logits_d,
+                         &loss_d, scratch);
 
         tensors_equal_exact(&logits_f, &logits_d);
         tensors_equal_exact(&loss_f, &loss_d);
@@ -283,13 +284,13 @@ int run_model_decode_nullable_loss(void) {
 
     blt_tensor logits_f = blt_tensor_create(scratch, logits_shape, 2, BLT_DTYPE_FP32);
     blt_tensor loss = blt_tensor_create(scratch, scalar_shape, 1, BLT_DTYPE_FP32);
-    blt_model_forward(model, &bytes_in, patches, num_patches, NULL, 0, &logits_f, &loss, scratch);
+    blt_model_forward(model, &bytes_in, NULL, patches, num_patches, NULL, 0, &logits_f, &loss, scratch);
 
     blt_model_enc_out enc;
     blt_model_encode(model, &bytes_in, patches, num_patches, NULL, 0, &enc, scratch);
 
     blt_tensor logits_only = blt_tensor_create(scratch, logits_shape, 2, BLT_DTYPE_FP32);
-    blt_model_decode(model, &enc, patches, num_patches, NULL, NULL, 0, NULL, &logits_only, NULL, scratch);
+    blt_model_decode(model, &enc, patches, num_patches, NULL, NULL, NULL, 0, NULL, &logits_only, NULL, scratch);
 
     tensors_equal_exact(&logits_f, &logits_only);
 
@@ -374,8 +375,8 @@ static int run_d0_mode_case(blt_d0_mode mode, size_t patch_dim) {
     // frozen patch latents as the extended run below
     size_t ref_shape[2] = {H, 256};
     blt_tensor ref_logits = blt_tensor_create(arena, ref_shape, 2, BLT_DTYPE_FP32);
-    blt_local_decoder_forward_ext(dec, &h_prefix, &patch_in, patches, num_patches, NULL, NULL, 0, NULL, &ref_logits,
-                                  NULL, arena);
+    blt_local_decoder_forward_ext(dec, &h_prefix, &patch_in, patches, num_patches, NULL, NULL, NULL, 0, NULL,
+                                  &ref_logits, NULL, arena);
 
     // Full input: prefix rows verbatim + poisoned extra rows (must never
     // influence anything)
@@ -398,8 +399,8 @@ static int run_d0_mode_case(blt_d0_mode mode, size_t patch_dim) {
 
     size_t out_shape[2] = {S, 256};
     blt_tensor out_logits = blt_tensor_create(arena, out_shape, 2, BLT_DTYPE_FP32);
-    blt_local_decoder_forward_ext(dec, &h_full, &patch_in, patches, num_patches, NULL, NULL, 0, &opts, &out_logits,
-                                  NULL, arena);
+    blt_local_decoder_forward_ext(dec, &h_full, &patch_in, patches, num_patches, NULL, NULL, NULL, 0, &opts,
+                                  &out_logits, NULL, arena);
 
     // Prefix rows must be bit-identical to the prefix-only run
     logit_rows_equal_exact(&out_logits, &ref_logits, H, 256);
@@ -409,8 +410,8 @@ static int run_d0_mode_case(blt_d0_mode mode, size_t patch_dim) {
     if (mode == BLT_D0_LEARNED) {
         // deterministic rerun
         blt_tensor rerun = blt_tensor_create(arena, out_shape, 2, BLT_DTYPE_FP32);
-        blt_local_decoder_forward_ext(dec, &h_full, &patch_in, patches, num_patches, NULL, NULL, 0, &opts, &rerun, NULL,
-                                      arena);
+        blt_local_decoder_forward_ext(dec, &h_full, &patch_in, patches, num_patches, NULL, NULL, NULL, 0, &opts, &rerun,
+                                      NULL, arena);
         tensors_equal_exact(&out_logits, &rerun);
 
         // contrast run: same everything, ZEROS policy -> different extra rows
@@ -420,7 +421,7 @@ static int run_d0_mode_case(blt_d0_mode mode, size_t patch_dim) {
             .d0_extra_tokens = NULL,
         };
         blt_tensor zeros_logits = blt_tensor_create(arena, out_shape, 2, BLT_DTYPE_FP32);
-        blt_local_decoder_forward_ext(dec, &h_full, &patch_in, patches, num_patches, NULL, NULL, 0, &zopts,
+        blt_local_decoder_forward_ext(dec, &h_full, &patch_in, patches, num_patches, NULL, NULL, NULL, 0, &zopts,
                                       &zeros_logits, NULL, arena);
 
         const float *a = (const float *)out_logits.data;
