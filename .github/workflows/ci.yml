@@ -39,7 +39,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential
+          sudo apt-get install -y build-essential cmake
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -52,15 +52,18 @@ jobs:
       - name: Generate parity test data
         run: python tests/py/parity_generate.py
 
-      - name: Show build config
-        run: make info
+      - name: Configure CMake
+        run: |
+          mkdir build
+          cd build
+          cmake ..
 
       - name: Build and run tests
-        run: make test
+        run: cmake --build build --target test
 
       - name: Clean build artifacts
         if: always()
-        run: make clean
+        run: rm -rf build
 
   # ====================================================================
   # 2. macOS build + test — DISABLED
@@ -97,7 +100,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential
+          sudo apt-get install -y build-essential cmake
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -112,17 +115,17 @@ jobs:
 
       - name: Build and run tests with sanitizers
         run: |
-          make CC=gcc \
-            CFLAGS="-O1 -g -std=c99 -Wall -Wextra -fsanitize=address,undefined -fno-omit-frame-pointer -Icsrc -Itests -D_POSIX_C_SOURCE=200809L" \
-            LDLIBS="-lm" \
-            test
+          mkdir build-sanitizer
+          cd build-sanitizer
+          cmake .. -DCMAKE_C_FLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer"
+          cmake --build . --target test
         env:
           ASAN_OPTIONS: detect_leaks=0
           UBSAN_OPTIONS: print_stacktrace=1
 
       - name: Clean build artifacts
         if: always()
-        run: make clean
+        run: rm -rf build-sanitizer
 
   # ====================================================================
   # 4. CUDA syntax check (Linux, compile-only, no GPU)
@@ -232,7 +235,7 @@ jobs:
         with:
           msystem: UCRT64
           update: true
-          install: make mingw-w64-ucrt-x86_64-gcc
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake
 
       # PyTorch has no MinGW wheels — use native Windows Python for parity generation.
       - name: Set up Python (native Windows)
@@ -246,18 +249,21 @@ jobs:
       - name: Generate parity test data
         run: python tests/py/parity_generate.py
 
-      - name: Show build config
+      - name: Configure CMake
         shell: msys2 {0}
-        run: make info
+        run: |
+          mkdir build
+          cd build
+          cmake ..
 
       - name: Build and run tests
         shell: msys2 {0}
-        run: make CC=gcc test
+        run: cmake --build build --target test
 
       - name: Clean build artifacts
         if: always()
         shell: msys2 {0}
-        run: make clean
+        run: rm -rf build
 
   # ====================================================================
   # 8. Windows CUDA build (MSVC host, compile-only, no GPU)
@@ -270,7 +276,7 @@ jobs:
   #     VS 2022+ hosts — this is a real constraint, not a CI quirk.
   #   - ilammy/msvc-dev-cmd puts cl.exe on PATH for nvcc -ccbin.
   #   - Jimver/cuda-toolkit installs only nvcc + cudart (no driver).
-  #   - MSYS2 provides `make` for the build shell.
+  #   - MSYS2 provides `cmake` for the build shell.
   windows-cuda-build:
     name: Windows CUDA build (MSVC, compile-only)
     runs-on: windows-2022
@@ -294,7 +300,7 @@ jobs:
           method: network
           sub-packages: '["nvcc", "cudart", "cublas_dev"]'
 
-      # MSYS2 provides `make`.  path-type: inherit lets the recipe see
+      # MSYS2 provides `cmake`.  path-type: inherit lets the recipe see
       # cl.exe (from msvc-dev-cmd) and nvcc (from cuda-toolkit) on the
       # Windows PATH.
       - name: Set up MSYS2
@@ -303,23 +309,26 @@ jobs:
           msystem: UCRT64
           update: false
           path-type: inherit
-          install: make mingw-w64-ucrt-x86_64-gcc
+          install: mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake
 
-      - name: Show build config
+      - name: Configure CMake
         shell: msys2 {0}
-        run: make info
+        run: |
+          mkdir build-cuda
+          cd build-cuda
+          cmake .. -DUSE_CUDA=ON
 
       # Compile CUDA sources only — nvcc produces MSVC object format which
       # MinGW's linker cannot resolve (mixed MSVC/MinGW toolchain).
       # This proves CUDA code compiles on Windows; linking needs native MSVC.
       - name: Compile CUDA sources
         shell: msys2 {0}
-        run: make CUDA=1 CC=gcc cuda-compile
+        run: cmake --build build-cuda --target blt_core
 
       - name: Clean build artifacts
         if: always()
         shell: msys2 {0}
-        run: make CUDA=1 clean
+        run: rm -rf build-cuda
 
   # ====================================================================
   # 9. Windows Python tests

@@ -1,6 +1,6 @@
 # CLI Reference
 
-All commands assume the repo root as working directory. CUDA builds output to `bin-cuda/` and `obj-cuda/`. CPU builds to `bin/` and `obj/`.
+All commands assume the repo root as working directory. Build output goes to `build/` (CPU) or `build-cuda/` (CUDA).
 
 ---
 
@@ -8,18 +8,18 @@ All commands assume the repo root as working directory. CUDA builds output to `b
 
 | Command | Description |
 |---------|-------------|
-| `make test` | Build + run full C test suite (69 tests, ~4s) |
-| `make CUDA=1 test` | Same, CUDA backend |
-| `make main` | Build minimal main (linking stub) |
-| `make CUDA=1 main` | Same, CUDA |
-| `make CUDA=1 train-blt-d` | Build `train_blt_d` |
-| `make sandbox` | Build + run scratch playground (`run/sandbox.c`) |
-| `make cuda-smoke` | Device sanity check (H2D → kernel → D2H) |
-| `make cuda-sanitize` | Run tests under `compute-sanitizer` (native Linux) |
-| `make sanity-check` | Build `sanity_check` diagnostic tool |
-| `make last-row-acc` | Build `last_row_acc` diagnostic tool |
-| `make pos-accuracy` | Build `pos_accuracy` diagnostic tool |
-| `make patch-trunc-split` | Build `patch_trunc_split` diagnostic tool |
+| `cmake --build build --target test` | Build + run full C test suite (69 tests, ~4s) |
+| `cmake --build build-cuda --target test` | Same, CUDA backend |
+| `cmake --build build --target main` | Build minimal main (linking stub) |
+| `cmake --build build-cuda --target main` | Same, CUDA |
+| `cmake --build build-cuda --target train_blt_d` | Build `train_blt_d` |
+| `cmake --build build --target sandbox_run` | Build + run scratch playground |
+| `cmake --build build-cuda --target cuda-smoke` | Device sanity check (H2D → kernel → D2H) |
+| `cmake --build build-cuda --target cuda-sanitize` | Run tests under `compute-sanitizer` (native Linux) |
+| `cmake --build build --target sanity_check` | Build `sanity_check` diagnostic tool |
+| `cmake --build build --target last_row_acc` | Build `last_row_acc` diagnostic tool |
+| `cmake --build build --target pos_accuracy` | Build `pos_accuracy` diagnostic tool |
+| `cmake --build build --target patch_trunc_split` | Build `patch_trunc_split` diagnostic tool |
 | `pytest tests/` | Python test suite (config round-trips, YAML, overrides, entry points) |
 | `ruff check .` | Python lint |
 | `ruff format --check .` | Python format check |
@@ -82,7 +82,7 @@ fblt-infer --checkpoint my_model.fblt --backend cpu \
 
 ## Training: `train_blt_d`
 
-**Binary**: `bin/train_blt_d` (CPU) / `bin-cuda/train_blt_d` (CUDA)
+**Binary**: `build/train_blt_d` (CPU) / `build-cuda/train_blt_d` (CUDA)
 
 ### Core
 
@@ -182,14 +182,14 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 
 ---
 
-## bin/infer — Production inference
+## build/infer — Production inference
 
-**Note:** For most use cases, prefer `fblt-infer` (Python wrapper above) which handles config loading and shape auto-detection. Use the raw `bin/infer` binary directly only when you need to skip the wrapper or debug it.
+**Note:** For most use cases, prefer `fblt-infer` (Python wrapper above) which handles config loading and shape auto-detection. Use the raw `build/infer` binary directly only when you need to skip the wrapper or debug it.
 
 Single-checkpoint, single-prompt, one-shot generation tool.
 
 ```
-bin/infer --checkpoint FILE --embed E --hidden H --enc-layers N --glob-layers N --dec-layers N --backend cpu|cuda [options]
+build/infer --checkpoint FILE --embed E --hidden H --enc-layers N --glob-layers N --dec-layers N --backend cpu|cuda [options]
 ```
 
 ### Required
@@ -272,18 +272,18 @@ Used with `--method blockdiff` or `blockdv`.
 
 ```bash
 # Greedy generation with fixed patches (matches training)
-bin/infer --checkpoint runs/my_model.fblt \
+build/infer --checkpoint runs/my_model.fblt \
   --embed 192 --hidden 384 --enc-layers 2 --glob-layers 2 --dec-layers 2 \
   --backend cpu --fixed-patches --prompt "int main()" --new-bytes 64
 
 # BLT-DV with entropy patching
-bin/infer --checkpoint runs/my_model.fblt \
+build/infer --checkpoint runs/my_model.fblt \
   --embed 192 --hidden 384 --enc-layers 2 --glob-layers 2 --dec-layers 2 \
   --backend cpu --method blockdv --block-size 8 --threshold 0.7 \
   --entropy-lm runs/entlm.bin --prompt "def " --new-bytes 128
 
 # CUDA inference with output to file
-bin-cuda/infer --checkpoint runs/my_model.fblt \
+build-cuda/infer --checkpoint runs/my_model.fblt \
   --embed 192 --hidden 384 --enc-layers 2 --glob-layers 2 --dec-layers 2 \
   --backend cuda --fixed-patches --prompt-file prompt.bin \
   --new-bytes 256 --output generated.bin
@@ -297,9 +297,9 @@ Exit codes: 0 on success, 1 on error.
 
 ## Inference Benchmark: `infer_bench`
 
-> **Note:** `infer_bench` is a research/benchmarking tool for comparing methods against paired checkpoints. For generating text from a single checkpoint, use `fblt-infer` or `bin/infer` instead.
+> **Note:** `infer_bench` is a research/benchmarking tool for comparing methods against paired checkpoints. For generating text from a single checkpoint, use `fblt-infer` or `build/infer` instead.
 
-**Binary**: `bin/infer_bench` (CPU) / `bin-cuda/infer_bench` (CUDA)
+**Binary**: `build/infer_bench` (CPU) / `build-cuda/infer_bench` (CUDA)
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -319,7 +319,7 @@ Exit codes: 0 on success, 1 on error.
 
 ## CUDA Benchmark: `cuda_bench`
 
-**Binary**: `bin-cuda/cuda_bench`
+**Binary**: `build-cuda/cuda_bench`
 
 | Flag | Description |
 |------|-------------|
@@ -352,7 +352,7 @@ Evaluation tools for measuring prediction accuracy on held-out data. All three s
 | `--skip N` | 0 | Bytes to skip before first window |
 | `--entropy-lm FILE` | (none) | Trained entropy-LM weights for patching |
 
-Build: `make sanity-check`, `make last-row-acc`, `make pos-accuracy`
+Build: `cmake --build build --target sanity_check`, `cmake --build build --target last_row_acc`, `cmake --build build --target pos_accuracy`
 
 ---
 
@@ -361,13 +361,13 @@ Build: `make sanity-check`, `make last-row-acc`, `make pos-accuracy`
 Teacher-forced evaluation: feeds real held-out bytes with true history and reports argmax predictions vs actual next bytes. Measures accuracy across all positions (rows 0 through N-1) to verify the model learned the training distribution.
 
 ```
-bin/sanity_check --checkpoint MODEL --corpus FILE [options]
+build/sanity_check --checkpoint MODEL --corpus FILE [options]
 ```
 
 **Output:** Mean CE, Mean BPB, Top-1/5/10 accuracy across all positions. Prints sample predictions for first 3 windows.
 
 ```bash
-bin/sanity_check --checkpoint runs/my_model.fblt \
+build/sanity_check --checkpoint runs/my_model.fblt \
   --corpus data/tinystories/heldout.bin --window 512 --num-windows 50 \
   --entropy-lm runs/entropylm/entropy_lm.fblt
 ```
@@ -379,13 +379,13 @@ bin/sanity_check --checkpoint runs/my_model.fblt \
 Same forward pass as `sanity_check`, but only evaluates prediction accuracy at row N-1 (the byte immediately after the window). Useful for detecting whether the last position receives proper gradient during training.
 
 ```
-bin/last_row_acc --checkpoint MODEL --corpus FILE [options]
+build/last_row_acc --checkpoint MODEL --corpus FILE [options]
 ```
 
 **Output:** Mean CE, Mean BPB, Top-1/5/10 accuracy at the last position only. Per-sample details for first 10 windows.
 
 ```bash
-bin/last_row_acc --checkpoint runs/my_model.fblt \
+build/last_row_acc --checkpoint runs/my_model.fblt \
   --corpus data/tinystories/heldout.bin --window 512 --num-windows 100 \
   --entropy-lm runs/entropylm/entropy_lm.fblt
 ```
@@ -397,13 +397,13 @@ bin/last_row_acc --checkpoint runs/my_model.fblt \
 Reports top-1 accuracy at every row (0 through N-1) separately. Reveals whether accuracy drops at specific positions (e.g., the last-row cliff from the off-by-one training loss bug).
 
 ```
-bin/pos_accuracy --checkpoint MODEL --corpus FILE [options]
+build/pos_accuracy --checkpoint MODEL --corpus FILE [options]
 ```
 
 **Output:** Per-position accuracy table, plus min/max/mean summary.
 
 ```bash
-bin/pos_accuracy --checkpoint runs/my_model.fblt \
+build/pos_accuracy --checkpoint runs/my_model.fblt \
   --corpus data/tinystories/heldout.bin --window 512 --num-windows 10 \
   --entropy-lm runs/entropylm/entropy_lm.fblt
 ```
@@ -415,13 +415,13 @@ bin/pos_accuracy --checkpoint runs/my_model.fblt \
 Splits interior-row top-1 accuracy by how the containing patch closed: naturally (entropy trigger) vs forced (max_patch_length or buffer boundary). Used to test Hypothesis B from `docs/LAST_ROW_TRAINING_GAP.md` — whether arbitrarily-truncated patches have a representational weakness that more training alone won't fix.
 
 ```
-bin/patch_trunc_split --checkpoint MODEL --corpus FILE [options]
+build/patch_trunc_split --checkpoint MODEL --corpus FILE [options]
 ```
 
 **Output:** Three-way accuracy split (natural / max-length capped / buffer-boundary), plus buffer-boundary sub-buckets by patch length (1–2, 3–4, 5–8, 9–16, 17+).
 
 ```bash
-bin/patch_trunc_split --checkpoint runs/tinystories_p7/tinystories_p7.fblt \
+build/patch_trunc_split --checkpoint runs/tinystories_p7/tinystories_p7.fblt \
   --corpus data/tinystories/heldout.bin --window 512 --num-windows 50 \
   --entropy-lm runs/entropylm/entropy_lm.fblt
 ```
@@ -442,13 +442,13 @@ bin/patch_trunc_split --checkpoint runs/tinystories_p7/tinystories_p7.fblt \
 
 ### Toy-scale training (plain + BLT-D, SGD)
 ```bash
-make CUDA=1 train-blt-d
+cmake --build build-cuda --target train_blt_d
 
-bin-cuda/train_blt_d --corpus data/train.bin --eval-corpus data/heldout.bin \
+build-cuda/train_blt_d --corpus data/train.bin --eval-corpus data/heldout.bin \
     --eval-windows 300 --steps 40000 --diffusion 0 --lr-decay 1 --seed 7 \
     --save-weights runs/plain_40k.fblt --backend cuda
 
-bin-cuda/train_blt_d --corpus data/train.bin --eval-corpus data/heldout.bin \
+build-cuda/train_blt_d --corpus data/train.bin --eval-corpus data/heldout.bin \
     --eval-windows 300 --steps 40000 --diffusion 1 --t-min 0.1 \
     --mask-warmup 10000 --mask-scale 0.3 --lr-decay 1 --seed 7 \
     --save-weights runs/bltd_l03_40k.fblt --backend cuda
@@ -456,7 +456,7 @@ bin-cuda/train_blt_d --corpus data/train.bin --eval-corpus data/heldout.bin \
 
 ### Toy-scale training with AdamW
 ```bash
-bin-cuda/train_blt_d --corpus data/train.bin --eval-corpus data/heldout.bin \
+build-cuda/train_blt_d --corpus data/train.bin --eval-corpus data/heldout.bin \
     --eval-windows 300 --steps 40000 --diffusion 1 --t-min 0.1 \
     --mask-warmup 10000 --mask-scale 0.3 --lr-decay 1 --seed 7 \
     --optimizer adamw --lr 0.001 --weight-decay 0.01 \
@@ -465,9 +465,9 @@ bin-cuda/train_blt_d --corpus data/train.bin --eval-corpus data/heldout.bin \
 
 ### Inference comparison
 ```bash
-make CUDA=1 bench-infer
+cmake --build build-cuda --target bench-infer
 
-bin-cuda/infer_bench --plain runs/plain_40k.fblt --bltd runs/bltd_l03_40k.fblt \
+build-cuda/infer_bench --plain runs/plain_40k.fblt --bltd runs/bltd_l03_40k.fblt \
     --backend cuda --new-bytes 64 --results bench/results.jsonl
 ```
 
