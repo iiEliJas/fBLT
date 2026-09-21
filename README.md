@@ -44,6 +44,7 @@ Five-stage pipeline:
 ## Prerequisites
 
 - C compiler (`gcc` or `clang`), C99-compatible
+- CMake >= 3.18
 - Python >= 3.9
 - (Optional, for GPU training/inference) CUDA toolkit with `nvcc`
 
@@ -51,7 +52,17 @@ Five-stage pipeline:
 
 ```bash
 pip install -e .                    # install fblt package + entry points
-make CUDA=1 train-blt-d infer       # build C binaries (drop CUDA=1 for CPU-only)
+
+# Build C binaries
+mkdir build && cd build
+cmake ..                             # CPU build
+cmake --build . -j$(nproc)          # build all targets
+
+# Or for CUDA:
+mkdir build-cuda && cd build-cuda
+cmake .. -DUSE_CUDA=ON             # enable CUDA backend
+cmake --build . -j$(nproc)          # build all targets
+
 python fblt/scripts/build_sample_corpus.py  # generate sample training data from repo source
 
 # Train a tiny model (debug config, 10 steps)
@@ -84,21 +95,33 @@ For heldout evaluation, set `--eval-corpus` to a separate `.bin` file not overla
 ## Build
 
 ```bash
-make test         # build + run C test suite
-make train-blt-d  # build train_blt_d executable for training
-make main         # build main executable
-make info         # show build config
-make clean        # remove obj/, bin/
-make help         # show all targets
+# CPU build
+mkdir build && cd build
+cmake ..
+cmake --build . -j$(nproc)          # build all targets
+cmake --build . --target test       # build + run C test suite
+
+# CUDA build
+mkdir build-cuda && cd build-cuda
+cmake .. -DUSE_CUDA=ON
+cmake --build . -j$(nproc)          # build all targets
+cmake --build . --target test       # build + run C test suite
+
+# Other useful targets
+cmake --build . --target main       # build main executable
+cmake --build . --target train_blt_d  # build trainer
+cmake --build . --target infer      # build inference binary
+cmake --build . --target sandbox_run  # build + run sandbox
+cmake --build . --target bench-harness  # build + run benchmark harness
 ```
 
 Default is `gcc -O2 -std=c99 -Wall -Wextra`. Change it:
 
 ```bash
-make CC=clang CFLAGS="-O3 -std=c99 -Wall"
+cmake .. -DCMAKE_C_COMPILER=clang -DCMAKE_C_FLAGS="-O3 -std=c99 -Wall"
 ```
 
-CUDA: `make CUDA=1 <target>` compiles `.cu` files with nvcc, outputs to `obj-cuda/` and `bin-cuda/`.
+CUDA: `cmake .. -DUSE_CUDA=ON` enables CUDA support and compiles `.cu` files with nvcc.
 
 ### Python setup
 
@@ -123,8 +146,8 @@ For the C test suite parity tests, generate golden data first:
 
 ```bash
 pip install torch numpy
-make parity-data                      # or just python tests/py/parity_generate.py
-make test                             # build + run C tests
+python tests/py/parity_generate.py  # or just: cmake --build . --target parity-data (if data/tests missing)
+cmake --build . --target test       # build + run C tests
 ```
 
 ## Layout
@@ -154,6 +177,9 @@ tests/                Test suite (C + Python)
 bench/                Benchmarks
 run/                  C entry points (train_blt_d.c, infer.c, etc.)
 data/                 Training data (sample corpus, golden test tensors)
+
+build/                CMake build output (CPU)
+build-cuda/           CMake build output (CUDA, when -DUSE_CUDA=ON)
 ```
 
 ## Training configuration
@@ -169,7 +195,7 @@ The wrapper creates a run directory under `runs/`, writes a `resolved_config.yam
 The underlying C binary can still be called directly:
 
 ```bash
-./bin-cuda/train_blt_d --backend cuda \
+./build-cuda/train_blt_d --backend cuda \
   --embed 192 --hidden 384 --layers 2 \
   --steps 40000 --lr 0.05 --lr-decay 1 \
   --mask-warmup 33200 --mask-scale 0.3 \
@@ -219,7 +245,7 @@ Inference methods: `greedy` (default), `selfspec`, `blockdiff`, `blockdv`. See `
 `infer_bench` is a separate research/benchmarking tool that compares inference methods and writes metrics to `bench/results.jsonl`.
 
 ```bash
-make bench-infer                       # needs runs/*_40k.fblt checkpoints
+cmake --build . --target bench-infer  # needs runs/*_40k.fblt checkpoints
 python3 fblt/scripts/bench_plots.py    # writes graphs/*.png
 ```
 
@@ -295,6 +321,7 @@ person from trying it too ;D
 - Run-directory management with resolved config snapshots
 - YAML configs for training and inference
 - Windows support
+- CMake build system migration
 
 **Todo:**
 - Inference improvements
