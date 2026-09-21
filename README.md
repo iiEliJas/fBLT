@@ -20,7 +20,9 @@ Based on two papers from Meta FAIR (with Stanford and University of Washington c
 - [Layout](#layout)
 - [Training configuration](#training-configuration)
 - [Inference](#inference)
-- [Ablation sweeps](#ablation-sweeps)
+- [Benchmarks](#benchmarks)
+- [Community experiments](#community-experiments)
+- [Issues](#issues)
 - [TODO](#todo)
 - [Docs](#docs)
 - [Contributing](#contributing)
@@ -184,7 +186,7 @@ build-cuda/           CMake build output (CUDA, when -DUSE_CUDA=ON)
 
 ## Training configuration
 
-The production config for 2.97M-parameter BLT-D training (embed=192, hidden=384, 2/2/2 layers):
+An example for the production config for 2.97M-parameter BLT-D training (embed=192, hidden=384, 2/2/2 layers):
 
 ```bash
 fblt-train --config configs/train/production.yaml --backend cuda
@@ -204,19 +206,6 @@ The underlying C binary can still be called directly:
   --diffusion 1 --block-size 4 --window 48 \
   --save-weights runs/my_checkpoint.fblt
 ```
-
-Use it when you need to skip the wrapper or debug the binary directly.
-
-CUDA delivers **76x training speedup** and **34x generation speedup** over CPU at production config (E=192, H=384, 2.97M params). CPU baseline is single-threaded naive loops. Matmul fp32 hits **6.4 TFLOP/s** on the desktop RTX 4060 (**42.4% MFU** against the 15.11 TFLOP/s spec peak). BF16 mixed-precision matmuls reach **~20 TFLOP/s** (~3x the fp32 rate).
-
-For the full table of settings tested (step budget, decoder/encoder depth, cross-attn, warmup schedules), see [Ablation sweeps](#ablation-sweeps) below.
-
-Full results: [BENCHMARKS.md](docs/BENCHMARKS.md).
-
-### Known issues
-
-- Seed-dependent non-determinism from CUDA atomics.
-- Acceptance-rate root cause at this scale is unknown.
 
 ## Inference
 
@@ -240,7 +229,10 @@ fblt-infer --checkpoint my_model.fblt --backend cpu \
 
 Inference methods: `greedy` (default), `selfspec`, `blockdiff`, `blockdv`. See `configs/infer/` for example YAML configs for each method.
 
-### Benchmarking (research tool)
+## Benchmarks
+Full results: [BENCHMARKS.md](docs/BENCHMARKS.md).
+
+CUDA delivers **76x training speedup** and **34x generation speedup** over CPU at production config (E=192, H=384, 2.97M params). CPU baseline is single-threaded naive loops. Matmul fp32 hits **6.4 TFLOP/s** on the desktop RTX 4060 (**42.4% MFU** against the 15.11 TFLOP/s spec peak). BF16 mixed-precision matmuls reach **~20 TFLOP/s** (~3x the fp32 rate).
 
 `infer_bench` is a separate research/benchmarking tool that compares inference methods and writes metrics to `bench/results.jsonl`.
 
@@ -255,7 +247,7 @@ Three inference modes, benchmarked on the 2.97M-param checkpoint:
 - **BLT-D**: decoder generates a whole block of future bytes in parallel from masked states. Cheapest per byte, but drafts drift.
 - **BLT-DV**: BLT-D drafts, then the model verifies them. Output matches greedy so the draft just makes it cheaper.
 
-**Headline finding:** At 2.97M params, all verified inference methods (BLT-S, BLT-DV) cost *more* memory bandwidth than greedy. BLT-DV acceptance rates (1.6-5.2%) are 18-42x lower than the paper's 3B results. Root cause likely because of the 340x scale gap. See [BENCHMARKS.md](docs/BENCHMARKS.md) for full results.
+**Headline finding:** At 2.97M params, all verified inference methods (BLT-S, BLT-DV) cost *more* memory bandwidth than greedy. BLT-DV acceptance rates (1.6-5.2%) are 18-42x lower than the paper's 3B results. Root cause likely because of the 340x scale gap.
 
 ![Speculative acceptance rates by method](graphs/acceptance.png)
 *Drafted-byte acceptance rate by method, 2.97M-param checkpoint. BLT-S k=4 leads at 31%, declining sharply with k. BLT-DV variants cluster at 2-25%.*
@@ -263,7 +255,7 @@ Three inference modes, benchmarked on the 2.97M-param checkpoint:
 ![Mean wall-clock latency per prompt](graphs/latency.png)
 *Mean wall-clock ms per prompt (64 new bytes). KV-cache usage differs between inference paths, so these are rough wall-clock numbers, not a clean comparison.*
 
-## Ablation sweeps
+### Ablation sweeps
 
 Architecture and schedule ablations at 2.97M parameters (embed=192, hidden=384, 2/2/2 layers) on ~67 MB of C source code. Each axis tested with 3-6 seeds at 40k steps.
 
@@ -279,7 +271,7 @@ Architecture and schedule ablations at 2.97M parameters (embed=192, hidden=384, 
 
 Full tables, raw numbers, and production config: [ABLATIONS.md](docs/ABLATIONS.md).
 
-## Experiments
+## Community experiments
 
 fBLT is small and I have more ideas than time to test them. If you change
 something and see what happens, tell me about it. It does not matter if it
@@ -297,33 +289,20 @@ acceptance rate, wall-clock, anything.
 Negative results count too. They save the next
 person from trying it too ;D
 
+## Issues
+### Known issues
+
+- Seed-dependent non-determinism from CUDA atomics.
+- Acceptance-rate root cause at this scale is unknown.
+
+### Currently under investigation
+
+Last-row accuracy inside each training window sits far below interior-row accuracy (~40% vs ~98%). 
+Two Hypotheses are being considered. Either the last row gets far less supervision per window than interior rows.
+Or patches that get cut off at the window edge are harder for the model to represent. 
+The full report: [LAST_ROW_TRAINING_GAP.md](docs/LAST_ROW_TRAINING_GAP.md).
+
 ## TODO
-
-**Done:**
-- Tensor and memory system (arena allocator, shapes, strides)
-- Backend dispatch (CPU/CUDA abstraction)
-- Core ops on CPU + CUDA (elementwise, matmul, softmax, attention, etc.)
-- Entropy model, patcher
-- Attention (causal, cross-attention, custom masks)
-- Full test harness (unit, integration, golden files)
-- Hash n-gram embeddings
-- Local encoder + decoder
-- Patch transformer (global model)
-- End-to-end forward pass
-- FLOP counting and profiling
-- Ablation sweeps (BPB tables)
-- CUDA backend
-- Training configuration validation (2.97M params, 40k steps)
-- Inference re-verification (acceptance rates, bandwidth analysis)
-- Python wrapper scripts (fblt-train, fblt-infer) with YAML config loading
-- Config dataclasses (TrainConfig, InferConfig) with CLI override merging
-- Auto shape-matching from resolved_config.yaml
-- Run-directory management with resolved config snapshots
-- YAML configs for training and inference
-- Windows support
-- CMake build system migration
-
-**Todo:**
 - Inference improvements
 - Multi-GPU / larger-scale training runs
 - MacOS support
@@ -334,6 +313,7 @@ person from trying it too ;D
 - [BENCHMARKS.md](docs/BENCHMARKS.md) - Full benchmark report
 - [ABLATIONS.md](docs/ABLATIONS.md) - Ablation sweep results
 - [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) - CLI commands for training and inference
+- [LAST_ROW_TRAINING_GAP.md](docs/LAST_ROW_TRAINING_GAP.md) - Open investigation on the last-row accuracy gap
 
 ## Contributing
 
