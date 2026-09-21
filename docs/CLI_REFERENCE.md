@@ -19,6 +19,7 @@ All commands assume the repo root as working directory. CUDA builds output to `b
 | `make sanity-check` | Build `sanity_check` diagnostic tool |
 | `make last-row-acc` | Build `last_row_acc` diagnostic tool |
 | `make pos-accuracy` | Build `pos_accuracy` diagnostic tool |
+| `make patch-trunc-split` | Build `patch_trunc_split` diagnostic tool |
 | `pytest tests/` | Python test suite (config round-trips, YAML, overrides, entry points) |
 | `ruff check .` | Python lint |
 | `ruff format --check .` | Python format check |
@@ -404,6 +405,24 @@ bin/pos_accuracy --checkpoint MODEL --corpus FILE [options]
 ```bash
 bin/pos_accuracy --checkpoint runs/my_model.fblt \
   --corpus data/tinystories/heldout.bin --window 512 --num-windows 10 \
+  --entropy-lm runs/entropylm/entropy_lm.fblt
+```
+
+---
+
+### `patch_trunc_split` — Patch truncation split diagnostic
+
+Splits interior-row top-1 accuracy by how the containing patch closed: naturally (entropy trigger) vs forced (max_patch_length or buffer boundary). Used to test Hypothesis B from `docs/LAST_ROW_TRAINING_GAP.md` — whether arbitrarily-truncated patches have a representational weakness that more training alone won't fix.
+
+```
+bin/patch_trunc_split --checkpoint MODEL --corpus FILE [options]
+```
+
+**Output:** Three-way accuracy split (natural / max-length capped / buffer-boundary), plus buffer-boundary sub-buckets by patch length (1–2, 3–4, 5–8, 9–16, 17+).
+
+```bash
+bin/patch_trunc_split --checkpoint runs/tinystories_p7/tinystories_p7.fblt \
+  --corpus data/tinystories/heldout.bin --window 512 --num-windows 50 \
   --entropy-lm runs/entropylm/entropy_lm.fblt
 ```
 

@@ -175,7 +175,8 @@ TEST_OBJS := $(addprefix $(OBJ_DIR)/,$(TEST_SRCS:.c=.o)) $(CORE_OBJS)
 # ============================================================================
 # TARGETS
 # ============================================================================
-.PHONY: all test main bench bench-harness bench-cuda sandbox e2e-dv bench-infer sweep cuda-smoke cuda-sanitize cuda-compile parity-data infer clean info help
+.PHONY: all test main bench bench-harness bench-cuda sandbox e2e-dv bench-infer sweep cuda-smoke cuda-sanitize cuda-compile parity-data infer clean info help patch-trunc-split
+.PHONY: logits-compare last-row-acc pos-accuracy patch-trunc-split sanity-check
 
 all: test
 
@@ -252,6 +253,8 @@ last-row-acc: $(BIN_DIR)/last_row_acc$(EXE_EXT)
 	@echo "[LAST_ROW] Built successfully: $(BIN_DIR)/last_row_acc$(EXE_EXT)"
 pos-accuracy: $(BIN_DIR)/pos_accuracy$(EXE_EXT)
 	@echo "[POS_ACC] Built successfully: $(BIN_DIR)/pos_accuracy$(EXE_EXT)"
+patch-trunc-split: $(BIN_DIR)/patch_trunc_split$(EXE_EXT)
+	@echo "[PATCH_SPLIT] Built successfully: $(BIN_DIR)/patch_trunc_split$(EXE_EXT)"
 
 infer: $(BIN_DIR)/infer$(EXE_EXT)
 	@echo [INFER] Built successfully: $(BIN_DIR)/infer$(EXE_EXT)
@@ -365,15 +368,12 @@ $(BIN_DIR)/sanity_check$(EXE_EXT): $(SRC_DIR)/tools/sanity_check.c $(CORE_OBJS)
 	@echo "[CC] $< -> $@"
 	@$(CC) $(CFLAGS) $(SRC_DIR)/tools/sanity_check.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
-.PHONY: sanity-check
-
 # Link logits comparison tool
 $(BIN_DIR)/logits_compare$(EXE_EXT): $(SRC_DIR)/tools/logits_compare.c $(CORE_OBJS)
 	$(MKDIR_BIN)
 	@echo "[CC] $< -> $@"
 	@$(CC) $(CFLAGS) $(SRC_DIR)/tools/logits_compare.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
-.PHONY: logits-compare last-row-acc pos-accuracy
 # Link last-row accuracy tool
 $(BIN_DIR)/last_row_acc$(EXE_EXT): $(SRC_DIR)/tools/last_row_acc.c $(CORE_OBJS)
 	$(MKDIR_BIN)
@@ -385,6 +385,12 @@ $(BIN_DIR)/pos_accuracy$(EXE_EXT): $(SRC_DIR)/tools/pos_accuracy.c $(CORE_OBJS)
 	$(MKDIR_BIN)
 	@echo "[CC] $< -> $@"
 	@$(CC) $(CFLAGS) $(SRC_DIR)/tools/pos_accuracy.c $(CORE_OBJS) -o $@ $(LDLIBS)
+
+# Link patch-truncation split diagnostic
+$(BIN_DIR)/patch_trunc_split$(EXE_EXT): $(SRC_DIR)/tools/patch_trunc_split.c $(CORE_OBJS)
+	$(MKDIR_BIN)
+	@echo "[CC] $< -> $@"
+	@$(CC) $(CFLAGS) $(SRC_DIR)/tools/patch_trunc_split.c $(CORE_OBJS) -o $@ $(LDLIBS)
 
 # Link end-to-end driver
 $(BIN_DIR)/e2e_blt_dv$(EXE_EXT): $(SRC_DIR)/e2e_blt_dv.c $(CORE_OBJS)
