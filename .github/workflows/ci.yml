@@ -305,7 +305,7 @@ jobs:
           Get-ChildItem -Path csrc/ops -Filter *.cu | ForEach-Object {
             Write-Host "  checking: $($_.Name)"
             & nvcc -O2 -std=c++17 -arch=sm_89 -c $_.FullName -o NUL `
-              -Icsrc -DBLT_WITH_CUDA -Xcompiler="-Wall,-Wextra"
+              -Icsrc -DBLT_WITH_CUDA
             if ($LASTEXITCODE -ne 0) {
               Write-Host "    FAILED"
               $failures++
