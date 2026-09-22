@@ -62,7 +62,8 @@ void blt_block_batch_build_t(blt_block_batch *out, blt_arena *arena, const uint8
     out->block_size = B;
     out->num_blocks = NB;
     out->n_block_rows = R;
-    out->loss_scale = 1.0f; // paper objective by default
+    out->loss_scale = 1.0f;     // paper objective by default
+    out->last_row_scale = 1.0f; // off: legacy loss by default
 
     out->tokens = (uint32_t *)blt_container_alloc(arena, R * sizeof(uint32_t));
     out->positions = (size_t *)blt_container_alloc(arena, R * sizeof(size_t));
@@ -438,6 +439,18 @@ void blt_local_decoder_forward_diffusion(const blt_local_decoder *model, const b
 
         blt_cross_entropy_forward(&logits_view, &targets_t, loss_out);
         blt_tensor_download(loss_out, &loss, sizeof(float));
+        if (targets != NULL && batch->last_row_scale != 1.0f) {
+            blt_tensor last_row_view;
+            blt_tensor_view_2d(&last_row_view, (float *)logits.data + (c.N - 1) * c.V, 1, c.V, logits.backend);
+            blt_tensor last_target;
+            view_1d_offset(&last_target, targets, c.N, 1);
+            size_t one_shape[1] = {1};
+            blt_tensor ce_last = blt_tensor_create(arena, one_shape, 1, BLT_DTYPE_FP32);
+            blt_cross_entropy_forward(&last_row_view, &last_target, &ce_last);
+            float ce_last_val = 0.0f;
+            blt_tensor_download(&ce_last, &ce_last_val, sizeof(float));
+            loss += (batch->last_row_scale - 1.0f) * ce_last_val / (float)c.N;
+        }
     }
 
     if (batch->t > 0.0f) {
@@ -517,6 +530,11 @@ void blt_local_decoder_backward_diffusion(const blt_local_decoder *model, const 
         size_t gv_shape[2] = {clean_rows, c.V};
         blt_tensor grad_view = blt_tensor_create(arena, gv_shape, 2, BLT_DTYPE_FP32);
         blt_cross_entropy_backward(&logits_view, &targets_t, &grad_view);
+        if (targets != NULL && batch->last_row_scale != 1.0f) {
+            blt_tensor last_grad_view;
+            blt_tensor_view_2d(&last_grad_view, (float *)grad_view.data + (c.N - 1) * c.V, 1, c.V, grad_view.backend);
+            blt_scale(&last_grad_view, batch->last_row_scale);
+        }
         blt_strided_copy(grad_view.backend, (float *)grad_logits.data, c.V, (const float *)grad_view.data, c.V,
                          clean_rows, c.V);
     }

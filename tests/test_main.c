@@ -74,6 +74,7 @@ int main(void) {
         {"block diffusion mask fixture", run_block_diffusion_mask_fixture},
         {"block diffusion gradcheck", run_block_diffusion_gradcheck},
         {"block diffusion overfit gate", run_block_diffusion_overfit_gate},
+        {"block diffusion last-row upweight", run_block_diffusion_last_row_upweight},
     };
 
     const test_case parity_tests[] = {

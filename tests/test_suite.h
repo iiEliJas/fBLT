@@ -53,6 +53,7 @@ int run_blockgen_stage6_helpers(void);
 int run_block_diffusion_mask_fixture(void);
 int run_block_diffusion_gradcheck(void);
 int run_block_diffusion_overfit_gate(void);
+int run_block_diffusion_last_row_upweight(void);
 
 int run_matmul_parity_test(void);
 int run_softmax_parity_test(void);

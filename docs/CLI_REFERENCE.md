@@ -145,6 +145,7 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 | `--mask-scale F` | 1.0 | Ceiling for L_mask weight |
 | `--mask-late-step N` + `--mask-late-scale F` | 0 | Late ramp from mask_scale to mask_late_scale |
 | `--t-warmup-hi F` + `--t-hi-start F` | 0 + 0.8 | High-t curriculum (fraction + start floor) |
+| `--last-row-scale F` | 1.0 | Scale row N-1's L_clean (corrected window+1 targets only); ~511 evens its gradient with the interior rows (1.0 = off) |
 
 ### Patching
 

@@ -54,6 +54,9 @@ typedef struct {
     float loss_scale;     // multiplier on L_mask (paper Eq. 7 uses 1.0); set to 0
                           // mid-training for warmup schedules. Weight only --
                           // masking probabilities are fixed at build time.
+    float last_row_scale; // multiplier (w) on row N-1's L_clean contribution when
+                          // targets != NULL (all-rows path). The row is counted w
+                          // times: loss += (w-1)/N * CE_last. Default 1.0 = off.
 } blt_block_batch;
 
 // Builds one corrupted training example (Fast-BLT §3.2.1).
