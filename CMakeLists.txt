@@ -16,6 +16,15 @@ option(USE_CUDA "Enable CUDA backend (Linux + NVIDIA GPU required)" OFF)
 
 # -- CUDA Setup --------------------------------------------------------------
 if(USE_CUDA)
+  # Prefer a standalone CUDA toolkit over the apt nvcc package (see
+  # AGENTS.md: the apt cuBLAS 12 runtime breaks against newer drivers).
+  # A user-supplied -DCUDAToolkit_ROOT / -DCMAKE_CUDA_COMPILER still wins.
+  if(NOT CUDAToolkit_ROOT AND EXISTS "/usr/local/cuda")
+    set(CUDAToolkit_ROOT "/usr/local/cuda" CACHE PATH "CUDA toolkit install prefix")
+  endif()
+  if(NOT CMAKE_CUDA_COMPILER AND DEFINED CUDAToolkit_ROOT)
+    set(CMAKE_CUDA_COMPILER "${CUDAToolkit_ROOT}/bin/nvcc")
+  endif()
   enable_language(CUDA)
   find_package(CUDAToolkit REQUIRED)
   set(CMAKE_CUDA_ARCHITECTURES 89)
