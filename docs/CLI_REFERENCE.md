@@ -20,6 +20,7 @@ All commands assume the repo root as working directory. Build output goes to `bu
 | `cmake --build build --target last_row_acc` | Build `last_row_acc` diagnostic tool |
 | `cmake --build build --target pos_accuracy` | Build `pos_accuracy` diagnostic tool |
 | `cmake --build build --target patch_trunc_split` | Build `patch_trunc_split` diagnostic tool |
+| `cmake --build build --target patch_final_split` | Build `patch_final_split` diagnostic tool (per-row patch-final accuracy, dump + buckets) |
 | `pytest tests/` | Python test suite (config round-trips, YAML, overrides, entry points) |
 | `ruff check .` | Python lint |
 | `ruff format --check .` | Python format check |
@@ -424,6 +425,42 @@ build/patch_trunc_split --checkpoint MODEL --corpus FILE [options]
 build/patch_trunc_split --checkpoint runs/tinystories_p7/tinystories_p7.fblt \
   --corpus data/tinystories/heldout.bin --window 512 --num-windows 50 \
   --entropy-lm runs/entropylm/entropy_lm.fblt
+```
+
+---
+
+### `patch_final_split` — Per-row patch-final accuracy
+
+Evaluates per-row top-1 prediction accuracy over windows of a byte corpus with entropy patching, classifying every row as final vs non-final byte of its patch. Splits accuracy by patch closure (natural / max-length capped / buffer-boundary) and patch length bucket, and dumps a per-byte TSV.
+
+```
+build/patch_final_split --checkpoint MODEL --corpus FILE --dump PATH [options]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--checkpoint FILE` | *required* | Model checkpoint (.fblt) |
+| `--corpus FILE` | *required* | Held-out byte corpus for evaluation |
+| `--dump PATH` | *required* | Per-byte TSV output path |
+| `--window N` | 512 | Sequence length (must match training) |
+| `--embed N` | 256 | Embed dim (must match checkpoint) |
+| `--hidden N` | 512 | Hidden dim (must match checkpoint) |
+| `--enc-layers N` | 2 | Encoder layers (must match checkpoint) |
+| `--glob-layers N` | 6 | Global transformer layers (must match checkpoint) |
+| `--dec-layers N` | 2 | Decoder layers (must match checkpoint) |
+| `--cross-attn all\|last` | all | Cross-attention placement (must match checkpoint) |
+| `--diffusion 0\|1` | 1 | 0 = plain BLT, 1 = BLT-D |
+| `--num-windows N` | 50 | Number of windows to evaluate |
+| `--skip S` | 0 | Windows to skip before first evaluated window |
+| `--entropy-lm FILE` | (none) | Trained entropy-LM weights for patching |
+| `--max-patch-length L` | 16 | Maximum patch size |
+| `--backend cpu\|cuda` | cpu | Compute backend |
+| `--selftest` | off | Run internal classification self-check (no model/corpus needed) |
+
+**Output:** Accuracy buckets by closure × patch length, split final vs non-final rows. TSV header: `window\trow\tpatch_idx\tpatch_start\tpatch_len\tclosure\tis_final\tcorrect` — `closure` in {nat, max, bnd}; `is_final` and `correct` are 0/1.
+
+```bash
+patch_final_split --checkpoint runs/tinystories_p7/tinystories_p7.fblt --corpus data/tinystories/heldout.bin --window 512 --embed 256 --hidden 512 --enc-layers 2 --glob-layers 6 --dec-layers 2 --cross-attn all --num-windows 50 --entropy-lm runs/entropylm/entropy_lm.fblt --dump docs/last_row_analysis/patch_final_50w.tsv
 ```
 
 ---
