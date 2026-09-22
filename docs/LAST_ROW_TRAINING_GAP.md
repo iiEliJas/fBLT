@@ -1,13 +1,14 @@
 # Last-Row Training Gap: Why BLT-D Generation Failed Despite Near-Perfect Teacher-Forced Accuracy
 
 **Status:** Root cause confirmed and fixed (see §3). A large gap remains at the last row of
-every training window, and the two follow-up diagnostics in §7.3 didn't close it: they found a
-real but small max-length-patch effect (~7pp within 2.8% of rows) and no evidence either way for
-a truncation effect at the last row itself, since interior rows structurally can't test that.
-The cross-attention rule means only the last byte of a patch ever reads that patch's own latent
-(§7.3). Supervision imbalance (Hypothesis A, §6.1) is still the leading explanation but hasn't
-been tested directly. Neither proposed fix (§7.1, §7.2) has been run yet. This document tracks
-an open investigation and will keep changing.
+every training window. Follow-up 1 (§7.4) tested the one comparison §7.3 structurally could
+not — the boundary patch's *final* byte, the only row that reads the truncated patch's own
+latent — and it collapses to 49.2% (500 rows; 47.8pp below the same patch's non-final rows),
+worsening with shorter truncation (29.8% at 1-2 bytes). Natural patch-final rows are *not*
+harder than interior rows (98.96% vs. 98.54%), so the truncation effect, not row position, is
+now the measured mechanism behind the last-row gap (Hypothesis B, §6.2). Supervision imbalance
+(Hypothesis A, §6.1) remains untested. Neither proposed fix (§7.1, §7.2) has been run yet. This
+document tracks an open investigation and will keep changing.
 
 ## Summary
 
@@ -152,7 +153,8 @@ closed.
 The off-by-one fix corrected the *presence* of a gradient at the last row, but not the *rate* at
 which it's supervised relative to interior rows, and not the possibility that the last row draws
 from a different input distribution altogether. Two hypotheses are under consideration for the
-residual ~55-point gap between last-row and interior-row accuracy.
+residual gap between last-row accuracy (measured ~49% in §7.4; ~40% in §5) and interior-row
+accuracy (~97-99%).
 
 ### 6.1 Hypothesis A: Per-window supervision imbalance
 
@@ -180,12 +182,11 @@ there on its own. If an arbitrarily cut-off patch pools into a systematically we
 one that closed naturally, the last row would be harder for a structural reason that has nothing
 to do with gradient counts.
 
-**Diagnostic result (§7.3 has now run, two stages):** neither supported nor refuted. Interior
-rows of the buffer-boundary patch show no measurable deficit, but under the decoder's own
-cross-attention rule, only the last byte of a patch ever reads that patch's own latent; every
-other byte reads the *previous* patch's latent instead. So an interior-row test structurally
-can't probe what this hypothesis is actually about. See §7.3 for the numbers and what a real
-test would look like.
+**Diagnostic result (§7.3 and §7.4):** the interior-row split (§7.3) found no deficit, but
+interior rows of the buffer-boundary patch never read the truncated patch's own latent — only
+the last row does. §7.4 tested exactly that row and found a 47.8pp collapse (49.20% vs. 97.03%
+non-final), directly supporting this hypothesis. See §7.3 for the interior numbers and §7.4 for
+the last-row test.
 
 ### 6.3 Considered and set aside
 
@@ -204,7 +205,7 @@ last-row examples contribute (Hypothesis A); it doesn't change what kinds of pat
 sees. §7.2 addresses Hypothesis A too, by spreading last-row-style supervision across many
 buffer lengths, and additionally exposes the model to more short, buffer-truncated patches, but
 that second benefit only matters if a truncation-specific weakness actually exists at the last
-row (Hypothesis B), which is still untested (§7.3). On present evidence §7.1 is the cheaper first
+row (Hypothesis B), which §7.4 now directly supports. On present evidence §7.1 is the cheaper first
 experiment, and §7.2's extra upside is unproven, not confirmed. Neither fix touches the one
 effect §7.3 *did* measure: the deficit on max-length-capped patches, which would need a patcher
 setting change, not a loss or data-loader change.
@@ -216,7 +217,7 @@ imbalance ratio, ~511:1 at `window = 512`, and back off if interior accuracy reg
 training destabilizes), so a single last-row example pulls proportionally more weight per step.
 It's a one-line change to the loss, no data-loader changes needed, and the cheapest way to test
 Hypothesis A in isolation. A clean result, last-row accuracy approaching the patch-final-row
-baseline proposed in §7.3, would be strong evidence A dominates. A plateau well below it would
+baseline measured in §7.4, would be strong evidence A dominates. A plateau well below it would
 point to a last-row-specific representation gap that upweighting can't fix, which is the signal
 to move to §7.2 and the truncation probe.
 
@@ -228,8 +229,10 @@ buffer lengths instead of piling it onto one relative position every time, and i
 increases how often the model trains on genuinely short, buffer-truncated patches, unlike §7.1.
 Whether that second part is worth anything depends on the last-row truncation probe in §7.3:
 interior rows of buffer-boundary patches showed no deficit, but that test doesn't touch the last
-row. This won't do anything for max-length-capped patches. It's a data-loader change on the same
-scale as the off-by-one fix, and needs to be in the recipe from the start of any full retrain.
+row. §7.4 now shows the last row *is* the deficit (49.20% boundary-final vs. 97.03% non-final),
+so §7.2's rationale is strengthened. This won't do anything for max-length-capped patches. It's
+a data-loader change on the same scale as the off-by-one fix, and needs to be in the recipe from
+the start of any full retrain.
 
 ### 7.3 Diagnostics: Patch-Truncation Split Tests, Results
 
@@ -296,9 +299,10 @@ summary is "no deficit detected," not "short patches are fine."
    bytes (the final byte is the excluded last row), so none of the 108 buffer-boundary rows ever
    touch the truncated patch's pooled representation. Only the last row does. High accuracy on
    this bucket says nothing about whether pooling over a 1-4 byte truncated patch produces a weak
-   latent. Hypothesis B is *untested*, not refuted. The same limitation applies to any
-   interior-row test of buffer-boundary patches. (This assumes the project's decoder mask follows
-   §3.1.1; worth verifying directly in the implementation.)
+   latent. At the time of writing, Hypothesis B was *untested*, not refuted — and the same
+   limitation applies to any interior-row test of buffer-boundary patches. Follow-up 1 (§7.4) has
+   since run exactly this test on the excluded last row, and it collapses. (This assumes the
+   project's decoder mask follows §3.1.1; worth verifying directly in the implementation.)
 
 2. **They don't explain why capped patches are harder.** Two explanations fit the data equally
    well:
@@ -313,12 +317,14 @@ summary is "no deficit detected," not "short patches are fine."
      patches with repetitive, *low*-entropy content (§4.4, App. E). Entropy wasn't logged in this
      test, so which direction it points is unknown.
 
-**Implications for the last-row gap.** The ~55-point gap (~40% last-row vs. ~97-99% interior) is
-still unexplained by anything measured so far: the max-length deficit is ~7 points inside a
-bucket that's 2.8% of rows, and buffer-boundary interior rows show no deficit at all. Hypothesis
-A (§6.1) is still the leading candidate. The completed tests removed the only evidence pointing
-toward B, but A hasn't been tested directly either, and B hasn't been tested at the last row at
-all. Neither result says more last-row training *can't* close the gap. That's what §7.1 tests.
+**Implications for the last-row gap.** §7.3's interior-row results left the last-row gap
+unexplained, but follow-up 1 (§7.4) has since isolated its mechanism: the boundary patch's final
+byte — the only row that reads the truncated patch's own latent — sits at 49.20% against 97.03%
+for the same patch's non-final rows. The max-length deficit is a separate, smaller effect (~7pp
+inside a bucket that's 2.8% of rows), and buffer-boundary interior rows show no deficit at all.
+Hypothesis A (§6.1) is still untested, and the two hypotheses are not mutually exclusive: a weak
+truncated latent (B) and graduated supervision (A) could both depress the last row. That's what
+§7.1 tests.
 
 **`max_patch_length` note.** The Fast BLT paper trains with an average patch size of 4 bytes and
 a max of **8** (§4.1); this project uses 16. A lower cap would shrink the number of capped,
@@ -328,26 +334,105 @@ The upside for interior accuracy is bounded at ~0.2pp, and it wouldn't be expect
 last-row gap, which isn't a max-length effect. Worth considering on its own merits, not as a fix
 for this issue.
 
-**Follow-up tests (not run yet)**
+**Follow-up tests**
 
-1. **Patch-final-row baseline** (re-analysis only, if per-row data are already logged). The last
-   row is, by construction, a *patch-final* row: one that reads its own latent and predicts the
-   byte right after a closure. Natural patch-final rows sit right before entropy-triggered
-   boundaries, which are placed before hard-to-predict bytes on purpose, so they're inherently
-   harder than the average interior row. The current comparison (~40% last-row vs. ~98%
-   all-interior) mixes row types that shouldn't be compared directly. Report patch-final-row
-   accuracy separately for natural and max-length patches, bucketed by patch length. That's the
-   real baseline for the last row, the target §7.1 should be judged against.
-2. **Last-row truncation probe**: the only test that actually exercises Hypothesis B. Run
-   `last_row_acc`-style probes at many cut points within windows, bucket by the length of the
-   open patch at the cut and by whether the cut lands on a natural boundary, and compare against
-   the baseline from (1). If short-cut last-row accuracy sits meaningfully below that baseline, a
-   truncation-specific representation gap is real, and §7.2 gains weight.
+1. **Patch-final-row baseline** — **RUN, see §7.4.** The conceptual framing below did not
+   survive the data: natural patch-final rows are *not* harder than interior rows (98.96% final
+   vs. 98.54% non-final). The last-row deficit is specific to boundary-truncated patches'
+   final bytes (49.20% vs. 97.03% non-final, §7.4), which directly supports Hypothesis B and is
+   the baseline §7.1 should be judged against.
+2. **Last-row truncation probe**: extends §7.4's finding to arbitrary cut points. §7.4 tested
+   one cut per window — the natural window edge — and showed the boundary patch's final byte
+   collapses to 49.20%. Run `last_row_acc`-style probes at many cut points within windows, bucket
+   by the length of the open patch at the cut and by whether the cut lands on a natural boundary,
+   and compare against the §7.4 baseline. If short-cut last-row accuracy sits meaningfully below
+   that baseline, a truncation-specific representation gap is real, and §7.2 gains weight.
 3. **Position and entropy breakdown inside capped patches.** Accuracy by position within the
    patch (1-16), and mean entropy per row/patch, compared against natural patches of similar
    length (12-15 bytes, where available). Errors concentrated at late positions point to a
    stale-latent effect; errors tracking entropy point to content. This diagnoses the max-length
    effect only; it doesn't bear on the last-row gap.
+
+### 7.4 Follow-up 1 (run): Patch-Final-Row Baseline
+
+**What this adds.** The last row (`N-1`) is by construction a *patch-final* row: the final byte
+of the window's boundary (truncated) patch, and — under the decoder mask of §3.1.1 — the one
+byte that reads that patch's own latent. Follow-up 1 measures patch-final-row accuracy
+separately for all three closure types, bucketed by patch length, against the same rows'
+non-final counterparts. §7.3 could not make this comparison: every §7.3 interior number
+excludes the last row, so none of them ever reads a truncated patch's own latent.
+
+**Setup.** New diagnostic `patch_final_split` (`csrc/tools/patch_final_split.c`; cmake target
+`patch_final_split`, docs in `docs/CLI_REFERENCE.md`) dumps per-row records (window, row, patch
+start, patch length, closure, is-final, is-correct) to TSV; the stdlib analyzer
+`fblt/scripts/analyze_patch_final.py` aggregates them. Same model/corpus/patcher as §7.3
+(`tinystories_p7`, `data/tinystories/heldout.bin`, entropy-LM patching with
+`max_patch_length=16`): 500 windows / 256,000 rows, run in 4 chunks of 125 (≈3.3 s/window,
+CPU). Raw artifacts in `runs/tinystories_p7/analyses/` (gitignored); report at
+`docs/last_row_analysis/patch_final_500w.md`.
+
+**Validation.** The 50-window validation run reproduces §7.3 byte-for-byte: recombining this
+run's rows at interior positions (row `< 511`) gives natural 24,363/24,722 = 98.55%, max
+660/720 = 91.67%, boundary 105/108 = 97.22%, overall 25,128/25,550 = 98.35% — identical to §7.3
+Stage 2 on every number (this also cross-checks the new tool's row/closure bookkeeping against
+two pre-existing tools). Independent `last_row_acc` on the same 50 windows reports top-1 =
+48.00%, exactly matching this tool's 24/50 boundary-final figure. Invariant checks on the
+500-window dump: 500 × 512 rows, exactly one boundary-final row per window (500 total), no
+invalid closures, no patch length over the cap.
+
+**Boundary (truncated) patch — the last row.** At `window = 512` with entropy patching the
+boundary patch is short (1-8 bytes in 461/500 windows). Boundary-final rows are, by
+construction, the window's last row:
+
+| Patch length | Final-row acc | n | Non-final-row acc | n |
+|---|---|---|---|---|
+| 1-2  | 29.81% (24.00-36.34) | 208 | 100.00% (96.68-100.00) | 112 |
+| 3-4  | 61.11% (52.96-68.69) | 144 | 97.44% (95.20-98.65) | 351 |
+| 5-8  | 58.72% (49.33-67.51) | 109 | 97.28% (95.56-98.34) | 551 |
+| 9-16 | 82.05% (67.33-91.02) ⚠small-n | 39 | 95.37% (92.71-97.09) | 367 |
+| **all** | **49.20% (44.84-53.57)** | **500** | **97.03% (96.00-97.80)** | **1,381** |
+
+Boundary-final accuracy degrades as the truncation gets shorter: 29.8% at 1-2 bytes, 61.1% at
+3-4, 58.7% at 5-8, 82.1% at 9-16 (the 3-4 vs 5-8 inversion is inside overlapping CIs). Every
+bucket's *non-final* rows sit at 95-100%. The 49.20% aggregate (500 windows) sits slightly above
+§5's 43.00% figure for `window = 512`; the two used different eval-window sets, and the 50-window
+subset reproduces at 48.00% with an independent tool (`last_row_acc`), so both point to a last
+row in the high-40s, well below the ~97-99% interior baseline.
+
+**Natural and max-capped patches.** Patch-final rows are *not* inherently harder:
+
+| Closure | Final-row acc | n | Non-final-row acc | n | Gap |
+|---|---|---|---|---|---|
+| natural | 98.96% (98.87-99.05) | 47,717 | 98.54% (98.48-98.59) | 198,546 | −0.42pp (final higher) |
+| max (len 16) | 84.32% (80.84-87.27) | 491 | 91.38% (90.72-92.00) | 7,365 | +7.06pp |
+| boundary | 49.20% (44.84-53.57) | 500 | 97.03% (96.00-97.80) | 1,381 | +47.83pp |
+
+Natural patch-final rows are even slightly *better* than non-final natural rows, and natural
+patches of 9-16 bytes hold 96.16% at their final row (n=5,362) — a long patch per se is not the
+problem. Max-capped final rows sit at 84.32%: a real but modest deficit, consistent with §7.3's
+interior finding.
+
+**What this establishes.**
+
+1. The ~49% last row is a *boundary-truncation* effect, not a patch-final-row effect. The row
+   that reads its own truncated patch's latent collapses; rows that read only the *previous*
+   patch's latent (boundary non-final rows, and all natural/max rows) stay at ≥84-99%.
+2. First direct support for Hypothesis B (§6.2). The final byte of a truncated patch — the only
+   byte that pools that patch — degrades sharply, monotonically with how short the truncation
+   is. §7.3 could not test this because interior rows never read the truncated latent; the
+   47.8pp boundary gap is the mechanism it hypothesized, now measured.
+3. Reconciliation with §7.3: its boundary-interior 97.22% (n=108) and this run's boundary
+   non-final 97.03% (n=1,381) agree — §7.3's "no deficit detected" remains true *for non-final
+   boundary rows*. The deficit lives exclusively in the final byte.
+4. Hypothesis A (supervision imbalance, §6.1) is untouched by this data. The two are not
+   mutually exclusive: a weak truncated latent would also be undertrained under imbalance. §7.1
+   remains the direct A-test.
+
+**Limitations.** Single checkpoint (p7) and single corpus; per-patch entropy was not logged, so
+(as in §7.3) the content direction of the effect is unknown; the boundary 9-16 bucket is n=39
+(flagged); CIs treat rows as independent though rows within a patch are correlated; max-capped
+patches are all exactly length 16, so the length-matched natural reference is the 9-16 natural
+bucket.
 
 
 
@@ -362,13 +447,13 @@ for this issue.
 | Symptom: healthy teacher-forced eval, garbage greedy generation | Confirmed |
 | Root cause: off-by-one excluding the last row from `L_clean` | Confirmed and fixed |
 | Fix generalizes across window lengths (8/64/256/512); interior accuracy unaffected | Confirmed |
-| Full recovery of last-row accuracy | **Not achieved** (residual gap, ~40% vs. ~97-99% interior) |
-| Hypothesis A (per-window supervision imbalance) | Still the leading candidate; no direct test yet (§7.1) |
-| Hypothesis B as originally stated (truncated patches → weak latent, tested via interior rows) | **Untested, not refuted** (interior rows never read the truncated patch's own latent, §7.3) |
-| Max-length-capped patches are harder | **Measured**: 91.67% vs. 98.55% natural (−6.88pp, 720/25,550 rows); costs ~0.19pp aggregate, doesn't explain the ~55pp last-row gap |
-| Interior rows of buffer-boundary patches are harder | **Not detected** (97.22%, 108 rows, 95% CI 92.1-99.1%); small sample, ≤50 patches |
+| Full recovery of last-row accuracy | **Not achieved** (residual gap, ~49% vs. ~97-99% interior, §7.4) |
+| Hypothesis A (per-window supervision imbalance) | Leading candidate for the *excess* above the truncation baseline; no direct test yet (§7.1) |
+| Hypothesis B (truncated patches → weak latent) | **Directly supported at the last row** (§7.4): boundary-final rows 49.20% (500 rows, 95% CI 44.8-53.6%) vs. boundary non-final 97.03% (1,381 rows) and natural-final 98.96% (47,717 rows); deficit worsens with shorter truncation (29.8% at 1-2 bytes → 82.1% at 9-16) |
+| Max-length-capped patches are harder | **Measured**: 84.32% final-row vs. 91.38% non-final (491/7,365 rows); interior 91.67% vs. 98.55% natural (−6.88pp, §7.3); costs little aggregate, doesn't explain the ~49pp boundary-final gap |
+| Interior rows of buffer-boundary patches are harder | **Not detected** — interior (non-final) boundary rows hold 97.03% (1,381 rows, §7.4); the deficit is confined to the boundary patch's *final* byte (§7.4) |
 | Loss upweighting (§7.1) | Proposed, untested (cheapest direct test of Hypothesis A) |
-| Variable-length windows (§7.2) | Proposed, untested (the truncated-patch benefit is unsupported until the truncation probe runs) |
+| Variable-length windows (§7.2) | Proposed, untested; rationale strengthened by §7.4 (boundary-final rows 49.20% vs. 97.03% non-final — truncation, not row position, drives the gap) |
 | `max_patch_length`: project uses 16, Fast BLT paper uses 8 | Deviation noted; upside bounded at ~0.2pp interior accuracy, unrelated to the last-row gap |
 
 ## References
