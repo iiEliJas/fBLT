@@ -21,6 +21,8 @@ All commands assume the repo root as working directory. Build output goes to `bu
 | `cmake --build build --target pos_accuracy` | Build `pos_accuracy` diagnostic tool |
 | `cmake --build build --target patch_trunc_split` | Build `patch_trunc_split` diagnostic tool |
 | `cmake --build build --target patch_final_split` | Build `patch_final_split` diagnostic tool (per-row patch-final accuracy, dump + buckets) |
+| `cmake --build build --target eval_paper_rule_split` | Build `eval_paper_rule_split` diagnostic tool (paper-rule decoder cross-attention eval, dump + buckets) |
+| `cmake --build build --target eval_isolate_redirect` | Build `eval_isolate_redirect` diagnostic tool (isolated single-patch paper-rule redirect, dump + invariant) |
 | `pytest tests/` | Python test suite (config round-trips, YAML, overrides, entry points) |
 | `ruff check .` | Python lint |
 | `ruff format --check .` | Python format check |
@@ -462,6 +464,47 @@ build/patch_final_split --checkpoint MODEL --corpus FILE --dump PATH [options]
 
 ```bash
 patch_final_split --checkpoint runs/tinystories_p7/tinystories_p7.fblt --corpus data/tinystories/heldout.bin --window 512 --embed 256 --hidden 512 --enc-layers 2 --glob-layers 6 --dec-layers 2 --cross-attn all --num-windows 50 --entropy-lm runs/entropylm/entropy_lm.fblt --dump docs/last_row_analysis/patch_final_50w.tsv
+```
+
+---
+
+### `eval_paper_rule_split` — Paper-rule cross-attention eval (eval-time diagnostic)
+
+Same evaluation pipeline as `patch_final_split`, but at eval time only the decoder's cross-attention group ids are switched from the repo rule (every byte attends its own patch) to the paper rule (Fast BLT §3.1.1: a patch's final byte attends its own patch j; a non-final byte attends the previous patch j-1; first-patch non-final bytes run on group 0 and are flagged `no_prev` for exclusion from the headline aggregate). Encoder and global transformer keep the real patches; no training, model, or masking code is changed.
+
+```
+build/eval_paper_rule_split --checkpoint MODEL --corpus FILE --dump PATH [options]
+```
+
+Flags are identical to `patch_final_split` (see its table above): `--checkpoint`, `--corpus`, `--dump`, `--window`, `--embed`, `--hidden`, `--enc-layers`, `--glob-layers`, `--dec-layers`, `--cross-attn`, `--diffusion`, `--num-windows`, `--skip`, `--entropy-lm`, `--max-patch-length`, `--backend`, `--selftest`.
+
+**Output:** TSV header `window\trow\tpatch_idx\tpatch_start\tpatch_len\tclosure\tis_final\tpos_in_patch\tno_prev\tcorrect` — inserts `pos_in_patch` (row − patch_start) and `no_prev` (1 iff patch_idx==0 and is_final==0) before `correct`. stderr reports first-patch exclusion counts; stdout prints one machine line including `no_prev=`/`no_prev_c=`. `--selftest` exercises the synthetic run-array construction and group-id equivalence on hardcoded patch sets (no checkpoint/corpus needed). Companion analyzer: `python3 fblt/scripts/analyze_paper_rule.py --tsv ... --machine ... --baseline-tsv ... --out ...`.
+
+```bash
+eval_paper_rule_split --checkpoint runs/tinystories_p7/tinystories_p7.fblt --corpus data/tinystories/heldout.bin --window 512 --embed 256 --hidden 512 --enc-layers 2 --glob-layers 6 --dec-layers 2 --cross-attn all --num-windows 50 --entropy-lm runs/entropylm/entropy_lm.fblt --dump docs/last_row_analysis/paper_rule_50w.tsv
+```
+
+---
+
+### `eval_isolate_redirect` — Isolated single-patch redirect eval (eval-time diagnostic)
+
+Isolated variant of `eval_paper_rule_split`: per window, the paper rule (Fast BLT §3.1.1) is applied to exactly ONE redirect target r per forward pass — patch r's non-final bytes attend group r-1, its final byte stays on group r — while every other patch keeps the repo rule (all bytes attend their own group j). One decoder forward per (window, r); encoder and global are hoisted onto the real patches. Rows before patch r keep their group ids and are checked against the `patch_final` baseline (hard pre-flip invariant); only patch r's non-final bytes are scored. Patch 0 is never redirected (no previous patch), matching part 1's `no_prev` exclusion. Eval-only: no training, model, or masking code is changed.
+
+```
+build/eval_isolate_redirect --checkpoint MODEL --corpus FILE --dump PATH --baseline-tsv PATH [options]
+```
+
+Flags are identical to `patch_final_split` (see its table above) plus:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--baseline-tsv PATH` | *required* (except control) | `patch_final` baseline TSV for the pre-flip invariant and the `baseline_correct` column |
+| `--redirect-patch R` | sweep | `-1` = control mode (no redirect; writes the 8-column `patch_final_split` schema for bit-level diffing); omitted = sweep r=1..M-1; `R>=1` = single fixed redirect target |
+
+**Output:** Sweep-mode TSV header `window	row	redirect_patch_idx	patch_start	patch_len	closure	pos_in_patch	correct	baseline_correct`; also writes `<dump>.inv` with one `window redirect_patch_idx pre_rows pre_flips` line per pass and a machine line (`windows= passes= scored_rows= ...`) on stdout. stderr prints one progress line per window and `[INVARIANT]` lines on any pre-r flip (must be zero). `--selftest` exercises the synthetic single-redirect construction (r=1, interior, r=M-1, length-1 targets) with group-id round trips, no checkpoint/corpus needed. Companion analyzer: `python3 fblt/scripts/analyze_isolate_redirect.py --tsv ... --inv ... --machine ... --out ...`.
+
+```bash
+eval_isolate_redirect --checkpoint runs/tinystories_p7/tinystories_p7.fblt --corpus data/tinystories/heldout.bin --window 512 --embed 256 --hidden 512 --enc-layers 2 --glob-layers 6 --dec-layers 2 --cross-attn all --num-windows 50 --entropy-lm runs/entropylm/entropy_lm.fblt --baseline-tsv runs/tinystories_p7/analyses/patch_final_500w.tsv --dump runs/tinystories_p7/analyses/isolate_redirect_50w.tsv
 ```
 
 ---

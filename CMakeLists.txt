@@ -182,6 +182,12 @@ target_link_libraries(patch_final_split PRIVATE blt_core m)
 add_executable(greedy_tf_acc csrc/tools/greedy_tf_acc.c)
 target_link_libraries(greedy_tf_acc PRIVATE blt_core m)
 
+add_executable(eval_paper_rule_split csrc/tools/eval_paper_rule_split.c)
+target_link_libraries(eval_paper_rule_split PRIVATE blt_core m)
+
+add_executable(eval_isolate_redirect csrc/tools/eval_isolate_redirect.c)
+target_link_libraries(eval_isolate_redirect PRIVATE blt_core m)
+
 # -- Benchmarks --------------------------------------------------------------
 add_executable(bench_patcher tests/bench/bench_patcher.c)
 target_include_directories(bench_patcher PRIVATE bench)
