@@ -179,6 +179,9 @@ target_link_libraries(patch_trunc_split PRIVATE blt_core m)
 add_executable(patch_final_split csrc/tools/patch_final_split.c)
 target_link_libraries(patch_final_split PRIVATE blt_core m)
 
+add_executable(greedy_tf_acc csrc/tools/greedy_tf_acc.c)
+target_link_libraries(greedy_tf_acc PRIVATE blt_core m)
+
 # -- Benchmarks --------------------------------------------------------------
 add_executable(bench_patcher tests/bench/bench_patcher.c)
 target_include_directories(bench_patcher PRIVATE bench)
