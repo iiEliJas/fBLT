@@ -13,8 +13,11 @@ typedef struct {
     size_t seq_len_q;
     size_t seq_len_kv;
 
-    size_t sliding_window;        // 0 for full causal attention
-    const size_t *doc_boundaries; // Array of index where new docs start
+    size_t sliding_window; // 0 for full causal attention
+    // Builder convention: doc_boundaries[d] is the first position of document
+    // d+1 for d in [0, num_docs-1); document 0 starts implicitly at 0.
+    // The array therefore has num_docs-1 valid entries.
+    const size_t *doc_boundaries;
     size_t num_docs;
 
     const size_t *query_group_ids;
@@ -38,10 +41,11 @@ void blt_build_attention_mask(const blt_mask_config *config, blt_tensor *out_mas
 // rows/cols [num_clean, S).
 
 typedef enum {
-    BLT_BDM_TRAIN = 0, // Fast-BLT Figure 5 matrix: plain causal over the
-                       // concatenated [clean ; blocks] sequence (the paper's
-                       // matrix shows strict prefix-run causality; pinned by
-                       // the fixture test).
+    BLT_BDM_TRAIN = 0, // Fast-BLT 3.2.2 prose rule: clean rows causal; block row i
+                       // sees all clean bytes plus every block with block-index <=
+                       // i's block-index (bidirectional within own block); pinned
+                       // by the fixture test. Figure 5's matrix is strictly
+                       // causal -- prose rule adopted.
     BLT_BDM_INFER      // Fast-BLT section 3.1.1: clean rows causal; every block row
                        // sees all clean positions and the WHOLE block section
                        // bidirectionally (single live block during generation).
@@ -57,8 +61,8 @@ typedef struct {
 
 // Creates a square FP32 additive mask [seq_len, seq_len]:
 // 0 for allowed attention and -INFINITY for masked attention.
-// Semantics fixed by Fast-BLT Figure 5 (TRAIN) / section 3.1.1 + Figure 3 (INFER);
-// fixture tests pin both to hardcoded matrices.
+// Semantics fixed by Fast-BLT 3.2.2 prose (TRAIN) / section 3.1.1 + Figure 3
+// (INFER); fixture tests pin both to hardcoded matrices.
 void blt_build_block_diffusion_mask(const blt_block_diffusion_config *config, blt_tensor *out_mask, blt_arena *arena);
 
 #ifdef __cplusplus

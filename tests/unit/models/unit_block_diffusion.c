@@ -87,19 +87,21 @@ static size_t fixed_patches(size_t seq_len, size_t patch_len, blt_patch_info *ou
 }
 
 //----------------------------------------------------------------------
-// Test 1: Figure 5 fixture. The TRAIN mask must reproduce the paper's
-// matrix exactly (N=6, B=4, S=14); INFER must give clean-causal +
-// fully-open block region.
+// Test 1: TRAIN mask fixture. The TRAIN mask must reproduce the Fast-BLT
+// 3.2.2 prose rule exactly (N=6, B=4, S=14): clean rows causal; block row i
+// sees all clean bytes and all blocks with block-index <= i's block-index
+// (bidirectional within own block). INFER: clean-causal + fully-open block.
+// NOTE: prose rule adopted; paper's Fig-5 matrix is strictly causal.
 
 int run_block_diffusion_mask_fixture(void) {
     blt_arena *arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
     TEST_ASSERT(arena != NULL);
 
-    // ---- TRAIN: Fast-BLT Figure 5 matrix verbatim ----
-    const char *fig5[14] = {
+    // ---- TRAIN: Fast-BLT 3.2.2 prose rule (not the Fig-5 matrix) ----
+    const char *want[14] = {
         "10000000000000", "11000000000000", "11100000000000", "11110000000000", "11111000000000",
-        "11111100000000", "11111110000000", "11111111000000", "11111111100000", "11111111110000",
-        "11111111111000", "11111111111100", "11111111111110", "11111111111111",
+        "11111100000000", "11111111110000", "11111111110000", "11111111110000", "11111111110000",
+        "11111111111111", "11111111111111", "11111111111111", "11111111111111",
     };
 
     blt_block_diffusion_config mc = {
@@ -114,13 +116,13 @@ int run_block_diffusion_mask_fixture(void) {
     const float *md = (const float *)m.data;
     for (size_t i = 0; i < 14; i++) {
         for (size_t j = 0; j < 14; j++) {
-            const int want = fig5[i][j] - '0';
+            const int w = want[i][j] - '0';
             const float got = md[i * 14 + j];
-            if (want && !(got == 0.0f)) {
-                TEST_ASSERT(!"Fig5: expected allowed (0.0f)");
+            if (w && !(got == 0.0f)) {
+                TEST_ASSERT(!"TRAIN: expected allowed (0.0f)");
             }
-            if (!want && !isinf(got)) {
-                TEST_ASSERT(!"Fig5: expected blocked (-inf)");
+            if (!w && !isinf(got)) {
+                TEST_ASSERT(!"TRAIN: expected blocked (-inf)");
             }
         }
     }
@@ -188,6 +190,20 @@ static float gc_loss(blt_arena *arena, blt_local_decoder *dec, const gc_scenario
     blt_tensor loss = blt_tensor_create(arena, sc_shape, 1, BLT_DTYPE_FP32);
     blt_local_decoder_forward_diffusion(dec, &sc->h, &sc->pin, sc->patches, sc->num_patches, sc->bytes, NULL,
                                         &sc->batch, mode, &logits, &loss, arena);
+    return ((const float *)loss.data)[0];
+}
+
+// targets-aware gc_loss mirror; captures logits (arena-backed struct copy) when non-NULL.
+static float gc_loss_targets(blt_arena *arena, blt_local_decoder *dec, const gc_scenario *sc, blt_d0_mode mode,
+                             const blt_tensor *targets, blt_tensor *logits_out) {
+    size_t S = sc->N + sc->batch.n_block_rows;
+    size_t lg_shape[2] = {S, dec->config.vocab_size};
+    blt_tensor logits = blt_tensor_create(arena, lg_shape, 2, BLT_DTYPE_FP32);
+    size_t sc_shape[1] = {1};
+    blt_tensor loss = blt_tensor_create(arena, sc_shape, 1, BLT_DTYPE_FP32);
+    blt_local_decoder_forward_diffusion(dec, &sc->h, &sc->pin, sc->patches, sc->num_patches, sc->bytes, targets,
+                                        &sc->batch, mode, &logits, &loss, arena);
+    if (logits_out) *logits_out = logits;
     return ((const float *)loss.data)[0];
 }
 
@@ -341,6 +357,158 @@ int run_block_diffusion_gradcheck(void) {
     }
 
     TEST_ASSERT(failures == 0);
+
+    blt_arena_destroy(scratch);
+    blt_arena_destroy(model_arena);
+    return 1;
+}
+
+//----------------------------------------------------------------------
+// Test: last-row L_clean upweighting (blt_block_batch.last_row_scale).
+// Forward must add (w-1)/N * CE_last for targets != NULL; analytic grads
+// must match central differences under w; w=1.0 and the legacy
+// targets == NULL path must be bit-identical to their baselines.
+
+int run_block_diffusion_last_row_upweight(void) {
+    srand(40);
+
+    blt_arena *model_arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *scratch = blt_arena_create(64 * 1024 * 1024, BLT_BACKEND_CPU);
+    TEST_ASSERT(model_arena && scratch);
+
+    tiny_dims dims = {.embed_dim = 8, .hidden_dim = 16, .vocab = 32, .max_seq = 48};
+    blt_local_decoder *dec = make_random_decoder(model_arena, &dims, 0.2f);
+    float *tbl = (float *)dec->d0_embed_weight.data;
+    for (size_t i = 0; i < dec->d0_embed_weight.numel; i++) {
+        tbl[i] = (((i * 13) % 17) - 8.0f) * 0.05f;
+    }
+
+    gc_scenario sc;
+    gc_setup(scratch, &dims, &sc);
+    const blt_d0_mode mode = BLT_D0_LEARNED;
+    const float w = 5.0f;
+    const size_t N = sc.N;
+
+    // N+1-byte targets: row i predicts targets[i+1], row N-1 predicts targets[N]
+    size_t tgt_shape[1] = {N + 1};
+    blt_tensor targets = blt_tensor_create(scratch, tgt_shape, 1, BLT_DTYPE_UINT8);
+    uint8_t *td = (uint8_t *)targets.data;
+    memcpy(td, sc.bytes, N);
+    td[N] = 3;
+    for (size_t i = 0; i <= N; i++) TEST_ASSERT(td[i] < dims.vocab);
+
+    // forward identity: L(w=5) - L(w=1) must equal (w-1)/N * CE_last
+    blt_tensor logits1;
+    sc.batch.last_row_scale = 1.0f;
+    const float L1 = gc_loss_targets(scratch, dec, &sc, mode, &targets, &logits1);
+    sc.batch.last_row_scale = w;
+    const float L5 = gc_loss_targets(scratch, dec, &sc, mode, &targets, NULL);
+    sc.batch.last_row_scale = 1.0f;
+
+    // independent host-side CE of logits row N-1 against targets[N]
+    const float *lg = (const float *)logits1.data;
+    const float *row = lg + (N - 1) * dims.vocab;
+    const size_t tgt = td[N];
+    float maxv = row[0];
+    for (size_t v = 1; v < dims.vocab; v++) maxv = fmaxf(maxv, row[v]);
+    float sum = 0.0f, pt = 0.0f;
+    for (size_t v = 0; v < dims.vocab; v++) {
+        float e = expf(row[v] - maxv);
+        sum += e;
+        if (v == tgt) pt = e;
+    }
+    const float ce_last = -logf(fmaxf(pt / sum, 1e-9f));
+    const float diff = L5 - L1;
+    const float expect = (w - 1.0f) / (float)N * ce_last;
+    printf("    upweight forward L1=%.6f L5=%.6f diff=%+.6f expect=%+.6f ce_last=%.6f\n", (double)L1, (double)L5,
+           (double)diff, (double)expect, (double)ce_last);
+    TEST_ASSERT(fabsf(diff - expect) < 1e-4f * fmaxf(1.0f, fabsf(L5)));
+
+    // backward with targets + w: analytic grads vs central differences
+    blt_local_decoder_grad *grad = blt_local_decoder_grad_create(model_arena, dec);
+    zero_tensor(&grad->lm_head_grad);
+    zero_tensor(&grad->d0_embed_grad);
+    for (size_t i = 0; i < dec->config.num_layers; i++) {
+        blt_local_layer_grad *g = &grad->layer_grads[i];
+        zero_tensor(&g->norm1_weight);
+        zero_tensor(&g->attn_qkv_w);
+        zero_tensor(&g->attn_proj_w);
+        zero_tensor(&g->norm2_weight);
+        zero_tensor(&g->ffn_up_w);
+        zero_tensor(&g->ffn_gate_w);
+        zero_tensor(&g->ffn_down_w);
+        zero_tensor(&g->cross_norm_weight);
+        zero_tensor(&g->cross_weight_q);
+        zero_tensor(&g->cross_weight_k);
+        zero_tensor(&g->cross_weight_v);
+        zero_tensor(&g->cross_weight_proj);
+    }
+
+    size_t gbh_shape[2] = {N, dims.embed_dim};
+    blt_tensor grad_h = blt_tensor_create(scratch, gbh_shape, 2, BLT_DTYPE_FP32);
+    size_t gp_shape[2] = {sc.num_patches, dims.embed_dim};
+    blt_tensor grad_p = blt_tensor_create(scratch, gp_shape, 2, BLT_DTYPE_FP32);
+
+    TEST_ASSERT(sc.batch.t > 0.01f && sc.batch.t < 0.99f);
+    size_t masked_cells = 0;
+    for (size_t r = 0; r < sc.batch.n_block_rows; r++) masked_cells += sc.batch.cell_masked[r];
+    TEST_ASSERT(masked_cells > 0);
+
+    sc.batch.last_row_scale = w;
+    blt_local_decoder_backward_diffusion(dec, &sc.h, &sc.pin, sc.patches, sc.num_patches, sc.bytes, &targets, &sc.batch,
+                                         mode, &grad_h, &grad_p, grad, scratch);
+
+    struct probe {
+        blt_tensor *t;
+        const blt_tensor *g;
+        size_t idx;
+        const char *name;
+    };
+    struct probe probes[] = {
+        {&dec->lm_head_weight, &grad->lm_head_grad, 0, "lm_head[0]"},
+        {&dec->layers[0].attn_qkv_w, &grad->layer_grads[0].attn_qkv_w, 0, "qkv[0,0]"},
+        {&dec->d0_embed_weight, &grad->d0_embed_grad, 3 * dims.embed_dim + 4, "d0_table[3,4]"},
+    };
+
+    const float eps = 1e-3f;
+    size_t failures = 0;
+    for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
+        float *pw = (float *)probes[i].t->data;
+        const float saved = pw[probes[i].idx];
+
+        pw[probes[i].idx] = saved + eps;
+        const float lp = gc_loss_targets(scratch, dec, &sc, mode, &targets, NULL);
+        pw[probes[i].idx] = saved - eps;
+        const float lm = gc_loss_targets(scratch, dec, &sc, mode, &targets, NULL);
+        pw[probes[i].idx] = saved;
+
+        const float numeric = (lp - lm) / (2.0f * eps);
+        const float analytic = ((const float *)probes[i].g->data)[probes[i].idx];
+        const float rel = fabsf(numeric - analytic) / fmaxf(1.0f, fmaxf(fabsf(numeric), fabsf(analytic)));
+
+        printf("    upweight probe %-14s analytic=%+.6f numeric=%+.6f rel=%.2e\n", probes[i].name, (double)analytic,
+               (double)numeric, (double)rel);
+        if (rel > 2e-2f) failures++;
+    }
+    sc.batch.last_row_scale = 1.0f;
+    TEST_ASSERT(failures == 0);
+
+    // default/gate: w=1.0 matches an untouched-field baseline; legacy path ignores w
+    gc_scenario sc_def;
+    gc_setup(scratch, &dims, &sc_def);
+    const float L_def = gc_loss_targets(scratch, dec, &sc_def, mode, &targets, NULL);
+    sc.batch.last_row_scale = 1.0f;
+    const float L_w1 = gc_loss_targets(scratch, dec, &sc, mode, &targets, NULL);
+
+    const float legacy1 = gc_loss_targets(scratch, dec, &sc, mode, NULL, NULL);
+    sc.batch.last_row_scale = w;
+    const float legacy5 = gc_loss_targets(scratch, dec, &sc, mode, NULL, NULL);
+    sc.batch.last_row_scale = 1.0f;
+
+    printf("    upweight gate default=%.6f w1=%.6f | legacy w1=%.6f w5=%.6f\n", (double)L_def, (double)L_w1,
+           (double)legacy1, (double)legacy5);
+    TEST_ASSERT(L_def == L_w1);
+    TEST_ASSERT(legacy1 == legacy5);
 
     blt_arena_destroy(scratch);
     blt_arena_destroy(model_arena);

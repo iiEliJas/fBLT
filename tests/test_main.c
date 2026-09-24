@@ -55,9 +55,11 @@ int main(void) {
         {"global transformer causal mask", run_global_transformer_causal_mask},
         {"global transformer doc boundary", run_global_transformer_doc_boundary},
         {"local decoder cross mask", run_local_decoder_cross_mask},
+        {"local decoder paper rule", run_local_decoder_paper_rule},
         {"local decoder k-split", run_local_decoder_k_split},
         {"blt model generate sanity", run_blt_model_generate_sanity},
         {"model stage split", run_model_stage_split_equivalence},
+        {"model multi-doc isolation", run_model_multi_doc_isolation},
         {"model decode nullable loss", run_model_decode_nullable_loss},
         {"decoder d0 modes", run_decoder_d0_modes},
         {"rope position gather", run_rope_position_gather_test},
@@ -74,6 +76,7 @@ int main(void) {
         {"block diffusion mask fixture", run_block_diffusion_mask_fixture},
         {"block diffusion gradcheck", run_block_diffusion_gradcheck},
         {"block diffusion overfit gate", run_block_diffusion_overfit_gate},
+        {"block diffusion last-row upweight", run_block_diffusion_last_row_upweight},
     };
 
     const test_case parity_tests[] = {

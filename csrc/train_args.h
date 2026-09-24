@@ -36,6 +36,7 @@ typedef struct {
     float lr_decay_factor;
     size_t mask_warmup;
     float mask_scale;
+    float last_row_scale;
     const char *train_entlm;
     const char *entropy_lm;
     size_t mask_late_step;

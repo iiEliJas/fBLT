@@ -16,6 +16,15 @@ option(USE_CUDA "Enable CUDA backend (Linux + NVIDIA GPU required)" OFF)
 
 # -- CUDA Setup --------------------------------------------------------------
 if(USE_CUDA)
+  # Prefer a standalone CUDA toolkit over the apt nvcc package (see
+  # AGENTS.md: the apt cuBLAS 12 runtime breaks against newer drivers).
+  # A user-supplied -DCUDAToolkit_ROOT / -DCMAKE_CUDA_COMPILER still wins.
+  if(NOT CUDAToolkit_ROOT AND EXISTS "/usr/local/cuda")
+    set(CUDAToolkit_ROOT "/usr/local/cuda" CACHE PATH "CUDA toolkit install prefix")
+  endif()
+  if(NOT CMAKE_CUDA_COMPILER AND DEFINED CUDAToolkit_ROOT)
+    set(CMAKE_CUDA_COMPILER "${CUDAToolkit_ROOT}/bin/nvcc")
+  endif()
   enable_language(CUDA)
   find_package(CUDAToolkit REQUIRED)
   set(CMAKE_CUDA_ARCHITECTURES 89)
@@ -166,6 +175,18 @@ target_link_libraries(pos_accuracy PRIVATE blt_core m)
 
 add_executable(patch_trunc_split csrc/tools/patch_trunc_split.c)
 target_link_libraries(patch_trunc_split PRIVATE blt_core m)
+
+add_executable(patch_final_split csrc/tools/patch_final_split.c)
+target_link_libraries(patch_final_split PRIVATE blt_core m)
+
+add_executable(greedy_tf_acc csrc/tools/greedy_tf_acc.c)
+target_link_libraries(greedy_tf_acc PRIVATE blt_core m)
+
+add_executable(eval_paper_rule_split csrc/tools/eval_paper_rule_split.c)
+target_link_libraries(eval_paper_rule_split PRIVATE blt_core m)
+
+add_executable(eval_isolate_redirect csrc/tools/eval_isolate_redirect.c)
+target_link_libraries(eval_isolate_redirect PRIVATE blt_core m)
 
 # -- Benchmarks --------------------------------------------------------------
 add_executable(bench_patcher tests/bench/bench_patcher.c)

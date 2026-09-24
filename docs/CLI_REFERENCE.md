@@ -8,7 +8,7 @@ All commands assume the repo root as working directory. Build output goes to `bu
 
 | Command | Description |
 |---------|-------------|
-| `cmake --build build --target test` | Build + run full C test suite (69 tests, ~4s) |
+| `cmake --build build --target test` | Build + run full C test suite (72 tests, ~4s) |
 | `cmake --build build-cuda --target test` | Same, CUDA backend |
 | `cmake --build build --target main` | Build minimal main (linking stub) |
 | `cmake --build build-cuda --target main` | Same, CUDA |
@@ -20,6 +20,9 @@ All commands assume the repo root as working directory. Build output goes to `bu
 | `cmake --build build --target last_row_acc` | Build `last_row_acc` diagnostic tool |
 | `cmake --build build --target pos_accuracy` | Build `pos_accuracy` diagnostic tool |
 | `cmake --build build --target patch_trunc_split` | Build `patch_trunc_split` diagnostic tool |
+| `cmake --build build --target patch_final_split` | Build `patch_final_split` diagnostic tool (per-row patch-final accuracy, dump + buckets) |
+| `cmake --build build --target eval_paper_rule_split` | Build `eval_paper_rule_split` diagnostic tool (paper-rule decoder cross-attention eval, dump + buckets) |
+| `cmake --build build --target eval_isolate_redirect` | Build `eval_isolate_redirect` diagnostic tool (isolated single-patch paper-rule redirect, dump + invariant) |
 | `pytest tests/` | Python test suite (config round-trips, YAML, overrides, entry points) |
 | `ruff check .` | Python lint |
 | `ruff format --check .` | Python format check |
@@ -124,7 +127,7 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 
 | Flag | Description |
 |------|-------------|
-| `--save-weights PATH` | Write weights after training |
+| `--save-weights PATH` | Write weights after training; if PATH contains `%d`, the first `%d` is replaced by the step number |
 | `--save-every N` | Save checkpoint every N steps (0 = only at end) |
 | `--load-weights PATH` | Load weights before training (steps=0 → eval only) |
 | `--eval-corpus FILE` | Held-out corpus for causal BPB eval |
@@ -144,6 +147,7 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 | `--mask-scale F` | 1.0 | Ceiling for L_mask weight |
 | `--mask-late-step N` + `--mask-late-scale F` | 0 | Late ramp from mask_scale to mask_late_scale |
 | `--t-warmup-hi F` + `--t-hi-start F` | 0 + 0.8 | High-t curriculum (fraction + start floor) |
+| `--last-row-scale F` | 1.0 | Scale row N-1's L_clean (corrected window+1 targets only); ~511 evens its gradient with the interior rows (1.0 = off) |
 
 ### Patching
 
@@ -424,6 +428,87 @@ build/patch_trunc_split --checkpoint MODEL --corpus FILE [options]
 build/patch_trunc_split --checkpoint runs/tinystories_p7/tinystories_p7.fblt \
   --corpus data/tinystories/heldout.bin --window 512 --num-windows 50 \
   --entropy-lm runs/entropylm/entropy_lm.fblt
+```
+
+---
+
+### `patch_final_split` — Per-row patch-final accuracy
+
+Evaluates per-row top-1 prediction accuracy over windows of a byte corpus with entropy patching, classifying every row as final vs non-final byte of its patch. Splits accuracy by patch closure (natural / max-length capped / buffer-boundary) and patch length bucket, and dumps a per-byte TSV.
+
+```
+build/patch_final_split --checkpoint MODEL --corpus FILE --dump PATH [options]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--checkpoint FILE` | *required* | Model checkpoint (.fblt) |
+| `--corpus FILE` | *required* | Held-out byte corpus for evaluation |
+| `--dump PATH` | *required* | Per-byte TSV output path |
+| `--window N` | 512 | Sequence length (must match training) |
+| `--embed N` | 256 | Embed dim (must match checkpoint) |
+| `--hidden N` | 512 | Hidden dim (must match checkpoint) |
+| `--enc-layers N` | 2 | Encoder layers (must match checkpoint) |
+| `--glob-layers N` | 6 | Global transformer layers (must match checkpoint) |
+| `--dec-layers N` | 2 | Decoder layers (must match checkpoint) |
+| `--cross-attn all\|last` | all | Cross-attention placement (must match checkpoint) |
+| `--diffusion 0\|1` | 1 | 0 = plain BLT, 1 = BLT-D |
+| `--num-windows N` | 50 | Number of windows to evaluate |
+| `--skip S` | 0 | Windows to skip before first evaluated window |
+| `--entropy-lm FILE` | (none) | Trained entropy-LM weights for patching |
+| `--max-patch-length L` | 16 | Maximum patch size |
+| `--backend cpu\|cuda` | cpu | Compute backend |
+| `--selftest` | off | Run internal classification self-check (no model/corpus needed) |
+
+**Output:** Accuracy buckets by closure × patch length, split final vs non-final rows. TSV header: `window\trow\tpatch_idx\tpatch_start\tpatch_len\tclosure\tis_final\tcorrect` — `closure` in {nat, max, bnd}; `is_final` and `correct` are 0/1.
+
+```bash
+patch_final_split --checkpoint runs/tinystories_p7/tinystories_p7.fblt --corpus data/tinystories/heldout.bin --window 512 --embed 256 --hidden 512 --enc-layers 2 --glob-layers 6 --dec-layers 2 --cross-attn all --num-windows 50 --entropy-lm runs/entropylm/entropy_lm.fblt --dump docs/last_row_analysis/patch_final_50w.tsv
+```
+
+---
+
+### `eval_paper_rule_split` — Paper-rule cross-attention eval (eval-time diagnostic)
+
+**Historical:** written when training still used the leaky repo rule (every byte attends its own patch). Training and inference now apply the paper rule (Fast-BLT §3.1.1) in-process via `blt_patch_decoder_latent_at`; this tool remains the eval-time A/B switch against old checkpoints and for bucketed diagnostics on a frozen model.
+
+Same evaluation pipeline as `patch_final_split`, but at eval time only the decoder's cross-attention group ids are switched from the repo rule (every byte attends its own patch) to the paper rule (Fast BLT §3.1.1: a patch's final byte attends its own patch j; a non-final byte attends the previous patch j-1; first-patch non-final bytes run on group 0 and are flagged `no_prev` for exclusion from the headline aggregate). Encoder and global transformer keep the real patches; no training, model, or masking code is changed by the tool itself.
+
+```
+build/eval_paper_rule_split --checkpoint MODEL --corpus FILE --dump PATH [options]
+```
+
+Flags are identical to `patch_final_split` (see its table above): `--checkpoint`, `--corpus`, `--dump`, `--window`, `--embed`, `--hidden`, `--enc-layers`, `--glob-layers`, `--dec-layers`, `--cross-attn`, `--diffusion`, `--num-windows`, `--skip`, `--entropy-lm`, `--max-patch-length`, `--backend`, `--selftest`.
+
+**Output:** TSV header `window\trow\tpatch_idx\tpatch_start\tpatch_len\tclosure\tis_final\tpos_in_patch\tno_prev\tcorrect` — inserts `pos_in_patch` (row − patch_start) and `no_prev` (1 iff patch_idx==0 and is_final==0) before `correct`. stderr reports first-patch exclusion counts; stdout prints one machine line including `no_prev=`/`no_prev_c=`. `--selftest` exercises the synthetic run-array construction and group-id equivalence on hardcoded patch sets (no checkpoint/corpus needed). Companion analyzer: `python3 fblt/scripts/analyze_paper_rule.py --tsv ... --machine ... --baseline-tsv ... --out ...`.
+
+```bash
+eval_paper_rule_split --checkpoint runs/tinystories_p7/tinystories_p7.fblt --corpus data/tinystories/heldout.bin --window 512 --embed 256 --hidden 512 --enc-layers 2 --glob-layers 6 --dec-layers 2 --cross-attn all --num-windows 50 --entropy-lm runs/entropylm/entropy_lm.fblt --dump docs/last_row_analysis/paper_rule_50w.tsv
+```
+
+---
+
+### `eval_isolate_redirect` — Isolated single-patch redirect eval (eval-time diagnostic)
+
+**Historical:** same transition as `eval_paper_rule_split` — the single-redirect A/B was used to isolate the paper-rule effect while training still ran the leaky rule; training now applies the rule in-process.
+
+Isolated variant of `eval_paper_rule_split`: per window, the paper rule (Fast BLT §3.1.1) is applied to exactly ONE redirect target r per forward pass — patch r's non-final bytes attend group r-1, its final byte stays on group r — while every other patch keeps the repo rule (all bytes attend their own group j). One decoder forward per (window, r); encoder and global are hoisted onto the real patches. Rows before patch r keep their group ids and are checked against the `patch_final` baseline (hard pre-flip invariant); only patch r's non-final bytes are scored. Patch 0 is never redirected (no previous patch), matching part 1's `no_prev` exclusion. Eval-only: no training, model, or masking code is changed.
+
+```
+build/eval_isolate_redirect --checkpoint MODEL --corpus FILE --dump PATH --baseline-tsv PATH [options]
+```
+
+Flags are identical to `patch_final_split` (see its table above) plus:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--baseline-tsv PATH` | *required* (except control) | `patch_final` baseline TSV for the pre-flip invariant and the `baseline_correct` column |
+| `--redirect-patch R` | sweep | `-1` = control mode (no redirect; writes the 8-column `patch_final_split` schema for bit-level diffing); omitted = sweep r=1..M-1; `R>=1` = single fixed redirect target |
+
+**Output:** Sweep-mode TSV header `window	row	redirect_patch_idx	patch_start	patch_len	closure	pos_in_patch	correct	baseline_correct`; also writes `<dump>.inv` with one `window redirect_patch_idx pre_rows pre_flips` line per pass and a machine line (`windows= passes= scored_rows= ...`) on stdout. stderr prints one progress line per window and `[INVARIANT]` lines on any pre-r flip (must be zero). `--selftest` exercises the synthetic single-redirect construction (r=1, interior, r=M-1, length-1 targets) with group-id round trips, no checkpoint/corpus needed. Companion analyzer: `python3 fblt/scripts/analyze_isolate_redirect.py --tsv ... --inv ... --machine ... --out ...`.
+
+```bash
+eval_isolate_redirect --checkpoint runs/tinystories_p7/tinystories_p7.fblt --corpus data/tinystories/heldout.bin --window 512 --embed 256 --hidden 512 --enc-layers 2 --glob-layers 6 --dec-layers 2 --cross-attn all --num-windows 50 --entropy-lm runs/entropylm/entropy_lm.fblt --baseline-tsv runs/tinystories_p7/analyses/patch_final_500w.tsv --dump runs/tinystories_p7/analyses/isolate_redirect_50w.tsv
 ```
 
 ---

@@ -111,6 +111,21 @@ void blt_patch_build_group_ids(const blt_patch_info *patches, size_t num_patches
     BLT_REQUIRE(pos == seq_len, "patch_group_ids: patches do not cover [0, seq_len) exactly");
 }
 
+size_t blt_patch_decoder_latent_at(const blt_patch_info *patches, size_t num_patches, size_t pos) {
+    BLT_REQUIRE(patches != NULL && num_patches >= 1, "patch_decoder_latent: need at least one patch");
+
+    if (pos < patches[0].start_idx) return 0;
+    for (size_t j = 0; j < num_patches; j++) {
+        const size_t start = patches[j].start_idx;
+        if (start > pos) break;
+        if (pos < start + patches[j].length) {
+            if (pos + 1 == start + patches[j].length) return j;
+            return (j == 0) ? 0 : j - 1;
+        }
+    }
+    return num_patches - 1;
+}
+
 void blt_patch_expand_group_ids(const size_t *group_ids_in, size_t n, size_t k, size_t *group_ids_out) {
     BLT_REQUIRE(group_ids_in != NULL || n == 0, "patch_expand_group_ids: NULL group_ids_in");
     BLT_REQUIRE(group_ids_out != NULL || n * k == 0, "patch_expand_group_ids: NULL group_ids_out");

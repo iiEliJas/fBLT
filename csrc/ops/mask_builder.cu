@@ -111,7 +111,9 @@ extern "C" void blt_build_attention_mask_cuda(const blt_mask_config *config, blt
     size_t *d_kvg = NULL;
     unsigned char *d_row_ok = NULL;
     if (has_docs) {
-        d_docs = (size_t *)blt_cuda_upload_temp(config->doc_boundaries, config->num_docs * sizeof(size_t), arena);
+        // The builder stores starts for documents 1..num_docs-1; document 0
+        // is implicit, so only num_docs-1 host entries are valid.
+        d_docs = (size_t *)blt_cuda_upload_temp(config->doc_boundaries, (config->num_docs - 1) * sizeof(size_t), arena);
     }
     if (has_groups) {
         d_qg = (size_t *)blt_cuda_upload_temp(config->query_group_ids, seq_q * sizeof(size_t), arena);
@@ -150,7 +152,7 @@ extern "C" void blt_build_attention_mask_cuda(const blt_mask_config *config, blt
     free(row_ok);
 }
 
-__global__ void blt_block_diffusion_mask_kernel(float *m, size_t S, size_t N, int infer_mode) {
+__global__ void blt_block_diffusion_mask_kernel(float *m, size_t S, size_t N, size_t B, int infer_mode) {
     const size_t count = S * S;
     for (size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x; idx < count;
          idx += (size_t)gridDim.x * blockDim.x) {
@@ -165,8 +167,9 @@ __global__ void blt_block_diffusion_mask_kernel(float *m, size_t S, size_t N, in
             // Single live block: all clean + whole block section.
             allowed = true;
         } else {
-            // TRAIN: plain causal over [clean ; blocks].
-            allowed = (j <= i);
+            // TRAIN: prose rule -- block row i sees all clean bytes plus
+            // every block with block-index <= i's block-index.
+            allowed = (j < N) || ((j - N) / B <= (i - N) / B);
         }
         m[idx] = allowed ? 0.0f : -INFINITY;
     }
@@ -186,7 +189,7 @@ extern "C" void blt_build_block_diffusion_mask_cuda(const blt_block_diffusion_co
     if (blocks > 4096) blocks = 4096;
     if (blocks == 0) blocks = 1;
 
-    blt_block_diffusion_mask_kernel<<<(unsigned)blocks, block>>>((float *)out_mask->data, S, N,
+    blt_block_diffusion_mask_kernel<<<(unsigned)blocks, block>>>((float *)out_mask->data, S, N, config->block_size,
                                                                  config->mode == BLT_BDM_INFER ? 1 : 0);
     blt_cuda_launch_check("blt_build_block_diffusion_mask");
 

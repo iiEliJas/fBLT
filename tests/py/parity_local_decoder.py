@@ -103,10 +103,19 @@ class ReferenceCrossAttentionDecoder(nn.Module):
             .transpose(0, 1)
         )
 
-        # STRICTLY BLOCK-DIAGONAL: Bytes only attend to their parent patch.
+        # Paper rule (Fast-BLT 3.1.1): final byte of patch j -> group j;
+        # non-final -> group (j == 0 ? 0 : j-1); uncovered -> num_patches-1.
         mask = torch.full((seq_len, num_patches), float("-inf"))
-        for j, (start, length) in enumerate(spans):
-            mask[start : start + length, j] = 0.0
+        for pos in range(seq_len):
+            group = num_patches - 1
+            for j, (start, length) in enumerate(spans):
+                if start <= pos < start + length:
+                    if pos + 1 == start + length:
+                        group = j
+                    else:
+                        group = 0 if j == 0 else j - 1
+                    break
+            mask[pos, group] = 0.0
 
         scores = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
         probs = F.softmax(scores + mask.unsqueeze(0), dim=-1)

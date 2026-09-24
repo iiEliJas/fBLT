@@ -38,9 +38,14 @@ typedef struct {
     blt_tensor patch_out;         // P_final [num_patches, patch_dim]
     blt_tensor global_out;        // O       [num_patches, embed_dim]
     blt_tensor byte_hidden_out;   // h_final [seq_len, embed_dim]
-    size_t *patch_doc_boundaries; // [num_docs] patch-indexed remap; NULL when num_docs == 0
+    size_t *patch_doc_boundaries; // [num_docs] model-style patch starts; doc 0 starts at 0
 } blt_model_enc_out;
 
+// Model document boundaries use one entry per document: entry[d] is the
+// byte offset where document d starts, entry[0] is 0, and entries are ordered.
+// The model converts this representation to the mask builder's convention
+// before invoking the encoder, global transformer, or decoder.
+//
 // Stage 1: entropy-free encoding. Runs local encoder + global transformer
 // once, freezes the latents in *out. Inference controllers (BLT-S drafting)
 // call this once per round then invoke blt_model_decode repeatedly.

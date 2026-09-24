@@ -46,6 +46,17 @@
 #include "train_diag.h"
 #include "train_eval.h"
 
+// Substitutes the first %d in path with step when the path is a template;
+// otherwise copies path verbatim into buf.
+static void blt_format_save_path(char *buf, size_t buflen, const char *path, size_t step) {
+    const char *tag = strstr(path, "%d");
+    if (!tag) {
+        snprintf(buf, buflen, "%s", path);
+        return;
+    }
+    snprintf(buf, buflen, "%.*s%d%s", (int)(tag - path), path, (int)step, tag + 2);
+}
+
 //----------------------------------------------------------------------
 // Gradient clipping + SGD/AdamW over every parameter in the model
 
@@ -365,6 +376,7 @@ int main(int argc, char **argv) {
                 }
             }
             blt_block_batch_build_t(&batch, scratch, text, N, patches, M, a.block_size, a.seed + step, t_draw);
+            batch.last_row_scale = a.last_row_scale;
             // Floor the timestep: without it, rare tiny-t draws give 1/t
             // weights up to ~1e6 that dominate gradients and starve
             // L_clean (observed as wild loss swings). Standard masked-
@@ -549,8 +561,10 @@ int main(int argc, char **argv) {
 
         const double post0 = blt_time_sec();
         if (a.save_path && a.save_every > 0 && (step + 1) % a.save_every == 0) {
-            blt_model_save(model, a.save_path);
-            printf("[CKPT] periodic save step %zu -> %s\n", step + 1, a.save_path);
+            char path_buf[4096];
+            blt_format_save_path(path_buf, sizeof(path_buf), a.save_path, step + 1);
+            blt_model_save(model, path_buf);
+            printf("[CKPT] periodic save step %zu -> %s\n", step + 1, path_buf);
             fflush(stdout);
         }
 
@@ -603,8 +617,10 @@ int main(int argc, char **argv) {
     }
 
     if (a.save_path) {
-        blt_model_save(model, a.save_path);
-        printf("[CKPT] saved weights to %s\n", a.save_path);
+        char path_buf[4096];
+        blt_format_save_path(path_buf, sizeof(path_buf), a.save_path, a.steps);
+        blt_model_save(model, path_buf);
+        printf("[CKPT] saved weights to %s\n", path_buf);
     }
 
     // Held-out causal BPB evaluation

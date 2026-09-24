@@ -45,6 +45,7 @@ static void usage(void) {
                     "mask schedule:\n"
                     "  --mask-warmup N         ramp mask scale 0->1 over N steps (default 0)\n"
                     "  --mask-scale F          mask loss ceiling (default 1.0)\n"
+                    "  --last-row-scale F      last-row L_clean upweight (default 1.0)\n"
                     "  --mask-late-step N      step to begin raising mask cap (default 0, disabled)\n"
                     "  --mask-late-scale F     final mask cap after ramp (default 1.0)\n"
                     "\n"
@@ -65,7 +66,7 @@ static void usage(void) {
                     "  --eval-every N          run eval every N steps (default 0, disabled)\n"
                     "\n"
                     "I/O:\n"
-                    "  --save-weights PATH     write weights after training\n"
+                    "  --save-weights PATH     write weights after training (first %%d is replaced by step)\n"
                     "  --save-every N          save checkpoint every N steps (0 = only at end)\n"
                     "  --load-weights PATH     load weights before training\n"
                     "  --report-every K        print every K steps (default 25)\n"
@@ -105,6 +106,7 @@ args_t parse_args(int argc, char **argv) {
                 .lr_decay_factor = 0.3f,
                 .mask_warmup = 0,
                 .mask_scale = 1.0f,
+                .last_row_scale = 1.0f,
                 .mask_late_step = 0,
                 .mask_late_scale = 1.0f,
                 .entropy_patches = 0,
@@ -165,6 +167,7 @@ args_t parse_args(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--lr-decay-factor") && i + 1 < argc) a.lr_decay_factor = atof(argv[++i]);
         else if (!strcmp(argv[i], "--mask-warmup") && i + 1 < argc) a.mask_warmup = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--mask-scale") && i + 1 < argc) a.mask_scale = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--last-row-scale") && i + 1 < argc) a.last_row_scale = atof(argv[++i]);
         else if (!strcmp(argv[i], "--mask-late-step") && i + 1 < argc) a.mask_late_step = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--mask-late-scale") && i + 1 < argc) a.mask_late_scale = atof(argv[++i]);
         else if (!strcmp(argv[i], "--entropy-patches")) a.entropy_patches = 1;

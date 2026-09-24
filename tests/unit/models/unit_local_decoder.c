@@ -12,11 +12,11 @@
 //------------------------------------------------------------------------
 // Local Decoder Tests
 //
-// The local decoders cross-attention mask is a [seq_len, num_patches] matrix
-// where each row corresponds to a byte and each column corresponds to a patch
-// Each byte should only attend to its own patch, so the mask should have exactly one non -INFINITY value per row,
-// and that value should be in the column corresponding to the patch that contains that byte.
-// This test verifies that the mask is constructed correctly for a simple set of patches and bytes.
+// run_local_decoder_cross_mask: mask built via blt_patch_build_group_ids so
+// each byte row has exactly one non -INFINITY value, at its parent patch
+// column. run_local_decoder_paper_rule: blt_patch_decoder_latent_at (Fast-BLT
+// 3.1.1) lands each byte on final->j / non-final->(j==0?0:j-1) / uncovered->
+// num_patches-1; local_decoder's make_context wires that rule into byte ids.
 
 static void build_decoder_test_patches(blt_patch_info *patches, size_t *num_patches, size_t *seq_len) {
     size_t starts[] = {0, 3, 7, 8, 15};
@@ -83,6 +83,35 @@ int run_local_decoder_cross_mask(void) {
     }
 
     blt_arena_destroy(arena);
+    return 1;
+}
+
+int run_local_decoder_paper_rule(void) {
+    // Patches: starts {0,3,7,8,15}, lengths {3,4,1,7,1}, seq_len 16.
+    // Expected paper-rule groups (Fast-BLT 3.1.1):
+    //   final byte of patch j -> j; non-final -> (j == 0 ? 0 : j-1);
+    //   uncovered -> num_patches-1.
+    blt_patch_info patches[5];
+    size_t starts[] = {0, 3, 7, 8, 15};
+    size_t lens[] = {3, 4, 1, 7, 1};
+    size_t num_patches = 5;
+    size_t seq_len = 16;
+    for (size_t i = 0; i < num_patches; i++) {
+        patches[i].start_idx = starts[i];
+        patches[i].length = lens[i];
+        patches[i].peak_entropy = 0.0f;
+    }
+
+    const size_t expected[16] = {0, 0, 0, 0, 0, 0, 1, 2, 2, 2, 2, 2, 2, 2, 3, 4};
+    for (size_t pos = 0; pos < seq_len; pos++) {
+        size_t got = blt_patch_decoder_latent_at(patches, num_patches, pos);
+        TEST_ASSERT(got == expected[pos]);
+    }
+
+    // Past-end falls through to last patch group.
+    TEST_ASSERT(blt_patch_decoder_latent_at(patches, num_patches, seq_len) == num_patches - 1);
+    TEST_ASSERT(blt_patch_decoder_latent_at(patches, num_patches, 100) == num_patches - 1);
+
     return 1;
 }
 
