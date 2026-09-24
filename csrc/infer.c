@@ -368,12 +368,6 @@ int main(int argc, char **argv) {
     fprintf(stderr, "[infer] patcher: %s\n", a.fixed_patches ? "fixed-stride-4" : "entropy (thr, max)");
     fprintf(stderr, "[infer] entropy LM: %s\n", a.entropy_lm ? a.entropy_lm : "random-init");
     fprintf(stderr, "[infer] prompt: %zu bytes\n", prompt_len);
-    fprintf(stderr, "[infer] prompt: first 20: ");
-    for (size_t i = 0; i < 20 && i < prompt_len; i++) fprintf(stderr, "%02x ", prompt_bytes[i]);
-    fprintf(stderr, "\n[infer] prompt: last 20: ");
-    for (size_t i = (prompt_len > 20 ? prompt_len - 20 : 0); i < prompt_len; i++)
-        fprintf(stderr, "%02x ", prompt_bytes[i]);
-    fprintf(stderr, "\n");
     fprintf(stderr, "[infer] generating: %zu new bytes\n", a.new_bytes);
 
     // Create arenas.
