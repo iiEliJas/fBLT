@@ -2,6 +2,19 @@
 #include "core/allocator.h"
 #include "models/model.h"
 
+// Model APIs store one start offset per document, including document zero.
+// Mask consumers store only the starts of documents one through num_docs - 1.
+static const size_t *blt_mask_doc_boundaries(const size_t *doc_boundaries, size_t num_docs) {
+    BLT_REQUIRE(num_docs == 0 || doc_boundaries != NULL, "blt_model: doc_boundaries cannot be NULL when num_docs > 0");
+    if (num_docs > 0) {
+        BLT_REQUIRE(doc_boundaries[0] == 0, "blt_model: document zero must start at offset 0");
+        for (size_t d = 1; d < num_docs; d++) {
+            BLT_REQUIRE(doc_boundaries[d] >= doc_boundaries[d - 1], "blt_model: document boundaries must be ordered");
+        }
+    }
+    return num_docs > 1 ? doc_boundaries + 1 : doc_boundaries;
+}
+
 static void map_byte_boundaries_to_patch_boundaries(const size_t *byte_doc_boundaries, size_t num_docs,
                                                     const blt_patch_info *patches, size_t num_patches,
                                                     size_t *patch_doc_boundaries_out) {
@@ -72,7 +85,8 @@ void blt_model_encode(const blt_model *model, const blt_tensor *bytes_in, const 
     out->patch_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
     out->byte_hidden_out = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
 
-    blt_local_encoder_forward(model->encoder, bytes_in, patches, num_patches, doc_boundaries, num_docs, &out->patch_out,
+    blt_local_encoder_forward(model->encoder, bytes_in, patches, num_patches,
+                              blt_mask_doc_boundaries(doc_boundaries, num_docs), num_docs, &out->patch_out,
                               &out->byte_hidden_out, arena);
 
     // 2. Remap doc boundaries byte -> patch indices
@@ -85,7 +99,8 @@ void blt_model_encode(const blt_model *model, const blt_tensor *bytes_in, const 
 
     // 3. Global transformer
     out->global_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
-    blt_global_transformer_forward(model->global, &out->patch_out, out->patch_doc_boundaries, num_docs,
+    blt_global_transformer_forward(model->global, &out->patch_out,
+                                   blt_mask_doc_boundaries(out->patch_doc_boundaries, num_docs), num_docs,
                                    &out->global_out, arena);
 }
 
@@ -111,7 +126,8 @@ void blt_model_decode(const blt_model *model, const blt_model_enc_out *enc, cons
     }
 
     blt_local_decoder_forward_ext(model->decoder, &enc->byte_hidden_out, &enc->global_out, patches, num_patches,
-                                  bytes_in, targets, doc_boundaries, num_docs, d0_opts, logits_out, loss_out, arena);
+                                  bytes_in, targets, blt_mask_doc_boundaries(doc_boundaries, num_docs), num_docs,
+                                  d0_opts, logits_out, loss_out, arena);
 }
 
 void blt_model_forward(const blt_model *model, const blt_tensor *bytes_in, const blt_tensor *targets,
@@ -147,8 +163,9 @@ void blt_model_backward(const blt_model *model, const blt_tensor *bytes_in, cons
     // Recompute forward intermediates needed by submodule backward calls.
     blt_tensor patch_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
     blt_tensor byte_hidden_out = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
-    blt_local_encoder_forward(model->encoder, bytes_in, patches, num_patches, doc_boundaries, num_docs, &patch_out,
-                              &byte_hidden_out, arena);
+    blt_local_encoder_forward(model->encoder, bytes_in, patches, num_patches,
+                              blt_mask_doc_boundaries(doc_boundaries, num_docs), num_docs, &patch_out, &byte_hidden_out,
+                              arena);
 
     size_t *patch_doc_boundaries = NULL;
     if (num_docs > 0) {
@@ -157,24 +174,26 @@ void blt_model_backward(const blt_model *model, const blt_tensor *bytes_in, cons
     }
 
     blt_tensor global_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
-    blt_global_transformer_forward(model->global, &patch_out, patch_doc_boundaries, num_docs, &global_out, arena);
+    blt_global_transformer_forward(model->global, &patch_out, blt_mask_doc_boundaries(patch_doc_boundaries, num_docs),
+                                   num_docs, &global_out, arena);
 
     // 1. Local decoder backward
     blt_tensor grad_byte_hidden = blt_tensor_create(arena, byte_shape, 2, BLT_DTYPE_FP32);
     blt_tensor grad_global_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
 
     blt_local_decoder_backward(model->decoder, &byte_hidden_out, &global_out, patches, num_patches, bytes_in, targets,
-                               doc_boundaries, num_docs, &grad_byte_hidden, &grad_global_out, grad->decoder_grad,
-                               arena);
+                               blt_mask_doc_boundaries(doc_boundaries, num_docs), num_docs, &grad_byte_hidden,
+                               &grad_global_out, grad->decoder_grad, arena);
 
     // 2. Global transformer backward
     blt_tensor grad_patch_out = blt_tensor_create(arena, patch_shape, 2, BLT_DTYPE_FP32);
-    blt_global_transformer_backward(model->global, &patch_out, patch_doc_boundaries, num_docs, &grad_global_out,
-                                    &grad_patch_out, grad->global_grad, arena);
+    blt_global_transformer_backward(model->global, &patch_out, blt_mask_doc_boundaries(patch_doc_boundaries, num_docs),
+                                    num_docs, &grad_global_out, &grad_patch_out, grad->global_grad, arena);
 
     // 3. Local encoder backward
-    blt_local_encoder_backward(model->encoder, bytes_in, patches, num_patches, doc_boundaries, num_docs,
-                               &grad_patch_out, &grad_byte_hidden, grad->encoder_grad, arena);
+    blt_local_encoder_backward(model->encoder, bytes_in, patches, num_patches,
+                               blt_mask_doc_boundaries(doc_boundaries, num_docs), num_docs, &grad_patch_out,
+                               &grad_byte_hidden, grad->encoder_grad, arena);
 
     blt_backend_pass_sync(bytes_in->backend);
 }

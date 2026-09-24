@@ -43,11 +43,12 @@ blt_global_transformer *blt_global_transformer_create(blt_arena *arena, const bl
 blt_global_transformer_grad *blt_global_transformer_grad_create(blt_arena *arena, const blt_global_transformer *model);
 
 // patch_in:        [num_patches, embed_dim] FP32 — P_final from local encoder.
-// doc_boundaries:   patch-index boundaries (NOT byte-index — caller must map
-//                    local encoder's byte-indexed doc_boundaries through
-//                    patches[] first).
+// doc_boundaries:   patch-index starts for documents 1..num_docs-1; document 0
+//                   starts implicitly at patch 0. This is the mask-builder
+//                   convention, not the model API's one-entry-per-document
+//                   representation.
 // patch_out:        [num_patches, embed_dim] FP32 — O, contextualized patch
-//                    representations. No separate output projection.
+//                   representations. No separate output projection.
 //
 // Builds a block-causal patch mask once (document-scoped via doc_boundaries)
 // and runs num_layers transformer blocks over it.

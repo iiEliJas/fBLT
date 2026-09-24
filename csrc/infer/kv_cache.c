@@ -189,21 +189,14 @@ void blt_kv_decode_step(blt_kv_cache *cache, const blt_tensor *patch_in, const b
     const blt_backend backend = d0_rows->backend;
     const size_t total_sub = num_patches * cache->k;
 
-    // Group bookkeeping: each new row takes the group of the byte position
-    // it sits at (rows past the last patch end resolve to the last patch).
+    // Group bookkeeping: each new row takes its paper-rule decoder latent
+    // index (Fast-BLT 3.1.1); rows past the last patch end fall through to
+    // the last patch.
     size_t *q_group_ids = (size_t *)malloc(n * sizeof(size_t));
     size_t *kv_group_ids = (size_t *)malloc(total_sub * sizeof(size_t));
     BLT_REQUIRE(q_group_ids != NULL && kv_group_ids != NULL, "blt_kv_decode_step: failed to allocate group id tables");
     for (size_t r = 0; r < n; r++) {
-        const size_t pos = base + r;
-        size_t g = num_patches - 1;
-        for (size_t pi = 0; pi < num_patches; pi++) {
-            if (pos >= patches[pi].start_idx && pos < patches[pi].start_idx + patches[pi].length) {
-                g = pi;
-                break;
-            }
-        }
-        q_group_ids[r] = g;
+        q_group_ids[r] = blt_patch_decoder_latent_at(patches, num_patches, base + r);
     }
     for (size_t pi = 0; pi < num_patches; pi++) {
         for (size_t s = 0; s < cache->k; s++) {

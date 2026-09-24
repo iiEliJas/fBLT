@@ -1,4 +1,5 @@
 #include <ctype.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -358,6 +359,87 @@ static size_t build_fixed_patches(size_t seq_len, size_t patch_len, blt_patch_in
         start += len;
     }
     return num_patches;
+}
+
+//----------------------------------------------------------------------
+// Multi-document model bridge test
+//
+// The model API stores document starts including the implicit start at byte 0.
+// Mask consumers store only later starts. This test verifies the conversion
+// across encoder, global, and decoder paths without involving cross-attention.
+
+int run_model_multi_doc_isolation(void) {
+    srand(91);
+
+    blt_arena *model_arena = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *scratch_a = blt_arena_create(8 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *scratch_b = blt_arena_create(8 * 1024 * 1024, BLT_BACKEND_CPU);
+    TEST_ASSERT(model_arena && scratch_a && scratch_b);
+
+    blt_model_config config;
+    make_small_model_config(&config);
+    config.decoder_config.cross_attn_placement = BLT_XATTN_NONE;
+
+    blt_model *model = blt_model_create(model_arena, &config);
+    blt_model_grad *grad = blt_model_grad_create(model_arena, model);
+    TEST_ASSERT(model != NULL && grad != NULL);
+    random_init_model(model, 0.1f);
+
+    const size_t seq_len = 32;
+    const size_t vocab_size = config.decoder_config.vocab_size;
+    const size_t boundary = 16;
+    uint8_t bytes_a_data[32];
+    uint8_t bytes_b_data[32];
+    for (size_t i = 0; i < seq_len; i++) {
+        bytes_a_data[i] = (uint8_t)(i + 17);
+        bytes_b_data[i] = bytes_a_data[i];
+    }
+    for (size_t i = 0; i < 4; i++) {
+        bytes_b_data[i] ^= 0x5a;
+    }
+
+    blt_patch_info patches[8];
+    const size_t num_patches = build_fixed_patches(seq_len, 4, patches);
+    TEST_ASSERT(num_patches == 8);
+    const size_t doc_boundaries[2] = {0, boundary};
+
+    size_t bytes_shape[1] = {seq_len};
+    size_t logits_shape[2] = {seq_len, vocab_size};
+    size_t loss_shape[1] = {1};
+    blt_tensor bytes_a = blt_tensor_create(scratch_a, bytes_shape, 1, BLT_DTYPE_UINT8);
+    blt_tensor bytes_b = blt_tensor_create(scratch_b, bytes_shape, 1, BLT_DTYPE_UINT8);
+    memcpy(bytes_a.data, bytes_a_data, sizeof(bytes_a_data));
+    memcpy(bytes_b.data, bytes_b_data, sizeof(bytes_b_data));
+
+    blt_tensor logits_a = blt_tensor_create(scratch_a, logits_shape, 2, BLT_DTYPE_FP32);
+    blt_tensor logits_b = blt_tensor_create(scratch_b, logits_shape, 2, BLT_DTYPE_FP32);
+    blt_tensor loss_a = blt_tensor_create(scratch_a, loss_shape, 1, BLT_DTYPE_FP32);
+    blt_tensor loss_b = blt_tensor_create(scratch_b, loss_shape, 1, BLT_DTYPE_FP32);
+    blt_model_forward(model, &bytes_a, NULL, patches, num_patches, doc_boundaries, 2, &logits_a, &loss_a, scratch_a);
+    blt_model_forward(model, &bytes_b, NULL, patches, num_patches, doc_boundaries, 2, &logits_b, &loss_b, scratch_b);
+
+    const float *out_a = (const float *)logits_a.data;
+    const float *out_b = (const float *)logits_b.data;
+    bool first_doc_changed = false;
+    for (size_t i = 0; i < boundary * vocab_size; i++) {
+        if (out_a[i] != out_b[i]) {
+            first_doc_changed = true;
+            break;
+        }
+    }
+    TEST_ASSERT(first_doc_changed);
+    for (size_t i = boundary * vocab_size; i < seq_len * vocab_size; i++) {
+        TEST_ASSERT(out_a[i] == out_b[i]);
+    }
+
+    // Exercise the same boundary conversion in the recompute-and-backward path.
+    blt_model_backward(model, &bytes_a, NULL, patches, num_patches, doc_boundaries, 2, grad, scratch_a);
+    TEST_ASSERT(isfinite(compute_model_grad_global_norm(grad, model)));
+
+    blt_arena_destroy(scratch_b);
+    blt_arena_destroy(scratch_a);
+    blt_arena_destroy(model_arena);
+    return 1;
 }
 
 //----------------------------------------------------------------------

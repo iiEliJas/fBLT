@@ -66,7 +66,7 @@ static void usage(void) {
                     "  --eval-every N          run eval every N steps (default 0, disabled)\n"
                     "\n"
                     "I/O:\n"
-                    "  --save-weights PATH     write weights after training\n"
+                    "  --save-weights PATH     write weights after training (first %%d is replaced by step)\n"
                     "  --save-every N          save checkpoint every N steps (0 = only at end)\n"
                     "  --load-weights PATH     load weights before training\n"
                     "  --report-every K        print every K steps (default 25)\n"

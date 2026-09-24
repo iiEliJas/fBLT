@@ -87,19 +87,21 @@ static size_t fixed_patches(size_t seq_len, size_t patch_len, blt_patch_info *ou
 }
 
 //----------------------------------------------------------------------
-// Test 1: Figure 5 fixture. The TRAIN mask must reproduce the paper's
-// matrix exactly (N=6, B=4, S=14); INFER must give clean-causal +
-// fully-open block region.
+// Test 1: TRAIN mask fixture. The TRAIN mask must reproduce the Fast-BLT
+// 3.2.2 prose rule exactly (N=6, B=4, S=14): clean rows causal; block row i
+// sees all clean bytes and all blocks with block-index <= i's block-index
+// (bidirectional within own block). INFER: clean-causal + fully-open block.
+// NOTE: prose rule adopted; paper's Fig-5 matrix is strictly causal.
 
 int run_block_diffusion_mask_fixture(void) {
     blt_arena *arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
     TEST_ASSERT(arena != NULL);
 
-    // ---- TRAIN: Fast-BLT Figure 5 matrix verbatim ----
-    const char *fig5[14] = {
+    // ---- TRAIN: Fast-BLT 3.2.2 prose rule (not the Fig-5 matrix) ----
+    const char *want[14] = {
         "10000000000000", "11000000000000", "11100000000000", "11110000000000", "11111000000000",
-        "11111100000000", "11111110000000", "11111111000000", "11111111100000", "11111111110000",
-        "11111111111000", "11111111111100", "11111111111110", "11111111111111",
+        "11111100000000", "11111111110000", "11111111110000", "11111111110000", "11111111110000",
+        "11111111111111", "11111111111111", "11111111111111", "11111111111111",
     };
 
     blt_block_diffusion_config mc = {
@@ -114,13 +116,13 @@ int run_block_diffusion_mask_fixture(void) {
     const float *md = (const float *)m.data;
     for (size_t i = 0; i < 14; i++) {
         for (size_t j = 0; j < 14; j++) {
-            const int want = fig5[i][j] - '0';
+            const int w = want[i][j] - '0';
             const float got = md[i * 14 + j];
-            if (want && !(got == 0.0f)) {
-                TEST_ASSERT(!"Fig5: expected allowed (0.0f)");
+            if (w && !(got == 0.0f)) {
+                TEST_ASSERT(!"TRAIN: expected allowed (0.0f)");
             }
-            if (!want && !isinf(got)) {
-                TEST_ASSERT(!"Fig5: expected blocked (-inf)");
+            if (!w && !isinf(got)) {
+                TEST_ASSERT(!"TRAIN: expected blocked (-inf)");
             }
         }
     }

@@ -62,7 +62,9 @@ blt_local_encoder *blt_local_encoder_create(blt_arena *arena, const blt_local_en
 blt_local_encoder_grad *blt_local_encoder_grad_create(blt_arena *arena, const blt_local_encoder *model);
 
 // bytes_in [seq_len] UINT8, patches [num_patches] tiling [0, seq_len),
-// doc_boundaries/num_docs (optional), destination tensors, arena.
+// doc_boundaries uses the mask-builder convention: entry[d] starts document
+// d+1 and document 0 starts implicitly at byte 0; num_docs is the document
+// count. The high-level model API converts its one-entry-per-document form.
 // Returns patch_out [num_patches, embed_dim] (P_final) and
 // byte_hidden_out [seq_len, embed_dim] (h_final, kept for decoder).
 // Embeds bytes + n-grams, pools initial patches (P_0), runs through byte

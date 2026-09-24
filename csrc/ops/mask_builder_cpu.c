@@ -127,10 +127,12 @@ void blt_build_block_diffusion_mask_cpu(const blt_block_diffusion_config *config
                 // Single live block: all clean + whole block section.
                 allowed = true;
             } else {
-                // TRAIN: plain causal over [clean ; blocks] concatenated.
-                // Paper prose says "bidirectional within each block" but
-                // its own Figure 5 matrix is strictly causal. Test pins this.
-                allowed = (j <= i);
+                // TRAIN: prose rule -- clean rows causal; block row i sees all
+                // clean bytes plus every block with block-index <= i's
+                // block-index (bidirectional within own block). Paper prose
+                // (3.2.2) vs Figure 5 matrix ambiguity: prose rule adopted.
+                const size_t B = config->block_size;
+                allowed = (j < N) || ((j - N) / B <= (i - N) / B);
             }
 
             m[i * S + j] = allowed ? 0.0f : neg_inf;

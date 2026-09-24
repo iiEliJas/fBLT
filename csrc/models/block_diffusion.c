@@ -161,18 +161,12 @@ static void diff_ctx_build(diff_ctx *c, const blt_local_decoder *model, const bl
     blt_rope_position_gather(&model->rope_cos_cache, &model->rope_sin_cache, positions, c->S, &c->rope_cos,
                              &c->rope_sin, arena);
 
-    // Query group ids: clean rows take their own patch id (repo BLT rule);
-    // block rows take their assigned latent group (paper o_{i-1} rule).
+    // Query group ids: clean rows use the paper-rule decoder latent index
+    // (Fast-BLT 3.1.1); block rows take their assigned latent group
+    // (paper o_{i-1} rule).
     c->q_group_ids = (size_t *)blt_container_alloc(arena, c->S * sizeof(size_t));
     for (size_t i = 0; i < c->N; i++) {
-        size_t g = num_patches - 1;
-        for (size_t pi = 0; pi < num_patches; pi++) {
-            if (i >= patches[pi].start_idx && i < patches[pi].start_idx + patches[pi].length) {
-                g = pi;
-                break;
-            }
-        }
-        c->q_group_ids[i] = g;
+        c->q_group_ids[i] = blt_patch_decoder_latent_at(patches, num_patches, i);
     }
     for (size_t r = 0; r < c->R; r++) {
         c->q_group_ids[c->N + r] = batch->groups[r];

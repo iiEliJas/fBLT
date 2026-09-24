@@ -70,20 +70,17 @@ static ld_context make_context(const blt_local_decoder *model, size_t seq_len, s
     size_t patch_dim = model->config.patch_dim ? model->config.patch_dim : E;
     size_t k = patch_dim / E;
 
-    // patch_identity_ids[j] = j (trivial), byte_patch_ids[i] = patch id of byte i.
-    // Ids are built over the h-final-covered prefix only; patches must tile
-    // [0, num_hfinal_rows) exactly. Rows beyond it (BLT-S draft bytes / BLT-D
-    // block rows) have no patch of their own and condition on the LAST patch's
-    // latent sub-tokens -- the Fast-BLT "condition on last available latent
-    // token" rule.
+    // patch_identity_ids[j] = j; byte_patch_ids[i] = paper-rule decoder latent
+    // index for byte i (Fast-BLT 3.1.1): final byte of patch j -> j, non-final
+    // -> (j == 0 ? 0 : j-1), uncovered -> num_patches-1.
     // Group-id arrays are host metadata (built on host, uploaded to the
     // mask builder from host pointers); never allocate them into device
     // memory.
     size_t *patch_identity_ids = (size_t *)blt_container_alloc(arena, num_patches * sizeof(size_t));
     size_t *byte_patch_ids = (size_t *)blt_container_alloc(arena, seq_len * sizeof(size_t));
     blt_patch_build_group_ids(patches, num_patches, num_hfinal_rows, patch_identity_ids, byte_patch_ids);
-    for (size_t i = num_hfinal_rows; i < seq_len; i++) {
-        byte_patch_ids[i] = num_patches - 1;
+    for (size_t i = 0; i < seq_len; i++) {
+        byte_patch_ids[i] = blt_patch_decoder_latent_at(patches, num_patches, i);
     }
 
     // expand the kv (patch) side group ids by k -- each patch's k sub-tokens share its group id

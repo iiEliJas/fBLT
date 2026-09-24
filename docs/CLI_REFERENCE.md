@@ -8,7 +8,7 @@ All commands assume the repo root as working directory. Build output goes to `bu
 
 | Command | Description |
 |---------|-------------|
-| `cmake --build build --target test` | Build + run full C test suite (69 tests, ~4s) |
+| `cmake --build build --target test` | Build + run full C test suite (72 tests, ~4s) |
 | `cmake --build build-cuda --target test` | Same, CUDA backend |
 | `cmake --build build --target main` | Build minimal main (linking stub) |
 | `cmake --build build-cuda --target main` | Same, CUDA |
@@ -127,7 +127,7 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 
 | Flag | Description |
 |------|-------------|
-| `--save-weights PATH` | Write weights after training |
+| `--save-weights PATH` | Write weights after training; if PATH contains `%d`, the first `%d` is replaced by the step number |
 | `--save-every N` | Save checkpoint every N steps (0 = only at end) |
 | `--load-weights PATH` | Load weights before training (steps=0 → eval only) |
 | `--eval-corpus FILE` | Held-out corpus for causal BPB eval |
@@ -470,7 +470,9 @@ patch_final_split --checkpoint runs/tinystories_p7/tinystories_p7.fblt --corpus 
 
 ### `eval_paper_rule_split` — Paper-rule cross-attention eval (eval-time diagnostic)
 
-Same evaluation pipeline as `patch_final_split`, but at eval time only the decoder's cross-attention group ids are switched from the repo rule (every byte attends its own patch) to the paper rule (Fast BLT §3.1.1: a patch's final byte attends its own patch j; a non-final byte attends the previous patch j-1; first-patch non-final bytes run on group 0 and are flagged `no_prev` for exclusion from the headline aggregate). Encoder and global transformer keep the real patches; no training, model, or masking code is changed.
+**Historical:** written when training still used the leaky repo rule (every byte attends its own patch). Training and inference now apply the paper rule (Fast-BLT §3.1.1) in-process via `blt_patch_decoder_latent_at`; this tool remains the eval-time A/B switch against old checkpoints and for bucketed diagnostics on a frozen model.
+
+Same evaluation pipeline as `patch_final_split`, but at eval time only the decoder's cross-attention group ids are switched from the repo rule (every byte attends its own patch) to the paper rule (Fast BLT §3.1.1: a patch's final byte attends its own patch j; a non-final byte attends the previous patch j-1; first-patch non-final bytes run on group 0 and are flagged `no_prev` for exclusion from the headline aggregate). Encoder and global transformer keep the real patches; no training, model, or masking code is changed by the tool itself.
 
 ```
 build/eval_paper_rule_split --checkpoint MODEL --corpus FILE --dump PATH [options]
@@ -487,6 +489,8 @@ eval_paper_rule_split --checkpoint runs/tinystories_p7/tinystories_p7.fblt --cor
 ---
 
 ### `eval_isolate_redirect` — Isolated single-patch redirect eval (eval-time diagnostic)
+
+**Historical:** same transition as `eval_paper_rule_split` — the single-redirect A/B was used to isolate the paper-rule effect while training still ran the leaky rule; training now applies the rule in-process.
 
 Isolated variant of `eval_paper_rule_split`: per window, the paper rule (Fast BLT §3.1.1) is applied to exactly ONE redirect target r per forward pass — patch r's non-final bytes attend group r-1, its final byte stays on group r — while every other patch keeps the repo rule (all bytes attend their own group j). One decoder forward per (window, r); encoder and global are hoisted onto the real patches. Rows before patch r keep their group ids and are checked against the `patch_final` baseline (hard pre-flip invariant); only patch r's non-final bytes are scored. Patch 0 is never redirected (no previous patch), matching part 1's `no_prev` exclusion. Eval-only: no training, model, or masking code is changed.
 

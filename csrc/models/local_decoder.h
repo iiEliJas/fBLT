@@ -82,6 +82,10 @@ blt_local_decoder *blt_local_decoder_create(blt_arena *arena, const blt_local_de
 
 blt_local_decoder_grad *blt_local_decoder_grad_create(blt_arena *arena, const blt_local_decoder *model);
 
+// doc_boundaries uses the mask-builder convention: entry[d] starts document
+// d+1 and document 0 starts implicitly at byte 0; num_docs is the document
+// count. The high-level model API converts its one-entry-per-document form.
+//
 // Legacy entry point: D_0 = byte_hidden_in for every row, loss always
 // computed. Thin wrapper around blt_local_decoder_forward_ext with NULL opts.
 void blt_local_decoder_forward(const blt_local_decoder *model,
@@ -90,7 +94,7 @@ void blt_local_decoder_forward(const blt_local_decoder *model,
                                const blt_patch_info *patches, size_t num_patches,
                                const blt_tensor *bytes_in,   // [seq_len] UINT8 — needed only for the loss targets
                                const blt_tensor *targets,    // [seq_len] UINT8 — CE targets; NULL = use bytes_in
-                               const size_t *doc_boundaries, // byte-indexed
+                               const size_t *doc_boundaries, // mask-builder convention; see above
                                size_t num_docs,
                                blt_tensor *logits_out, // [seq_len, vocab_size]
                                blt_tensor *loss_out,   // scalar
@@ -113,7 +117,7 @@ void blt_local_decoder_forward_ext(
     size_t num_patches,
     const blt_tensor *bytes_in,   // [seq_len] UINT8 or NULL (iff loss_out == NULL)
     const blt_tensor *targets,    // [seq_len] UINT8 — CE targets; NULL = use bytes_in
-    const size_t *doc_boundaries, // byte-indexed
+    const size_t *doc_boundaries, // mask-builder convention; see above
     size_t num_docs, const blt_local_decoder_d0_opts *d0_opts,
     blt_tensor *logits_out, // [seq_len, vocab_size]
     blt_tensor *loss_out,   // scalar or NULL

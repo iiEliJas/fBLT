@@ -47,7 +47,7 @@ size_t blt_verify_draft(const blt_model *model, const blt_entropy_lm *entropy_mo
 
 // Boundary-aligned variant of blt_verify_draft (Stage 6 add-on).
 //
-// Same verify pass (natural segmentation of the candidate, no forced split
+// Same verify pass as blt_verify_draft (including the forced patch boundary
 // at the commit point), but commitment is cut back to the largest natural
 // patch boundary in (l, verified_len]. Draft bytes past that boundary are
 // discarded and re-drafted next round. This mirrors the training-time block

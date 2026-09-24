@@ -194,7 +194,9 @@ size_t blt_verify_draft_aligned(const blt_model *model, const blt_entropy_lm *en
 
     const size_t vocab_size = model->config.decoder_config.vocab_size;
 
-    // Natural segmentation — no forced split at l.
+    // Force patch boundary at commit point l — same reason as blt_verify_draft:
+    // under the paper-rule decoder cross-attn, a spanning prefix/draft patch
+    // flips finality of prefix bytes and verification diverges from greedy.
     blt_tensor entropy_vals;
     compute_entropy_vals(arena, entropy_model, x, cand_len, &entropy_vals);
 
@@ -203,10 +205,34 @@ size_t blt_verify_draft_aligned(const blt_model *model, const blt_entropy_lm *en
     const blt_tensor *entropy_for_patcher = stage_entropy_host(&entropy_vals, &entropy_host_view, &entropy_host_buf);
 
     blt_patch_info patches[BLT_SELFSPEC_MAX_PATCHES];
-    const size_t num_patches =
-        blt_segment_patches(entropy_for_patcher, x, patches, BLT_SELFSPEC_MAX_PATCHES, patcher_config);
+    size_t num_patches = blt_segment_patches(entropy_for_patcher, x, patches, BLT_SELFSPEC_MAX_PATCHES, patcher_config);
     free(entropy_host_buf);
     entropy_host_buf = NULL;
+
+    {
+        blt_patch_info forced[BLT_SELFSPEC_MAX_PATCHES];
+        size_t n2 = 0;
+        for (size_t pi = 0; pi < num_patches && n2 < BLT_SELFSPEC_MAX_PATCHES; pi++) {
+            const size_t s = patches[pi].start_idx;
+            const size_t e = s + patches[pi].length;
+            if (s < l && e > l) {
+                forced[n2++] = patches[pi]; // prefix part [s, l)
+                forced[n2 - 1].length = l - s;
+                if (n2 < BLT_SELFSPEC_MAX_PATCHES) {
+                    forced[n2] = patches[pi]; // draft part [l, e)
+                    forced[n2].start_idx = l;
+                    forced[n2].length = e - l;
+                    forced[n2].peak_entropy = patches[pi].peak_entropy;
+                    n2++;
+                }
+            } else {
+                forced[n2++] = patches[pi];
+            }
+        }
+        BLT_REQUIRE(n2 <= BLT_SELFSPEC_MAX_PATCHES, "blt_verify_draft_aligned: forced-boundary patch array overflow");
+        num_patches = n2;
+        memcpy(patches, forced, n2 * sizeof(blt_patch_info));
+    }
 
     size_t bytes_shape[1] = {cand_len};
     blt_tensor cand_bytes = blt_tensor_create(arena, bytes_shape, 1, BLT_DTYPE_UINT8);
