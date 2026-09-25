@@ -27,6 +27,8 @@ All commands assume the repo root as working directory. Build output goes to `bu
 | `ruff check .` | Python lint |
 | `ruff format --check .` | Python format check |
 
+CUDA builds default to architecture `89`. For other GPUs, configure with `-DCMAKE_CUDA_ARCHITECTURES=86` (or the architecture required by the target device). A standalone toolkit at `/usr/local/cuda` is selected when its `bin/nvcc` exists; use `-DCUDAToolkit_ROOT=...` or `-DCMAKE_CUDA_COMPILER=...` to override toolkit selection.
+
 ---
 
 ## Python Wrapper: `fblt-train`
