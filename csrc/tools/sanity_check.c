@@ -115,9 +115,10 @@ int main(int argc, char **argv) {
             M = fixed_stride(window, 4, patches);
         }
 
-        double ce =
+        // window_causal_ce returns a per-window MEAN, not a sum.
+        double mean_ce =
             window_causal_ce(eval_arena, model, text, window, NULL, diffusion, BLT_D0_LEARNED, patches, M, NULL, NULL);
-        total_ce += ce;
+        total_ce += mean_ce * (double)(window - 1);
         total_bytes += window - 1;
 
         // Also do a forward pass to print sample predictions
@@ -148,8 +149,12 @@ int main(int argc, char **argv) {
         for (size_t i = 0; i + 1 < window; i++) {
             const float *row = L + i * 256;
             // find top-10
-            int top10_idx[10] = {0};
-            float top10_val[10] = {0};
+            int top10_idx[10];
+            float top10_val[10];
+            for (int k = 0; k < 10; k++) {
+                top10_idx[k] = -1;
+                top10_val[k] = -INFINITY;
+            }
             for (int v = 0; v < 256; v++) {
                 if (row[v] > top10_val[0]) {
                     top10_val[0] = row[v];
@@ -168,11 +173,12 @@ int main(int argc, char **argv) {
                 }
             }
             int actual = (int)text[i + 1];
-            if (top10_idx[9] == actual) top1_correct++;
+            // slots are sorted descending, so slot 0 is the argmax and slot 9 the 10th best
+            if (top10_idx[0] == actual) top1_correct++;
             int in5 = 0, in10 = 0;
             for (int k = 0; k < 10; k++) {
                 if (top10_idx[k] == actual) in10 = 1;
-                if (k >= 5 && top10_idx[k] == actual) in5 = 1;
+                if (k < 5 && top10_idx[k] == actual) in5 = 1;
             }
             if (in5) top5_correct++;
             if (in10) top10_correct++;
