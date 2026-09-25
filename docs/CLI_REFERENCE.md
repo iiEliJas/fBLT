@@ -418,7 +418,7 @@ build/pos_accuracy --checkpoint runs/my_model.fblt \
 
 ### `patch_trunc_split` — Patch truncation split diagnostic
 
-Splits interior-row top-1 accuracy by how the containing patch closed: naturally (entropy trigger) vs forced (max_patch_length or buffer boundary). Used to test Hypothesis B from `docs/LAST_ROW_TRAINING_GAP.md` — whether arbitrarily-truncated patches have a representational weakness that more training alone won't fix.
+Splits interior-row top-1 accuracy by how the containing patch closed: naturally (entropy trigger) vs forced (max_patch_length or buffer boundary). Used to test Hypothesis B from `docs/experiments/last_row_gap.md` — whether arbitrarily-truncated patches have a representational weakness that more training alone won't fix.
 
 ```
 build/patch_trunc_split --checkpoint MODEL --corpus FILE [options]

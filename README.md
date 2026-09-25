@@ -312,7 +312,7 @@ Or patches that get cut off at the window edge are harder for the model to repre
 - [BENCHMARKS.md](docs/BENCHMARKS.md) - Full benchmark report
 - [ABLATIONS.md](docs/ABLATIONS.md) - Ablation sweep results
 - [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) - CLI commands for training and inference
-- [LAST_ROW_TRAINING_GAP.md](docs/LAST_ROW_TRAINING_GAP.md) - Open investigation on the last-row accuracy gap
+- [last_row_gap.md](docs/experiments/last_row_gap.md) - Closed investigation into the last-row accuracy gap
 
 ## Contributing
 
