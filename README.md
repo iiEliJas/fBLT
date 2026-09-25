@@ -288,17 +288,18 @@ Negative results count too. They save the next
 person from trying it too ;D
 
 ## Issues
-### Known issues
 
 - Seed-dependent non-determinism from CUDA atomics.
+
 - Acceptance-rate root cause at this scale is unknown.
 
-### Currently under investigation
-
-Last-row accuracy inside each training window sits far below interior-row accuracy (~40% vs ~98%). 
+- [CLOSED] [last_row_gap.md](docs/experiments/last_row_gap.md) Last-row accuracy inside each training window sits far below interior-row accuracy (~40% vs ~98%). 
 Two Hypotheses are being considered. Either the last row gets far less supervision per window than interior rows.
 Or patches that get cut off at the window edge are harder for the model to represent. 
-The full report: [LAST_ROW_TRAINING_GAP.md](docs/LAST_ROW_TRAINING_GAP.md).
+
+- [forced_boundary_patches.md](docs/experiments/forced_boundary_patches.md) Open issue on comparing forced-boundary patches to natural closed patches.
+
+- [patch_cap_limit.md](docs/experiments/patch_cap_limit.md) The 128-patch cap is another open issue. I added it because BLT-D did not support more patches at the time. Raising it and measuring the effect is an open experiment i have not yet done.
 
 ## TODO
 - Inference improvements
