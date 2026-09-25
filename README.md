@@ -56,14 +56,12 @@ Five-stage pipeline:
 pip install -e .                    # install fblt package + entry points
 
 # Build C binaries
-mkdir build && cd build
-cmake ..                             # CPU build
-cmake --build . -j$(nproc)          # build all targets
+cmake -S . -B build                  # CPU build
+cmake --build build -j$(nproc)       # build all targets
 
 # Or for CUDA:
-mkdir build-cuda && cd build-cuda
-cmake .. -DUSE_CUDA=ON             # enable CUDA backend
-cmake --build . -j$(nproc)          # build all targets
+cmake -S . -B build-cuda -DUSE_CUDA=ON
+cmake --build build-cuda -j$(nproc)
 
 python fblt/scripts/build_sample_corpus.py  # generate sample training data from repo source
 
@@ -98,32 +96,32 @@ For heldout evaluation, set `--eval-corpus` to a separate `.bin` file not overla
 
 ```bash
 # CPU build
-mkdir build && cd build
-cmake ..
-cmake --build . -j$(nproc)          # build all targets
-cmake --build . --target test       # build + run C test suite
+cmake -S . -B build -DUSE_CUDA=OFF
+cmake --build build -j$(nproc)                 # build all targets
+cmake --build build --target test              # build + run C test suite
 
 # CUDA build
-mkdir build-cuda && cd build-cuda
-cmake .. -DUSE_CUDA=ON
-cmake --build . -j$(nproc)          # build all targets
-cmake --build . --target test       # build + run C test suite
+cmake -S . -B build-cuda -DUSE_CUDA=ON
+cmake --build build-cuda -j$(nproc)            # build all targets
+cmake --build build-cuda --target test         # build + run C test suite
 
 # Other useful targets
-cmake --build . --target main       # build main executable
-cmake --build . --target train_blt_d  # build trainer
-cmake --build . --target infer      # build inference binary
-cmake --build . --target sandbox_run  # build + run sandbox
-cmake --build . --target bench-harness  # build + run benchmark harness
+cmake --build build --target main              # build main executable
+cmake --build build --target train_blt_d       # build trainer
+cmake --build build --target infer             # build inference binary
+cmake --build build --target sandbox_run       # build + run sandbox
+cmake --build build --target bench-infer       # build + run inference benchmark
 ```
 
 Default is `gcc -O2 -std=c99 -Wall -Wextra`. Change it:
 
 ```bash
-cmake .. -DCMAKE_C_COMPILER=clang -DCMAKE_C_FLAGS="-O3 -std=c99 -Wall"
+cmake -S . -B build -DCMAKE_C_COMPILER=clang -DCMAKE_C_FLAGS="-O3 -std=c99 -Wall"
 ```
 
-CUDA: `cmake .. -DUSE_CUDA=ON` enables CUDA support and compiles `.cu` files with nvcc.
+CUDA: `cmake -S . -B build-cuda -DUSE_CUDA=ON` enables CUDA support and compiles `.cu` files with `nvcc`. The default architecture is `89`; configure another GPU with `-DCMAKE_CUDA_ARCHITECTURES=86` or the value required by your device. If `nvcc` is installed outside `/usr/local/cuda`, pass `-DCUDAToolkit_ROOT=/path/to/cuda` or `-DCMAKE_CUDA_COMPILER=/path/to/nvcc`.
+
+On WSL2, if an apt NVIDIA library shadows the WSL driver, put the WSL driver directory first on `LD_LIBRARY_PATH` and set `CUDA_VISIBLE_DEVICES=0` if the variable is empty.
 
 ### Python setup
 
@@ -148,8 +146,8 @@ For the C test suite parity tests, generate golden data first:
 
 ```bash
 pip install torch numpy
-python tests/py/parity_generate.py  # or just: cmake --build . --target parity-data (if data/tests missing)
-cmake --build . --target test       # build + run C tests
+python tests/py/parity_generate.py  # or: cmake --build build --target parity-data
+cmake --build build --target test   # build + run C tests
 ```
 
 ## Layout
@@ -237,7 +235,7 @@ CUDA delivers **76x training speedup** and **34x generation speedup** over CPU a
 `infer_bench` is a separate research/benchmarking tool that compares inference methods and writes metrics to `bench/results.jsonl`.
 
 ```bash
-cmake --build . --target bench-infer  # needs runs/*_40k.fblt checkpoints
+cmake --build build --target bench-infer  # needs runs/*_40k.fblt checkpoints
 python3 fblt/scripts/bench_plots.py    # writes graphs/*.png
 ```
 
