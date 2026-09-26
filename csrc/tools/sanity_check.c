@@ -148,32 +148,9 @@ int main(int argc, char **argv) {
         // Count top-1/5/10 accuracy over clean rows
         for (size_t i = 0; i + 1 < window; i++) {
             const float *row = L + i * 256;
-            // find top-10
             int top10_idx[10];
-            float top10_val[10];
-            for (int k = 0; k < 10; k++) {
-                top10_idx[k] = -1;
-                top10_val[k] = -INFINITY;
-            }
-            for (int v = 0; v < 256; v++) {
-                if (row[v] > top10_val[0]) {
-                    top10_val[0] = row[v];
-                    top10_idx[0] = v;
-                    // bubble up
-                    for (int k = 1; k < 10; k++) {
-                        if (top10_val[k - 1] > top10_val[k]) {
-                            float tv = top10_val[k - 1];
-                            top10_val[k - 1] = top10_val[k];
-                            top10_val[k] = tv;
-                            int ti = top10_idx[k - 1];
-                            top10_idx[k - 1] = top10_idx[k];
-                            top10_idx[k] = ti;
-                        }
-                    }
-                }
-            }
+            topk_from_logits(row, 256, 10, top10_idx);
             int actual = (int)text[i + 1];
-            // slots are sorted descending, so slot 0 is the argmax and slot 9 the 10th best
             if (top10_idx[0] == actual) top1_correct++;
             int in5 = 0, in10 = 0;
             for (int k = 0; k < 10; k++) {
