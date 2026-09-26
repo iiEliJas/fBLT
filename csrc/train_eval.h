@@ -25,6 +25,12 @@ double window_causal_ce(blt_arena *arena, const blt_model *model, const uint8_t 
 // Fixed-stride patching helper.
 size_t fixed_stride(size_t seq_len, size_t patch_len, blt_patch_info *out);
 
+// Top-k class indices of one logits row, written to idx_out[0..k-1] sorted by
+// descending logit. Exact ties break toward the lower class index. Slots beyond
+// the end of the row are set to -1, so callers can test every slot against a
+// target class without knowing the vocab size.
+void topk_from_logits(const float *row, int n, int k, int *idx_out);
+
 // Entropy-LM patching (same numerics as the inference controllers).
 // The patcher is host-only, so under a device backend the byte ids are
 // uploaded and the entropies staged back through host memory.

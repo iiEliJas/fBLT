@@ -35,6 +35,7 @@ int main(void) {
         {"mask builder backend", run_mask_builder_backend_tests},
         {"bf16 cast", run_bf16_cast_tests},
         {"deterministic regression", run_deterministic_regression_test},
+        {"topk from logits", run_topk_from_logits_tests},
     };
 
     const test_case model_tests[] = {

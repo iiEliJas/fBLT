@@ -153,45 +153,28 @@ int main(int argc, char **argv) {
         total_samples++;
 
         // Find top-10 at last position
-        int top10_idx[10] = {0};
-        float top10_val[10] = {0};
-        for (int v = 0; v < 256; v++) {
-            if (row[v] > top10_val[0]) {
-                top10_val[0] = row[v];
-                top10_idx[0] = v;
-                for (int k = 1; k < 10; k++) {
-                    if (top10_val[k - 1] > top10_val[k]) {
-                        float tv = top10_val[k - 1];
-                        top10_val[k - 1] = top10_val[k];
-                        top10_val[k] = tv;
-                        int ti = top10_idx[k - 1];
-                        top10_idx[k - 1] = top10_idx[k];
-                        top10_idx[k] = ti;
-                    }
-                }
-            }
-        }
+        int top10_idx[10];
+        topk_from_logits(row, 256, 10, top10_idx);
 
-        // Top-1 is the best (highest index after sort = index 9)
-        if (top10_idx[9] == actual) top1_correct++;
+        if (top10_idx[0] == actual) top1_correct++;
         int in5 = 0, in10 = 0;
         for (int k = 0; k < 10; k++) {
             if (top10_idx[k] == actual) in10 = 1;
-            if (k >= 5 && top10_idx[k] == actual) in5 = 1;
+            if (k < 5 && top10_idx[k] == actual) in5 = 1;
         }
         if (in5) top5_correct++;
         if (in10) top10_correct++;
 
         // Per-sample details for first 10 windows
         if (w < 10) {
-            int best = top10_idx[9];
+            int best = top10_idx[0];
             char actual_ch = (actual >= 32 && actual < 127) ? (char)actual : '?';
             char pred_ch = (best >= 32 && best < 127) ? (char)best : '?';
             fprintf(stderr, "  [%3zu] actual='%c'(%3d)  pred='%c'(%3d)  top10=[", w, actual_ch, actual, pred_ch, best);
-            for (int k = 9; k >= 0; k--) {
+            for (int k = 0; k < 10; k++) {
                 char pc = (top10_idx[k] >= 32 && top10_idx[k] < 127) ? (char)top10_idx[k] : '?';
                 fprintf(stderr, "%c(%d)", pc, top10_idx[k]);
-                if (k > 0) fprintf(stderr, " ");
+                if (k < 9) fprintf(stderr, " ");
             }
             fprintf(stderr, "] %s\n", best == actual ? "OK" : "MISS");
         }

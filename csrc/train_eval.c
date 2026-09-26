@@ -168,3 +168,26 @@ size_t entropy_segment(blt_arena *arena, blt_entropy_lm *lm, const uint8_t *byte
     free(vals_host);
     return n;
 }
+
+void topk_from_logits(const float *row, int n, int k, int *idx_out) {
+    if (!idx_out || k <= 0) return;
+    for (int i = 0; i < k; i++) idx_out[i] = -1;
+    if (!row || n <= 0) return;
+
+    const int m = (k < n) ? k : n;
+    for (int rank = 0; rank < m; rank++) {
+        int best = -1;
+        for (int v = 0; v < n; v++) {
+            int taken = 0;
+            for (int t = 0; t < rank; t++) {
+                if (idx_out[t] == v) {
+                    taken = 1;
+                    break;
+                }
+            }
+            if (taken) continue;
+            if (best < 0 || row[v] > row[best]) best = v;
+        }
+        idx_out[rank] = best;
+    }
+}
