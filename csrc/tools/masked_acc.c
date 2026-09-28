@@ -71,6 +71,23 @@ static long fsize(const char *path) {
 }
 
 // First-max-wins argmax, strict > from v=1, matching core/generate_greedy.c.
+// Normal-approximation 95% CI for a difference of two independent proportions.
+// Used for the convention A/B delta, where the two arms share windows but not
+// logits, so the samples are independent.
+static double diff_ci95(double p1, size_t n1, double p2, size_t n2, double *lo, double *hi) {
+    if (n1 == 0 || n2 == 0) {
+        *lo = 0.0;
+        *hi = 0.0;
+        return 0.0;
+    }
+    const double var = p1 * (1.0 - p1) / (double)n1 + p2 * (1.0 - p2) / (double)n2;
+    const double se = sqrt(var);
+    const double d = p2 - p1;
+    *lo = d - 1.96 * se;
+    *hi = d + 1.96 * se;
+    return se;
+}
+
 static size_t row_argmax(const float *row, size_t vocab) {
     size_t best = 0;
     for (size_t v = 1; v < vocab; v++) {
@@ -597,10 +614,16 @@ int main(int argc, char **argv) {
         double aa = al->masked_total ? (double)al->masked_hits / (double)al->masked_total : 0.0;
         double ma = mp->masked_total ? (double)mp->masked_hits / (double)mp->masked_total : 0.0;
         // Convention A/B: o_{i-1} (training) vs last closed latent, same blocks.
-        printf("t=%.2f  convention delta (train_lastlat - train) = %+.4f  (o_{i-1} %.4f  lastlat %.4f)\n",
-               (double)ts[ti], la - ta, ta, la);
+        double lo = 0.0, hi = 0.0;
+        diff_ci95(ta, tr->masked_total, la, tl->masked_total, &lo, &hi);
+        printf("t=%.2f  convention delta (train_lastlat - train) = %+.4f  95%% CI [%+.4f, %+.4f]  "
+               "(o_{i-1} %.4f n=%zu  lastlat %.4f n=%zu)\n",
+               (double)ts[ti], la - ta, lo, hi, ta, tr->masked_total, la, tl->masked_total);
         // Aligned vs midpatch: how much does the lagging latent cost?
-        printf("t=%.2f  aligned %.4f  midpatch %.4f  (midpatch - aligned = %+.4f)\n", (double)ts[ti], aa, ma, ma - aa);
+        double alo = 0.0, ahi = 0.0;
+        diff_ci95(aa, al->masked_total, ma, mp->masked_total, &alo, &ahi);
+        printf("t=%.2f  aligned %.4f  midpatch %.4f  delta %+.4f  95%% CI [%+.4f, %+.4f]\n", (double)ts[ti], aa, ma,
+               ma - aa, alo, ahi);
         // The leak tripwire: train layout must not be far above aligned-novel.
         printf("t=%.2f  train %.4f  aligned-novel %.4f  gap %.4f\n", (double)ts[ti], ta, aa, aa - ta);
     }
