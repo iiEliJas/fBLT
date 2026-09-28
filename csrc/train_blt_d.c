@@ -96,8 +96,9 @@ static void monitor_novel_block(const blt_model *model, blt_arena *scratch, blt_
     blt_arena_reset(seg_arena);
     size_t Mp = use_entropy ? entropy_segment(seg_arena, lm, text, P, pp, 128) : fixed_stride(P, 4, pp);
     if (Mp < 2 || Mp >= 128) return;
-    // The trailing prefix patch is closed iff a patch starts exactly at P; if
-    // not, the last closed latent is one patch stale.
+    // The caller only ever passes a P that lands on a patch start, so the
+    // final prefix patch is closed and the last closed latent is Mp-1. (masked_acc
+    // handles the mid-patch case too, where it falls back to Mp-2.)
     const size_t group = (Mp >= 1) ? (Mp - 1) : 0;
 
     blt_arena_reset(scratch);

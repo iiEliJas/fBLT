@@ -556,29 +556,41 @@ int main(int argc, char **argv) {
         // capped at novel_prefix_max bytes and --sites controls how many sites
         // per window are sampled (all sampled sites land in the same stats).
         if (offset + window + block_size <= data_len && patches_usable) {
+            size_t elig[MASKACC_MAX_PATCHES];
             for (size_t ti = 0; ti < n_t; ti++) {
-                size_t taken = 0;
-                for (size_t j = 1; j + 1 < M && taken < sites; j++) {
+                // Aligned: sample up to `sites` patch starts, spread back from
+                // the longest eligible prefix so a single site is a reasonably
+                // long prompt rather than the cold first patch.
+                size_t ne = 0;
+                for (size_t j = 1; j + 1 < M; j++) {
                     const size_t P = patches[j].start_idx;
                     if (P < 8 || P > novel_prefix_max || P + block_size > window) continue;
-                    if (!novel_layout_eval(model, scratch, seg_arena, el, text, P, block_size, ts[ti],
-                                           (uint64_t)seed + (uint64_t)w, d0_mode, &stats[ti][2], 1))
-                        continue;
-                    taken++;
+                    elig[ne++] = j;
                 }
-                taken = 0;
-                for (size_t j = 1; j + 1 < M && taken < sites; j++) {
+                for (size_t k = 0; k < ne && k < sites; k++) {
+                    const size_t P = patches[elig[ne - 1 - (k * ne) / sites]].start_idx;
+                    novel_layout_eval(model, scratch, seg_arena, el, text, P, block_size, ts[ti],
+                                      (uint64_t)seed + (uint64_t)w, d0_mode, &stats[ti][2], 1);
+                }
+                // Midpatch: same, but 1..max_patch_len-1 bytes inside the patch.
+                ne = 0;
+                for (size_t j = 1; j + 1 < M; j++) {
                     const size_t s = patches[j].start_idx;
                     const size_t len = patches[j].length;
                     if (len < 2) continue;
-                    // Vary the depth into the open patch with w and j so
-                    // successive sites probe different lagging offsets.
                     const size_t P = s + 1 + ((size_t)(w + j) % (len - 1));
                     if (P < 8 || P > novel_prefix_max || P + block_size > window) continue;
-                    if (!novel_layout_eval(model, scratch, seg_arena, el, text, P, block_size, ts[ti],
-                                           (uint64_t)seed + (uint64_t)w, d0_mode, &stats[ti][3], 1))
-                        continue;
-                    taken++;
+                    elig[ne++] = j;
+                }
+                for (size_t k = 0; k < ne && k < sites; k++) {
+                    const size_t idx = elig[ne - 1 - (k * ne) / sites];
+                    const size_t s = patches[idx].start_idx;
+                    const size_t len = patches[idx].length;
+                    // Vary the depth into the open patch with w and the patch
+                    // index so successive sites probe different lagging offsets.
+                    const size_t P = s + 1 + ((size_t)(w + idx) % (len - 1));
+                    novel_layout_eval(model, scratch, seg_arena, el, text, P, block_size, ts[ti],
+                                      (uint64_t)seed + (uint64_t)w, d0_mode, &stats[ti][3], 1);
                 }
             }
         }
