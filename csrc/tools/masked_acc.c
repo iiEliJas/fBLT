@@ -164,6 +164,8 @@ int main(int argc, char **argv) {
     int backend_cuda = 0;
     int layout_novel = 0;
     int patcher_fixed = 0;
+    int guard = 0;
+    int guard_ok = 1;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--checkpoint") && i + 1 < argc) checkpoint = argv[++i];
@@ -214,6 +216,8 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "Error: --layout must be twin|novel\n");
                 return 1;
             }
+        } else if (!strcmp(argv[i], "--guard")) {
+            guard = 1;
         } else if (!strcmp(argv[i], "--patcher") && i + 1 < argc) {
             i++;
             if (!strcmp(argv[i], "fixed")) patcher_fixed = 1;
@@ -228,9 +232,14 @@ int main(int argc, char **argv) {
         fprintf(stderr, "FATAL: cuda not supported in this tool (cpu only)\n");
         return 1;
     }
-    if (!checkpoint || !entropy_lm_path || !corpus) {
+    if (!checkpoint || !corpus || (!patcher_fixed && !entropy_lm_path)) {
         fprintf(stderr, "Usage: masked_acc --checkpoint MODEL --entropy-lm FILE --corpus FILE "
-                        "--embed N --hidden N --enc-layers N --glob-layers N --dec-layers N [options]\n");
+                        "--embed N --hidden N --enc-layers N --glob-layers N --dec-layers N [options]\n"
+                        "  --layout twin|novel   evaluation layout (default twin = training layout)\n"
+                        "  --t F                 mask probability (repeatable); --guard needs --t 1.0\n"
+                        "  --guard               assert |train - novel| < 0.10 and train < 0.99 at t=1.0;\n"
+                        "                        exit 1 on failure (CI regression guard)\n"
+                        "  --patcher entropy|fixed  segmentation (default entropy; fixed needs no --entropy-lm)\n");
         return 1;
     }
     if (!embed || !hidden || !enc_layers || !glob_layers || !dec_layers) {
@@ -243,6 +252,10 @@ int main(int argc, char **argv) {
     }
     if (block_size < 1) {
         fprintf(stderr, "Error: --block-size must be >= 1\n");
+        return 1;
+    }
+    if (guard && !layout_novel) {
+        fprintf(stderr, "Error: --guard requires --layout novel (the guard compares train vs novel)\n");
         return 1;
     }
     if (n_t == 0) {
@@ -309,8 +322,8 @@ int main(int argc, char **argv) {
             num_windows, (double)t_min, seed, d0_mode == BLT_D0_LEARNED ? "learned" : "zeros",
             patcher_fixed ? "fixed" : "entropy");
 
-    blt_entropy_lm *el = blt_make_entropy_lm(lm_arena, MS, entropy_lm_path, 11);
-    fprintf(stderr, "[MASKED_ACC] loaded entropy LM: %s\n", entropy_lm_path);
+    blt_entropy_lm *el = patcher_fixed ? NULL : blt_make_entropy_lm(lm_arena, MS, entropy_lm_path, 11);
+    if (el) fprintf(stderr, "[MASKED_ACC] loaded entropy LM: %s\n", entropy_lm_path);
 
     maskacc_stats stats[MASKACC_MAX_T][3];
     memset(stats, 0, sizeof(stats));
@@ -481,23 +494,74 @@ int main(int argc, char **argv) {
 
         size_t worst = 0;
         double worst_na = 0.0;
+        double worst_gap = 0.0;
+        double worst_ta = 0.0;
         int have_novel = 0;
         for (size_t ti = 0; ti < n_t; ti++) {
             const maskacc_stats *nv = &stats[ti][2];
             if (!nv->masked_total) continue;
-            double na = (double)nv->masked_hits / (double)nv->masked_total;
+            const maskacc_stats *tr = &stats[ti][0];
+            if (!tr->masked_total) continue;
+            const double na = (double)nv->masked_hits / (double)nv->masked_total;
+            const double ta = (double)tr->masked_hits / (double)tr->masked_total;
+            const double gap = fabs(ta - na);
+            // The novel layout has no clean twin to copy from, so it is the
+            // honest number; lead with it rather than burying it under the
+            // train-layout figure. A large train/novel gap is the leak
+            // signature -- low novel accuracy on its own is not.
             if (!have_novel || na < worst_na) {
                 worst = ti;
                 worst_na = na;
+                worst_ta = ta;
+                worst_gap = gap;
                 have_novel = 1;
             }
         }
-        const maskacc_stats *tr = &stats[worst][0];
-        double ta = tr->masked_total ? (double)tr->masked_hits / (double)tr->masked_total : 0.0;
-        if (have_novel && worst_na < 0.5) {
-            printf("VERDICT: clean-twin leak CONFIRMED  (twin %.4f vs novel %.4f)\n", ta, worst_na);
-        } else {
-            printf("VERDICT: leak NOT confirmed (twin %.4f vs novel %.4f)\n", ta, worst_na);
+
+        if (have_novel) {
+            printf("\nHEADLINE  novel-layout masked_acc @ t=%.2f = %.4f   (train-layout %.4f, gap %.4f)\n",
+                   (double)ts[worst], worst_na, worst_ta, worst_gap);
+            if (worst_gap >= 0.10) {
+                printf("VERDICT: train/novel gap %.4f >= 0.10 -- mask leak present\n", worst_gap);
+            } else {
+                printf("VERDICT: train/novel gap %.4f < 0.10 -- no mask leak\n", worst_gap);
+            }
+        }
+
+        if (guard) {
+            size_t gi = n_t;
+            for (size_t ti = 0; ti < n_t; ti++) {
+                if (ts[ti] == 1.0f) {
+                    gi = ti;
+                    break;
+                }
+            }
+            if (gi >= n_t) {
+                fprintf(stderr, "GUARD FAIL: --guard needs a --t 1.0 sweep point\n");
+                guard_ok = 0;
+            } else {
+                const maskacc_stats *gtr = &stats[gi][0];
+                const maskacc_stats *gnv = &stats[gi][2];
+                if (!gtr->masked_total || !gnv->masked_total) {
+                    fprintf(stderr, "GUARD FAIL: no masked cells at t=1.0 (train %zu, novel %zu)\n", gtr->masked_total,
+                            gnv->masked_total);
+                    guard_ok = 0;
+                } else {
+                    const double ga = (double)gtr->masked_hits / (double)gtr->masked_total;
+                    const double na = (double)gnv->masked_hits / (double)gnv->masked_total;
+                    const double gap = fabs(ga - na);
+                    printf("GUARD t=1.0  train %.4f  novel %.4f  gap %.4f\n", ga, na, gap);
+                    if (!(gap < 0.10)) {
+                        fprintf(stderr, "GUARD FAIL: |train - novel| = %.4f >= 0.10 (mask leak)\n", gap);
+                        guard_ok = 0;
+                    }
+                    if (!(ga < 0.99)) {
+                        fprintf(stderr, "GUARD FAIL: train-layout masked acc %.4f >= 0.99 (clean twin leak)\n", ga);
+                        guard_ok = 0;
+                    }
+                }
+            }
+            printf("GUARD: %s\n", guard_ok ? "PASS" : "FAIL");
         }
     }
 
@@ -506,5 +570,5 @@ int main(int argc, char **argv) {
     blt_arena_destroy(lm_arena);
     blt_arena_destroy(scratch);
     blt_arena_destroy(model_arena);
-    return 0;
+    return guard_ok ? 0 : 1;
 }

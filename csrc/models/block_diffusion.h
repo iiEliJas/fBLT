@@ -25,11 +25,10 @@ extern "C" {
 //   - [PAD] cells reuse the MASK token id (256) for their embedding and
 //     are excluded from L_mask via cell_valid instead of carrying a
 //     separate PAD embedding. Keeps BLT_D0_VOCAB at 257.
-//   - Self-attention follows Fast-BLT 3.2.2 prose: clean rows causal; block
-//     row i sees all clean bytes plus every block with block-index <= i's
-//     block-index (bidirectional within own block). The paper's Figure 5
-//     matrix is strictly causal; prose rule adopted to match training text
-//     and semi-autoregressive inference.
+//   - Self-attention follows Fast-BLT 3.2.2 and Figure 5: clean rows causal; a
+//     block row in the block starting at s_i attends clean columns j < s_i plus
+//     every column of its own block. No cross-block attention, and no clean
+//     column at or past s_i, so a block row cannot see its own target.
 
 #define BLT_MASK_TOKEN_ID 256u // in [0, BLT_D0_VOCAB)
 

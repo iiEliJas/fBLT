@@ -152,7 +152,8 @@ extern "C" void blt_build_attention_mask_cuda(const blt_mask_config *config, blt
     free(row_ok);
 }
 
-__global__ void blt_block_diffusion_mask_kernel(float *m, size_t S, size_t N, size_t B, int infer_mode) {
+__global__ void blt_block_diffusion_mask_kernel(float *m, size_t S, size_t N, size_t B, int infer_mode,
+                                                const size_t *block_starts) {
     const size_t count = S * S;
     for (size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x; idx < count;
          idx += (size_t)gridDim.x * blockDim.x) {
@@ -167,9 +168,12 @@ __global__ void blt_block_diffusion_mask_kernel(float *m, size_t S, size_t N, si
             // Single live block: all clean + whole block section.
             allowed = true;
         } else {
-            // TRAIN: prose rule -- block row i sees all clean bytes plus
-            // every block with block-index <= i's block-index.
-            allowed = (j < N) || ((j - N) / B <= (i - N) / B);
+            // TRAIN (Fast-BLT 3.2.2 + Figure 5): clean bytes j < s_i plus every
+            // column of this row's own block. Mirrors the CPU rule exactly.
+            const size_t blk = (i - N) / B;
+            const size_t s = block_starts[blk];
+            const bool own_block = (j >= N) && ((j - N) / B == blk);
+            allowed = (j < s) || own_block;
         }
         m[idx] = allowed ? 0.0f : -INFINITY;
     }
@@ -179,9 +183,18 @@ extern "C" void blt_build_block_diffusion_mask_cuda(const blt_block_diffusion_co
                                                     blt_arena *arena) {
     const size_t S = config->seq_len;
     const size_t N = config->num_clean;
+    const int infer_mode = (config->mode == BLT_BDM_INFER) ? 1 : 0;
+
+    BLT_REQUIRE(!(infer_mode == 0 && config->block_starts == NULL),
+                "blt_build_block_diffusion_mask: TRAIN mode needs block_starts");
 
     size_t shape[2] = {S, S};
     *out_mask = blt_tensor_create(arena, shape, 2, BLT_DTYPE_FP32);
+
+    size_t *d_starts = NULL;
+    if (!infer_mode) {
+        d_starts = (size_t *)blt_cuda_upload_temp(config->block_starts, config->num_blocks * sizeof(size_t), arena);
+    }
 
     const size_t count = S * S;
     const unsigned block = 256;
@@ -190,7 +203,7 @@ extern "C" void blt_build_block_diffusion_mask_cuda(const blt_block_diffusion_co
     if (blocks == 0) blocks = 1;
 
     blt_block_diffusion_mask_kernel<<<(unsigned)blocks, block>>>((float *)out_mask->data, S, N, config->block_size,
-                                                                 config->mode == BLT_BDM_INFER ? 1 : 0);
+                                                                 infer_mode, d_starts);
     blt_cuda_launch_check("blt_build_block_diffusion_mask");
 
     // Every supported configuration gives each row a valid key (row i sees

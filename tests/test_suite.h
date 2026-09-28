@@ -53,8 +53,10 @@ int run_blockgen_draft_behavior(void);
 int run_blockgen_generation_gates(void);
 int run_blockgen_stage6_helpers(void);
 int run_block_diffusion_mask_fixture(void);
+int run_block_diffusion_mask_no_leak(void);
 int run_block_diffusion_gradcheck(void);
 int run_block_diffusion_overfit_gate(void);
+int run_block_diffusion_no_label_leak(void);
 int run_block_diffusion_last_row_upweight(void);
 
 int run_matmul_parity_test(void);

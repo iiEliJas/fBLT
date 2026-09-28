@@ -61,6 +61,29 @@ jobs:
       - name: Build and run tests
         run: cmake --build build --target test
 
+      - name: Build sample corpus
+        run: python fblt/scripts/build_sample_corpus.py
+
+      - name: BLT-D mask-leak guard (masked_acc)
+        run: |
+          cmake --build build --target train_blt_d masked_acc
+          mkdir -p runs/ci_guard
+          # Fixed-stride patching keeps this deterministic and needs no entropy LM.
+          # The strong assertion is train-layout masked acc < 0.99: a mask that lets
+          # a block row read the clean twin at its own target position drives this
+          # toward 1.0. Enough windows are required because the novel layout only
+          # yields block_size cells each, and a small sample makes the gap noisy.
+          ./build/train_blt_d --corpus data/train.bin \
+            --embed 32 --hidden 64 --layers 1 \
+            --window 128 --block-size 8 --steps 150 --lr 0.05 \
+            --save-weights runs/ci_guard/model.fblt --report-every 1000
+          ./build/masked_acc \
+            --checkpoint runs/ci_guard/model.fblt \
+            --corpus data/heldout.bin \
+            --embed 32 --hidden 64 --enc-layers 1 --glob-layers 1 --dec-layers 1 \
+            --window 128 --block-size 8 --windows 128 --patcher fixed \
+            --layout novel --t 1.0 --guard
+
       - name: Clean build artifacts
         if: always()
         run: rm -rf build

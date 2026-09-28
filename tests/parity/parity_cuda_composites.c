@@ -108,6 +108,11 @@ static int check_mask_configs(void) {
     const size_t S = 24;
     const size_t N = 12;
     const size_t B = 2; // blocks of 2 tile [12, 24) exactly
+    const size_t NB = (S - N) / B;
+
+    // Starts are interleaved with the block order so parity cannot pass by
+    // accident when block_starts is ignored on either backend.
+    const size_t starts[6] = {0, 4, 1, 7, 3, 11};
 
     blt_block_diffusion_config bcfg;
     memset(&bcfg, 0, sizeof(bcfg));
@@ -116,6 +121,8 @@ static int check_mask_configs(void) {
 
     bcfg.mode = BLT_BDM_TRAIN;
     bcfg.block_size = B;
+    bcfg.block_starts = starts;
+    bcfg.num_blocks = NB;
     blt_tensor t_cpu = {0};
     blt_build_block_diffusion_mask(&bcfg, &t_cpu, host);
     blt_tensor t_dev = {0};
@@ -123,11 +130,22 @@ static int check_mask_configs(void) {
     blt_tensor t_copy = blt_tensor_to_host(&t_dev, host);
     TEST_ASSERT_CLOSE(&t_copy, &t_cpu, 0.0f);
 
-    bcfg.mode = BLT_BDM_INFER;
+    // The TRAIN mask must actually depend on block_starts, and must differ
+    // from INFER, so a backend that silently ignored the field would fail.
+    blt_block_diffusion_config icfg = bcfg;
+    icfg.mode = BLT_BDM_INFER;
     blt_tensor i_cpu = {0};
-    blt_build_block_diffusion_mask(&bcfg, &i_cpu, host);
+    blt_build_block_diffusion_mask(&icfg, &i_cpu, host);
+    const float *tp = (const float *)t_cpu.data;
+    const float *ip = (const float *)i_cpu.data;
+    int train_differs = 0;
+    for (size_t k = 0; k < S * S; k++) {
+        if ((tp[k] == 0.0f) != (ip[k] == 0.0f)) train_differs = 1;
+    }
+    TEST_ASSERT(train_differs);
+
     blt_tensor i_dev = {0};
-    blt_build_block_diffusion_mask(&bcfg, &i_dev, dev);
+    blt_build_block_diffusion_mask(&icfg, &i_dev, dev);
     blt_tensor i_copy = blt_tensor_to_host(&i_dev, host);
     TEST_ASSERT_CLOSE(&i_copy, &i_cpu, 0.0f);
 
