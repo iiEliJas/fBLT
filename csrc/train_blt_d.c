@@ -104,7 +104,9 @@ static void monitor_novel_block(const blt_model *model, blt_arena *scratch, blt_
     blt_arena_reset(scratch);
     size_t bshape[1] = {P};
     blt_tensor bytes_in = blt_tensor_create(scratch, bshape, 1, BLT_DTYPE_UINT8);
-    memcpy(bytes_in.data, text, P);
+    // scratch is a CUDA arena during training, so bytes_in.data is device
+    // memory; upload does the H2D copy. A raw memcpy would fault.
+    blt_tensor_upload(&bytes_in, text, P);
     blt_model_enc_out enc;
     blt_model_encode(model, &bytes_in, pp, Mp, NULL, 0, &enc, scratch);
 
@@ -174,7 +176,7 @@ static void blt_monitor(const blt_model *model, blt_arena *scratch, blt_arena *s
         blt_arena_reset(scratch);
         size_t bshape[1] = {N};
         blt_tensor bytes_in = blt_tensor_create(scratch, bshape, 1, BLT_DTYPE_UINT8);
-        memcpy(bytes_in.data, text, N);
+        blt_tensor_upload(&bytes_in, text, N);
         blt_model_enc_out enc;
         blt_model_encode(model, &bytes_in, patches, M, NULL, 0, &enc, scratch);
 
