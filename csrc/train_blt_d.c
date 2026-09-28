@@ -70,7 +70,7 @@ static uint64_t t_rng_next(uint64_t *state) {
     return z ^ (z >> 31);
 }
 
-// Training-time leak tripwire (Prompt-1 Step 2). On held-out windows at t=1.0
+// Training-time leak tripwire. On held-out windows at t=1.0
 // it measures the two numbers that a reintroduced label leak would break:
 // train-layout masked accuracy (a block row able to read the clean twin at its
 // own target drives this toward 1.0) and aligned-novel masked accuracy (a
