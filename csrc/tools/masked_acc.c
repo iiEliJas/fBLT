@@ -28,16 +28,38 @@
 #define MASKACC_V 256
 #define MASKACC_MAX_PATCHES 128
 
-static const char *const conv_names[3] = {"train", "infer", "novel"};
+// train       : block at a patch start s_i, cross-attention o_{i-1} (training rule)
+// train_lastlat: same blocks, cross-attention = last closed latent (convention A/B)
+// aligned     : one block after a prefix that ends exactly at a patch start,
+//               cross-attention = last closed latent (no clean twin)
+// midpatch    : one block after a prefix that ends 1..max_patch_len-1 bytes into an
+//               open patch, cross-attention = last closed latent (lagging case)
+#define MASKACC_MAX_PATCH_LEN 16
+#define MASKACC_MAX_SEQ 4096
+#define MASKACC_NCONV 4
+static const char *const conv_names[MASKACC_NCONV] = {"train", "train_lastlat", "aligned", "midpatch"};
 
 typedef struct {
     size_t masked_total;
     size_t masked_hits;
+    size_t first_total; // cell 0 of each block
+    size_t first_hits;
+    size_t last_total; // cell B-1 of each block
+    size_t last_hits;
     size_t clean_total;
     size_t clean_hits;
     double pmax_sum;
     double ent_sum;
 } maskacc_stats;
+
+static int patcher_fixed_global = 0;
+
+static uint64_t rng_next(uint64_t *state) {
+    uint64_t z = (*state += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
 
 static long fsize(const char *path) {
     FILE *f = fopen(path, "rb");
@@ -59,12 +81,26 @@ static size_t row_argmax(const float *row, size_t vocab) {
 
 // Masked-cell accuracy + mean max-softmax + mean entropy (nats) over the
 // masked rows of one decoder pass: rows N+r for r in [0, n_block_rows).
-static void accumulate_masked(maskacc_stats *st, const float *L, const blt_block_batch *batch) {
+// Also splits accuracy by cell index within the block, so a per-cell gradient
+// (cell 0 sits at the patch start and is the only cell a latent update can
+// inform) is visible rather than averaged away.
+static void accumulate_masked(maskacc_stats *st, const float *L, const blt_block_batch *batch, size_t block_size) {
     for (size_t r = 0; r < batch->n_block_rows; r++) {
         if (!batch->cell_masked[r]) continue;
         const float *row = L + (batch->num_clean + r) * MASKACC_V;
         st->masked_total++;
-        if (row_argmax(row, MASKACC_V) == (size_t)batch->targets[r]) st->masked_hits++;
+        const bool hit = row_argmax(row, MASKACC_V) == (size_t)batch->targets[r];
+        if (hit) st->masked_hits++;
+
+        const size_t cell = (block_size > 0) ? (r % block_size) : 0;
+        if (cell == 0) {
+            st->first_total++;
+            if (hit) st->first_hits++;
+        }
+        if (block_size > 0 && cell == block_size - 1) {
+            st->last_total++;
+            if (hit) st->last_hits++;
+        }
 
         float mx = row[0];
         for (size_t v = 1; v < MASKACC_V; v++)
@@ -85,8 +121,10 @@ static void accumulate_masked(maskacc_stats *st, const float *L, const blt_block
 // window -> softmax -> blt_compute_entropy (nats), then entropy patching
 // with the training patcher config. Same sequence as compute_entropy_vals
 // in infer/self_speculation.c plus entropy_segment in train_eval.c.
+// When ent_out is non-NULL it receives a malloc'd host array of the per-byte
+// entropy, which the novel layouts need for blt_next_starts_patch.
 static size_t entropy_segment_local(blt_arena *arena, blt_entropy_lm *lm, const uint8_t *bytes, size_t len,
-                                    blt_patch_info *out, size_t max_patches) {
+                                    blt_patch_info *out, size_t max_patches, float **ent_out) {
     size_t bytes_shape[1] = {len};
     blt_tensor bytes_in = blt_tensor_create(arena, bytes_shape, 1, BLT_DTYPE_UINT8);
     blt_tensor_upload(&bytes_in, bytes, len);
@@ -107,18 +145,19 @@ static size_t entropy_segment_local(blt_arena *arena, blt_entropy_lm *lm, const 
     blt_compute_entropy(&probs, &vals, &entropy_cfg);
 
     blt_patcher_config pcfg;
-    blt_make_patcher_cfg(&pcfg, 0, 2.5f, 1.0f, 16);
+    blt_make_patcher_cfg(&pcfg, 0, 2.5f, 1.0f, MASKACC_MAX_PATCH_LEN);
 
-    if (vals.backend == BLT_BACKEND_CPU) {
-        return blt_segment_patches(&vals, bytes, out, max_patches, &pcfg);
-    }
-    float *vals_host = (float *)malloc(vals.numel * sizeof(float));
+    float *vals_host = (float *)malloc(len * sizeof(float));
     BLT_REQUIRE(vals_host != NULL, "entropy_segment_local: staging alloc failed");
-    blt_tensor_download(&vals, vals_host, vals.numel * sizeof(float));
+    blt_tensor_download(&vals, vals_host, len * sizeof(float));
     blt_tensor vals_view;
     view_1d(&vals_view, vals_host, len, BLT_DTYPE_FP32, BLT_BACKEND_CPU);
     const size_t n = blt_segment_patches(&vals_view, bytes, out, max_patches, &pcfg);
-    free(vals_host);
+    if (ent_out) {
+        *ent_out = vals_host;
+    } else {
+        free(vals_host);
+    }
     return n;
 }
 
@@ -141,6 +180,93 @@ static void run_prefix_encode(blt_model *model, blt_arena *arena, const uint8_t 
     blt_global_transformer_forward(model->global, &P, NULL, 0, &O, arena);
     *h_out = h;
     *O_out = O;
+}
+
+// Builds one novel layout: prefix = bytes[0, P), then a single block of B
+// cells at absolute positions P..P+B-1 with no clean row there, so the block
+// has no clean twin to copy from. The prefix is re-segmented independently,
+// so the patch count reflects only what a decoder would see at inference.
+// Cross-attention targets the last CLOSED latent: if a patch starts exactly at
+// P the final prefix patch is closed and we use it, otherwise the trailing
+// patch is still open and the last closed latent is one patch stale.
+static size_t novel_layout_eval(blt_model *model, blt_arena *scratch, blt_arena *seg_arena, blt_entropy_lm *el,
+                                const uint8_t *text, size_t P, size_t block_size, float t, uint64_t seed,
+                                blt_d0_mode d0_mode, maskacc_stats *st, int want_per_cell) {
+    if (P < 2 || P + block_size > MASKACC_MAX_SEQ) return 0;
+
+    blt_patch_info pp[MASKACC_MAX_PATCHES];
+    float *ent = NULL;
+    blt_arena_reset(seg_arena);
+    const size_t Mp = patcher_fixed_global
+                          ? fixed_stride(P, 4, pp)
+                          : entropy_segment_local(seg_arena, el, text, P, pp, MASKACC_MAX_PATCHES, &ent);
+    if (Mp < 2 || Mp >= MASKACC_MAX_PATCHES) {
+        free(ent);
+        return 0;
+    }
+
+    // Decide whether the final prefix patch is closed, using only x[0..P).
+    const blt_patcher_config pcfg = {0};
+    blt_patcher_config pc;
+    blt_make_patcher_cfg(&pc, 0, 2.5f, 1.0f, MASKACC_MAX_PATCH_LEN);
+    (void)pcfg;
+    const size_t last_start = pp[Mp - 1].start_idx;
+    const size_t last_len = pp[Mp - 1].length;
+    int last_closed = 0;
+    if (!patcher_fixed_global) {
+        last_closed = blt_next_starts_patch(text, P, ent, last_start, last_len, &pc);
+    } else {
+        last_closed = 1; // fixed stride: the next stride boundary always follows
+    }
+    const size_t group = last_closed ? (Mp - 1) : (Mp - 2);
+    free(ent);
+
+    blt_arena_reset(scratch);
+    blt_tensor h, O;
+    run_prefix_encode(model, scratch, text, P, pp, Mp, &h, &O);
+
+    blt_block_batch batch;
+    memset(&batch, 0, sizeof(batch));
+    batch.num_clean = P;
+    batch.block_size = block_size;
+    batch.num_blocks = 1;
+    batch.n_block_rows = block_size;
+    batch.t = (t > 0.0f) ? t : 1e-6f;
+    batch.loss_scale = 0.0f;
+    batch.last_row_scale = 1.0f;
+    batch.tokens = (uint32_t *)blt_container_alloc(scratch, block_size * sizeof(uint32_t));
+    batch.positions = (size_t *)blt_container_alloc(scratch, block_size * sizeof(size_t));
+    batch.targets = (uint8_t *)blt_container_alloc(scratch, block_size);
+    batch.cell_valid = (uint8_t *)blt_container_alloc(scratch, block_size);
+    batch.cell_masked = (uint8_t *)blt_container_alloc(scratch, block_size);
+    batch.groups = (size_t *)blt_container_alloc(scratch, block_size * sizeof(size_t));
+
+    uint64_t rng = seed * 0x9E3779B97F4A7C15ULL + 0x2545F4914F6CDD1DULL;
+    for (size_t r = 0; r < block_size; r++) {
+        const uint8_t real = text[P + r];
+        batch.positions[r] = P + r;
+        batch.targets[r] = real;
+        batch.cell_valid[r] = 1;
+        // Independent per-cell masking at rate t (all masked when t >= 1).
+        const bool m = (t >= 1.0f) || ((double)(rng_next(&rng) >> 40) / (double)(1u << 24)) < (double)t;
+        batch.cell_masked[r] = m ? 1 : 0;
+        batch.tokens[r] = m ? BLT_MASK_TOKEN_ID : (uint32_t)real;
+        batch.groups[r] = group;
+    }
+
+    size_t S = P + block_size;
+    size_t lg[2] = {S, MASKACC_V};
+    blt_tensor logits = blt_tensor_create(scratch, lg, 2, BLT_DTYPE_FP32);
+    blt_local_decoder_forward_diffusion_infer(model->decoder, &h, &O, pp, Mp, &batch, d0_mode, &logits, scratch);
+
+    float *L = (float *)malloc(logits.numel * sizeof(float));
+    BLT_REQUIRE(L != NULL, "novel_layout_eval: logits staging alloc failed");
+    blt_tensor_download(&logits, L, logits.numel * sizeof(float));
+    accumulate_masked(st, L, &batch, block_size);
+    (void)want_per_cell;
+    (void)seed;
+    free(L);
+    return block_size;
 }
 
 int main(int argc, char **argv) {
@@ -166,6 +292,8 @@ int main(int argc, char **argv) {
     int patcher_fixed = 0;
     int guard = 0;
     int guard_ok = 1;
+    size_t sites = 1;
+    size_t novel_prefix_max = 256;
 
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--checkpoint") && i + 1 < argc) checkpoint = argv[++i];
@@ -216,12 +344,16 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "Error: --layout must be twin|novel\n");
                 return 1;
             }
-        } else if (!strcmp(argv[i], "--guard")) {
+        } else if (!strcmp(argv[i], "--sites") && i + 1 < argc) sites = (size_t)atol(argv[++i]);
+        else if (!strcmp(argv[i], "--novel-prefix-max") && i + 1 < argc) novel_prefix_max = (size_t)atol(argv[++i]);
+        else if (!strcmp(argv[i], "--guard")) {
             guard = 1;
         } else if (!strcmp(argv[i], "--patcher") && i + 1 < argc) {
             i++;
-            if (!strcmp(argv[i], "fixed")) patcher_fixed = 1;
-            else if (strcmp(argv[i], "entropy") != 0) {
+            if (!strcmp(argv[i], "fixed")) {
+                patcher_fixed = 1;
+                patcher_fixed_global = 1;
+            } else if (strcmp(argv[i], "entropy") != 0) {
                 fprintf(stderr, "Error: --patcher must be entropy|fixed\n");
                 return 1;
             }
@@ -259,12 +391,9 @@ int main(int argc, char **argv) {
         return 1;
     }
     if (n_t == 0) {
-        ts[0] = 0.1f;
-        ts[1] = 0.25f;
-        ts[2] = 0.5f;
-        ts[3] = 0.75f;
-        ts[4] = 1.0f;
-        n_t = 5;
+        ts[0] = 0.5f;
+        ts[1] = 1.0f;
+        n_t = 2;
     }
 
     long file_size = fsize(corpus);
@@ -340,12 +469,14 @@ int main(int argc, char **argv) {
         blt_patch_info patches[MASKACC_MAX_PATCHES];
         blt_arena_reset(seg_arena);
         // Mirrors the training-time selection at csrc/train_blt_d.c:354-356.
-        size_t M = patcher_fixed ? fixed_stride(window, 4, patches)
-                                 : entropy_segment_local(seg_arena, el, text, window, patches, MASKACC_MAX_PATCHES);
+        size_t M = patcher_fixed
+                       ? fixed_stride(window, 4, patches)
+                       : entropy_segment_local(seg_arena, el, text, window, patches, MASKACC_MAX_PATCHES, NULL);
         if (M < 2 || M >= MASKACC_MAX_PATCHES) {
             skipped++;
             continue;
         }
+        const int patches_usable = 1;
         // Entropy M has no pre-flight bound, so the exact S = window + block_size *
         // (M-1) is enforced here, before the encoder and decoder see it.
         BLT_REQUIRE(window + block_size * (M - 1) <= MS,
@@ -381,7 +512,7 @@ int main(int argc, char **argv) {
                 blt_tensor_download(&logits, L, logits.numel * sizeof(float));
 
                 maskacc_stats *st = &stats[ti][ci];
-                accumulate_masked(st, L, &batch);
+                accumulate_masked(st, L, &batch, block_size);
 
                 const size_t clean_t0 = st->clean_total;
                 const size_t clean_h0 = st->clean_hits;
@@ -399,132 +530,111 @@ int main(int argc, char **argv) {
             }
         }
 
-        // Novel layout: --window N is the CLEAN length; each window reads N + B
-        // bytes from the corpus at stride N, so bytes text[N .. N+B-1] lie past
-        // the clean prefix. One block of B cells sits at absolute positions
-        // N..N+B-1, where no clean row exists (inference regime, no clean twin).
-        if (layout_novel && offset + window + block_size <= data_len) {
+        // Novel layouts. Each re-segments its own prefix and places one block
+        // where no clean row exists, so there is no clean twin to copy from.
+        //   aligned  : prefix ends exactly at a patch start (all prefix patches closed)
+        //   midpatch : prefix ends 1..max_patch_len-1 bytes into an open patch, so the
+        //              last closed latent lags by one patch (the lagging case)
+        // Each site costs a full prefix encode plus a decode, so the prefix is
+        // capped at novel_prefix_max bytes and --sites controls how many sites
+        // per window are sampled (all sampled sites land in the same stats).
+        if (offset + window + block_size <= data_len && patches_usable) {
             for (size_t ti = 0; ti < n_t; ti++) {
-                blt_arena_reset(scratch);
-
-                blt_tensor h, O;
-                run_prefix_encode(model, scratch, text, window, patches, M, &h, &O);
-
-                blt_block_batch batch;
-                memset(&batch, 0, sizeof(batch));
-                batch.num_clean = window;
-                batch.block_size = block_size;
-                batch.num_blocks = 1;
-                batch.n_block_rows = block_size;
-                batch.t = 1.0f;
-                batch.loss_scale = 0.0f;
-                batch.last_row_scale = 1.0f;
-                batch.tokens = (uint32_t *)blt_container_alloc(scratch, block_size * sizeof(uint32_t));
-                batch.positions = (size_t *)blt_container_alloc(scratch, block_size * sizeof(size_t));
-                batch.targets = (uint8_t *)blt_container_alloc(scratch, block_size);
-                batch.cell_valid = (uint8_t *)blt_container_alloc(scratch, block_size);
-                batch.cell_masked = (uint8_t *)blt_container_alloc(scratch, block_size);
-                batch.groups = (size_t *)blt_container_alloc(scratch, block_size * sizeof(size_t));
-                for (size_t r = 0; r < block_size; r++) {
-                    batch.positions[r] = window + r;
-                    batch.targets[r] = text[window + r];
-                    batch.tokens[r] = BLT_MASK_TOKEN_ID;
-                    batch.cell_valid[r] = 1;
-                    batch.cell_masked[r] = 1;
-                    batch.groups[r] = M - 1;
+                size_t taken = 0;
+                for (size_t j = 1; j + 1 < M && taken < sites; j++) {
+                    const size_t P = patches[j].start_idx;
+                    if (P < 8 || P > novel_prefix_max || P + block_size > window) continue;
+                    if (!novel_layout_eval(model, scratch, seg_arena, el, text, P, block_size, ts[ti],
+                                           (uint64_t)seed + (uint64_t)w, d0_mode, &stats[ti][2], 1))
+                        continue;
+                    taken++;
                 }
-
-                size_t S = window + block_size;
-                size_t lg[2] = {S, MASKACC_V};
-                blt_tensor logits = blt_tensor_create(scratch, lg, 2, BLT_DTYPE_FP32);
-                size_t sc[1] = {1};
-                blt_tensor loss = blt_tensor_create(scratch, sc, 1, BLT_DTYPE_FP32);
-                blt_local_decoder_forward_diffusion(model->decoder, &h, &O, patches, M, text, NULL, &batch, d0_mode,
-                                                    &logits, &loss, scratch);
-
-                float *L = (float *)malloc(logits.numel * sizeof(float));
-                BLT_REQUIRE(L != NULL, "logits staging alloc failed");
-                blt_tensor_download(&logits, L, logits.numel * sizeof(float));
-
-                maskacc_stats *st = &stats[ti][2];
-                accumulate_masked(st, L, &batch);
-                st->clean_total += win_clean_total;
-                st->clean_hits += win_clean_hits;
-
-                free(L);
+                taken = 0;
+                for (size_t j = 1; j + 1 < M && taken < sites; j++) {
+                    const size_t s = patches[j].start_idx;
+                    const size_t len = patches[j].length;
+                    if (len < 2) continue;
+                    // Vary the depth into the open patch with w and j so
+                    // successive sites probe different lagging offsets.
+                    const size_t P = s + 1 + ((size_t)(w + j) % (len - 1));
+                    if (P < 8 || P > novel_prefix_max || P + block_size > window) continue;
+                    if (!novel_layout_eval(model, scratch, seg_arena, el, text, P, block_size, ts[ti],
+                                           (uint64_t)seed + (uint64_t)w, d0_mode, &stats[ti][3], 1))
+                        continue;
+                    taken++;
+                }
             }
         }
+
         evaluated++;
         fprintf(stderr, "[MASKED_ACC] window %zu/%zu M=%zu done\n", w + 1, num_windows, M);
     }
 
     fprintf(stderr, "[MASKED_ACC] windows evaluated=%zu skipped=%zu\n", evaluated, skipped);
 
-    const int n_conv = layout_novel ? 3 : 2;
-    printf("t      conv      masked_acc   masked_n   clean_acc   masked_pmax   masked_H\n");
+    const int n_conv = layout_novel ? MASKACC_NCONV : 2;
+    printf("t      layout          masked_acc  cell0_acc  cellB-1_acc  masked_n   AR_top1   masked_H\n");
     for (size_t ti = 0; ti < n_t; ti++) {
         for (int ci = 0; ci < n_conv; ci++) {
             const maskacc_stats *st = &stats[ti][ci];
             double macc = st->masked_total ? (double)st->masked_hits / (double)st->masked_total : 0.0;
+            double f0 = st->first_total ? (double)st->first_hits / (double)st->first_total : 0.0;
+            double fl = st->last_total ? (double)st->last_hits / (double)st->last_total : 0.0;
             double cacc = st->clean_total ? (double)st->clean_hits / (double)st->clean_total : 0.0;
-            double pm = st->masked_total ? st->pmax_sum / (double)st->masked_total : 0.0;
             double hent = st->masked_total ? st->ent_sum / (double)st->masked_total : 0.0;
-            printf("%-6.2f %-9s %-12.4f %-10zu %-11.4f %-13.3f %.2f\n", (double)ts[ti], conv_names[ci], macc,
-                   st->masked_total, cacc, pm, hent);
+            printf("%-6.2f %-14s %-11.4f %-10.4f %-12.4f %-10zu %-9.4f %.2f\n", (double)ts[ti], conv_names[ci], macc,
+                   f0, fl, st->masked_total, cacc, hent);
         }
     }
     printf("\n");
     for (size_t ti = 0; ti < n_t; ti++) {
         const maskacc_stats *tr = &stats[ti][0];
-        const maskacc_stats *inf = &stats[ti][1];
+        const maskacc_stats *tl = &stats[ti][1];
+        const maskacc_stats *al = &stats[ti][2];
+        const maskacc_stats *mp = &stats[ti][3];
         double ta = tr->masked_total ? (double)tr->masked_hits / (double)tr->masked_total : 0.0;
-        double ia = inf->masked_total ? (double)inf->masked_hits / (double)inf->masked_total : 0.0;
-        printf("t=%.2f  infer_acc - train_acc = %+.4f  (train %.4f  infer %.4f)\n", (double)ts[ti], ia - ta, ta, ia);
+        double la = tl->masked_total ? (double)tl->masked_hits / (double)tl->masked_total : 0.0;
+        double aa = al->masked_total ? (double)al->masked_hits / (double)al->masked_total : 0.0;
+        double ma = mp->masked_total ? (double)mp->masked_hits / (double)mp->masked_total : 0.0;
+        // Convention A/B: o_{i-1} (training) vs last closed latent, same blocks.
+        printf("t=%.2f  convention delta (train_lastlat - train) = %+.4f  (o_{i-1} %.4f  lastlat %.4f)\n",
+               (double)ts[ti], la - ta, ta, la);
+        // Aligned vs midpatch: how much does the lagging latent cost?
+        printf("t=%.2f  aligned %.4f  midpatch %.4f  (midpatch - aligned = %+.4f)\n", (double)ts[ti], aa, ma, ma - aa);
+        // The leak tripwire: train layout must not be far above aligned-novel.
+        printf("t=%.2f  train %.4f  aligned-novel %.4f  gap %.4f\n", (double)ts[ti], ta, aa, aa - ta);
     }
 
     if (layout_novel) {
-        for (size_t ti = 0; ti < n_t; ti++) {
-            const maskacc_stats *tr = &stats[ti][0];
-            const maskacc_stats *nv = &stats[ti][2];
-            double ta = tr->masked_total ? (double)tr->masked_hits / (double)tr->masked_total : 0.0;
-            double na = nv->masked_total ? (double)nv->masked_hits / (double)nv->masked_total : 0.0;
-            printf("t=%.2f  novel_acc - train_acc = %+.4f   (train %.4f  novel %.4f)\n", (double)ts[ti], na - ta, ta,
-                   na);
-        }
-
+        // Headline: the aligned novel layout has no clean twin, so it is the
+        // number that reflects real draft quality. Report the t=1.0 worst case.
         size_t worst = 0;
-        double worst_na = 0.0;
-        double worst_gap = 0.0;
-        double worst_ta = 0.0;
-        int have_novel = 0;
+        double worst_a = 0.0;
+        int have = 0;
         for (size_t ti = 0; ti < n_t; ti++) {
-            const maskacc_stats *nv = &stats[ti][2];
-            if (!nv->masked_total) continue;
-            const maskacc_stats *tr = &stats[ti][0];
-            if (!tr->masked_total) continue;
-            const double na = (double)nv->masked_hits / (double)nv->masked_total;
-            const double ta = (double)tr->masked_hits / (double)tr->masked_total;
-            const double gap = fabs(ta - na);
-            // The novel layout has no clean twin to copy from, so it is the
-            // honest number; lead with it rather than burying it under the
-            // train-layout figure. A large train/novel gap is the leak
-            // signature -- low novel accuracy on its own is not.
-            if (!have_novel || na < worst_na) {
+            const maskacc_stats *al = &stats[ti][2];
+            if (!al->masked_total) continue;
+            const double aa = (double)al->masked_hits / (double)al->masked_total;
+            if (!have || aa < worst_a) {
                 worst = ti;
-                worst_na = na;
-                worst_ta = ta;
-                worst_gap = gap;
-                have_novel = 1;
+                worst_a = aa;
+                have = 1;
             }
         }
-
-        if (have_novel) {
-            printf("\nHEADLINE  novel-layout masked_acc @ t=%.2f = %.4f   (train-layout %.4f, gap %.4f)\n",
-                   (double)ts[worst], worst_na, worst_ta, worst_gap);
-            if (worst_gap >= 0.10) {
-                printf("VERDICT: train/novel gap %.4f >= 0.10 -- mask leak present\n", worst_gap);
+        if (have) {
+            const maskacc_stats *al = &stats[worst][2];
+            const maskacc_stats *mp = &stats[worst][3];
+            const maskacc_stats *tr = &stats[worst][0];
+            const double aa = worst_a;
+            const double ma = mp->masked_total ? (double)mp->masked_hits / (double)mp->masked_total : 0.0;
+            const double ta = tr->masked_total ? (double)tr->masked_hits / (double)tr->masked_total : 0.0;
+            const double f0 = al->first_total ? (double)al->first_hits / (double)al->first_total : 0.0;
+            printf("\nHEADLINE  aligned-novel masked_acc @ t=%.2f = %.4f  (cell0 %.4f, midpatch %.4f, train %.4f)\n",
+                   (double)ts[worst], aa, f0, ma, ta);
+            if (ta - aa >= 0.10) {
+                printf("VERDICT: train/novel gap %.4f >= 0.10 -- mask leak present\n", ta - aa);
             } else {
-                printf("VERDICT: train/novel gap %.4f < 0.10 -- no mask leak\n", worst_gap);
+                printf("VERDICT: train/novel gap %.4f < 0.10 -- no mask leak\n", ta - aa);
             }
         }
 
@@ -541,18 +651,18 @@ int main(int argc, char **argv) {
                 guard_ok = 0;
             } else {
                 const maskacc_stats *gtr = &stats[gi][0];
-                const maskacc_stats *gnv = &stats[gi][2];
-                if (!gtr->masked_total || !gnv->masked_total) {
-                    fprintf(stderr, "GUARD FAIL: no masked cells at t=1.0 (train %zu, novel %zu)\n", gtr->masked_total,
-                            gnv->masked_total);
+                const maskacc_stats *gal = &stats[gi][2];
+                if (!gtr->masked_total || !gal->masked_total) {
+                    fprintf(stderr, "GUARD FAIL: no masked cells at t=1.0 (train %zu, aligned %zu)\n",
+                            gtr->masked_total, gal->masked_total);
                     guard_ok = 0;
                 } else {
                     const double ga = (double)gtr->masked_hits / (double)gtr->masked_total;
-                    const double na = (double)gnv->masked_hits / (double)gnv->masked_total;
+                    const double na = (double)gal->masked_hits / (double)gal->masked_total;
                     const double gap = fabs(ga - na);
-                    printf("GUARD t=1.0  train %.4f  novel %.4f  gap %.4f\n", ga, na, gap);
+                    printf("GUARD t=1.0  train %.4f  aligned-novel %.4f  gap %.4f\n", ga, na, gap);
                     if (!(gap < 0.10)) {
-                        fprintf(stderr, "GUARD FAIL: |train - novel| = %.4f >= 0.10 (mask leak)\n", gap);
+                        fprintf(stderr, "GUARD FAIL: |train - aligned| = %.4f >= 0.10 (mask leak)\n", gap);
                         guard_ok = 0;
                     }
                     if (!(ga < 0.99)) {

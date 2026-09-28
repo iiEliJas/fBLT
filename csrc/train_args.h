@@ -29,6 +29,8 @@ typedef struct {
     size_t save_every;
     const char *load_path;
     size_t eval_skip;
+    size_t monitor_every;
+    size_t monitor_windows;
     float t_min;
     int lr_decay;
     size_t lr_decay_steps[BLT_TRAIN_LR_DECAY_MAX];
