@@ -375,7 +375,7 @@ static int run_d0_mode_case(blt_d0_mode mode, size_t patch_dim) {
     // frozen patch latents as the extended run below
     size_t ref_shape[2] = {H, 256};
     blt_tensor ref_logits = blt_tensor_create(arena, ref_shape, 2, BLT_DTYPE_FP32);
-    blt_local_decoder_forward_ext(dec, &h_prefix, &patch_in, patches, num_patches, NULL, NULL, NULL, 0, NULL,
+    blt_local_decoder_forward_ext(dec, &h_prefix, &patch_in, patches, num_patches, NULL, NULL, NULL, 0, NULL, 0,
                                   &ref_logits, NULL, arena);
 
     // Full input: prefix rows verbatim + poisoned extra rows (must never
@@ -399,7 +399,7 @@ static int run_d0_mode_case(blt_d0_mode mode, size_t patch_dim) {
 
     size_t out_shape[2] = {S, 256};
     blt_tensor out_logits = blt_tensor_create(arena, out_shape, 2, BLT_DTYPE_FP32);
-    blt_local_decoder_forward_ext(dec, &h_full, &patch_in, patches, num_patches, NULL, NULL, NULL, 0, &opts,
+    blt_local_decoder_forward_ext(dec, &h_full, &patch_in, patches, num_patches, NULL, NULL, NULL, 0, &opts, 0,
                                   &out_logits, NULL, arena);
 
     // Prefix rows must be bit-identical to the prefix-only run
@@ -410,8 +410,8 @@ static int run_d0_mode_case(blt_d0_mode mode, size_t patch_dim) {
     if (mode == BLT_D0_LEARNED) {
         // deterministic rerun
         blt_tensor rerun = blt_tensor_create(arena, out_shape, 2, BLT_DTYPE_FP32);
-        blt_local_decoder_forward_ext(dec, &h_full, &patch_in, patches, num_patches, NULL, NULL, NULL, 0, &opts, &rerun,
-                                      NULL, arena);
+        blt_local_decoder_forward_ext(dec, &h_full, &patch_in, patches, num_patches, NULL, NULL, NULL, 0, &opts, 0,
+                                      &rerun, NULL, arena);
         tensors_equal_exact(&out_logits, &rerun);
 
         // contrast run: same everything, ZEROS policy -> different extra rows
@@ -421,7 +421,7 @@ static int run_d0_mode_case(blt_d0_mode mode, size_t patch_dim) {
             .d0_extra_tokens = NULL,
         };
         blt_tensor zeros_logits = blt_tensor_create(arena, out_shape, 2, BLT_DTYPE_FP32);
-        blt_local_decoder_forward_ext(dec, &h_full, &patch_in, patches, num_patches, NULL, NULL, NULL, 0, &zopts,
+        blt_local_decoder_forward_ext(dec, &h_full, &patch_in, patches, num_patches, NULL, NULL, NULL, 0, &zopts, 0,
                                       &zeros_logits, NULL, arena);
 
         const float *a = (const float *)out_logits.data;

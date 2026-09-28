@@ -79,6 +79,37 @@ size_t blt_aligned_commit_select(const blt_patch_info *patches, size_t num_patch
     return best;
 }
 
+// Segment `bytes[0..len)` and report whether the trailing patch is closed
+// (a boundary fires at position len). The trailing byte is final only when
+// closed, so this is the trailing_closed bit the decoder needs.
+static size_t segment_with_trailing_closed(blt_arena *arena, const blt_entropy_lm *entropy_model,
+                                           const blt_patcher_config *patcher_config, const uint8_t *bytes, size_t len,
+                                           blt_patch_info *patches, size_t max_patches, int *trailing_closed_out) {
+    blt_tensor entropy_vals;
+    compute_entropy_vals(arena, entropy_model, bytes, len, &entropy_vals);
+
+    blt_tensor entropy_host_view;
+    float *entropy_host_buf = NULL;
+    const blt_tensor *entropy_for_patcher = stage_entropy_host(&entropy_vals, &entropy_host_view, &entropy_host_buf);
+
+    const size_t num_patches = blt_segment_patches(entropy_for_patcher, bytes, patches, max_patches, patcher_config);
+
+    // Trailing closure: a boundary at `len` reads entropy_data[len-1] and
+    // bytes[len-1], both inside the prefix, so it is decidable here.
+    if (trailing_closed_out != NULL) {
+        if (num_patches >= 1) {
+            const size_t ls = patches[num_patches - 1].start_idx;
+            const size_t ll = patches[num_patches - 1].length;
+            *trailing_closed_out =
+                blt_next_starts_patch(bytes, len, (const float *)entropy_for_patcher->data, ls, ll, patcher_config);
+        } else {
+            *trailing_closed_out = 0;
+        }
+    }
+    free(entropy_host_buf);
+    return num_patches;
+}
+
 size_t blt_verify_draft(const blt_model *model, const blt_entropy_lm *entropy_model,
                         const blt_patcher_config *patcher_config, uint8_t *x, size_t l, size_t r, size_t target_len,
                         blt_infer_stats *stats, blt_arena *arena) {
@@ -91,45 +122,14 @@ size_t blt_verify_draft(const blt_model *model, const blt_entropy_lm *entropy_mo
 
     const size_t vocab_size = model->config.decoder_config.vocab_size;
 
-    // Segment candidate into M' patches (Algorithm 2 line 1).
-    blt_tensor entropy_vals;
-    compute_entropy_vals(arena, entropy_model, x, cand_len, &entropy_vals);
-
-    blt_tensor entropy_host_view;
-    float *entropy_host_buf = NULL;
-    const blt_tensor *entropy_for_patcher = stage_entropy_host(&entropy_vals, &entropy_host_view, &entropy_host_buf);
-
+    // Segment the candidate under the same prefix-decidable rule greedy uses.
+    // No forced split at l: a boundary at p+1 (<= cand_len) is a function of
+    // x[0..p] only, so the candidate segmentation reproduces greedy's latents
+    // for every committed byte p < cand_len without touching l.
     blt_patch_info patches[BLT_SELFSPEC_MAX_PATCHES];
-    size_t num_patches = blt_segment_patches(entropy_for_patcher, x, patches, BLT_SELFSPEC_MAX_PATCHES, patcher_config);
-    free(entropy_host_buf);
-    entropy_host_buf = NULL;
-
-    // Force patch boundary at commit point l — without this, the prefix
-    // patch absorbs draft bytes and verification diverges from greedy.
-    {
-        blt_patch_info forced[BLT_SELFSPEC_MAX_PATCHES];
-        size_t n2 = 0;
-        for (size_t pi = 0; pi < num_patches && n2 < BLT_SELFSPEC_MAX_PATCHES; pi++) {
-            const size_t s = patches[pi].start_idx;
-            const size_t e = s + patches[pi].length;
-            if (s < l && e > l) {
-                forced[n2++] = patches[pi]; // prefix part [s, l)
-                forced[n2 - 1].length = l - s;
-                if (n2 < BLT_SELFSPEC_MAX_PATCHES) {
-                    forced[n2] = patches[pi]; // draft part [l, e)
-                    forced[n2].start_idx = l;
-                    forced[n2].length = e - l;
-                    forced[n2].peak_entropy = patches[pi].peak_entropy;
-                    n2++;
-                }
-            } else {
-                forced[n2++] = patches[pi];
-            }
-        }
-        BLT_REQUIRE(n2 <= BLT_SELFSPEC_MAX_PATCHES, "blt_verify_draft: forced-boundary patch array overflow");
-        num_patches = n2;
-        memcpy(patches, forced, n2 * sizeof(blt_patch_info));
-    }
+    int trailing_closed = 0;
+    size_t num_patches = segment_with_trailing_closed(arena, entropy_model, patcher_config, x, cand_len, patches,
+                                                      BLT_SELFSPEC_MAX_PATCHES, &trailing_closed);
 
     // Full forward: E(x'), O'=G(T'), y=D(x'; O') — Algorithm 2 line 2.
     size_t bytes_shape[1] = {cand_len};
@@ -146,7 +146,7 @@ size_t blt_verify_draft(const blt_model *model, const blt_entropy_lm *entropy_mo
     blt_tensor logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
     // logits-only: loss/bytes unused by verification
     blt_local_decoder_forward_ext(model->decoder, &enc.byte_hidden_out, &enc.global_out, patches, num_patches, NULL,
-                                  NULL, NULL, 0, NULL, &logits, NULL, arena);
+                                  NULL, NULL, 0, NULL, trailing_closed, &logits, NULL, arena);
     if (stats != NULL) {
         stats->nfe_decoder++;
     }
@@ -182,6 +182,15 @@ size_t blt_verify_draft(const blt_model *model, const blt_entropy_lm *entropy_mo
     return cand_len;
 }
 
+size_t blt_verify_draft_certified(const blt_model *model, const blt_entropy_lm *entropy_model,
+                                  const blt_patcher_config *patcher_config, uint8_t *x, size_t l, size_t r,
+                                  size_t target_len, blt_infer_stats *stats, blt_arena *arena) {
+    // Under the paper rule, every candidate position is prefix-decidable and
+    // comparable to greedy, so certification is no longer a restriction: this
+    // reduces to the default verifier.
+    return blt_verify_draft(model, entropy_model, patcher_config, x, l, r, target_len, stats, arena);
+}
+
 size_t blt_verify_draft_aligned(const blt_model *model, const blt_entropy_lm *entropy_model,
                                 const blt_patcher_config *patcher_config, uint8_t *x, size_t l, size_t r,
                                 size_t target_len, blt_infer_stats *stats, blt_arena *arena) {
@@ -194,45 +203,14 @@ size_t blt_verify_draft_aligned(const blt_model *model, const blt_entropy_lm *en
 
     const size_t vocab_size = model->config.decoder_config.vocab_size;
 
-    // Force patch boundary at commit point l — same reason as blt_verify_draft:
-    // under the paper-rule decoder cross-attn, a spanning prefix/draft patch
-    // flips finality of prefix bytes and verification diverges from greedy.
-    blt_tensor entropy_vals;
-    compute_entropy_vals(arena, entropy_model, x, cand_len, &entropy_vals);
-
-    blt_tensor entropy_host_view;
-    float *entropy_host_buf = NULL;
-    const blt_tensor *entropy_for_patcher = stage_entropy_host(&entropy_vals, &entropy_host_view, &entropy_host_buf);
-
+    // Segment the candidate under the same prefix-decidable rule greedy uses.
+    // No forced split at l (paper rule: boundary at p+1 is a function of
+    // x[0..p], so committed bytes need no special handling). The commit
+    // selection below still restricts commits to natural patch ends.
     blt_patch_info patches[BLT_SELFSPEC_MAX_PATCHES];
-    size_t num_patches = blt_segment_patches(entropy_for_patcher, x, patches, BLT_SELFSPEC_MAX_PATCHES, patcher_config);
-    free(entropy_host_buf);
-    entropy_host_buf = NULL;
-
-    {
-        blt_patch_info forced[BLT_SELFSPEC_MAX_PATCHES];
-        size_t n2 = 0;
-        for (size_t pi = 0; pi < num_patches && n2 < BLT_SELFSPEC_MAX_PATCHES; pi++) {
-            const size_t s = patches[pi].start_idx;
-            const size_t e = s + patches[pi].length;
-            if (s < l && e > l) {
-                forced[n2++] = patches[pi]; // prefix part [s, l)
-                forced[n2 - 1].length = l - s;
-                if (n2 < BLT_SELFSPEC_MAX_PATCHES) {
-                    forced[n2] = patches[pi]; // draft part [l, e)
-                    forced[n2].start_idx = l;
-                    forced[n2].length = e - l;
-                    forced[n2].peak_entropy = patches[pi].peak_entropy;
-                    n2++;
-                }
-            } else {
-                forced[n2++] = patches[pi];
-            }
-        }
-        BLT_REQUIRE(n2 <= BLT_SELFSPEC_MAX_PATCHES, "blt_verify_draft_aligned: forced-boundary patch array overflow");
-        num_patches = n2;
-        memcpy(patches, forced, n2 * sizeof(blt_patch_info));
-    }
+    int trailing_closed = 0;
+    size_t num_patches = segment_with_trailing_closed(arena, entropy_model, patcher_config, x, cand_len, patches,
+                                                      BLT_SELFSPEC_MAX_PATCHES, &trailing_closed);
 
     size_t bytes_shape[1] = {cand_len};
     blt_tensor cand_bytes = blt_tensor_create(arena, bytes_shape, 1, BLT_DTYPE_UINT8);
@@ -247,7 +225,7 @@ size_t blt_verify_draft_aligned(const blt_model *model, const blt_entropy_lm *en
     size_t logits_shape[2] = {cand_len, vocab_size};
     blt_tensor logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
     blt_local_decoder_forward_ext(model->decoder, &enc.byte_hidden_out, &enc.global_out, patches, num_patches, NULL,
-                                  NULL, NULL, 0, NULL, &logits, NULL, arena);
+                                  NULL, NULL, 0, NULL, trailing_closed, &logits, NULL, arena);
     if (stats != NULL) {
         stats->nfe_decoder++;
     }
@@ -298,7 +276,8 @@ typedef struct {
 // Process rows [from_row..l) through incremental decoder; returns argmax
 // of row l-1 (greedy prediction for position l).
 static uint8_t prefill_argmax(draft_ctx *d, const blt_model_enc_out *enc, const blt_patch_info *patches,
-                              size_t num_patches, size_t from_row, size_t l, blt_infer_stats *stats, blt_arena *arena) {
+                              size_t num_patches, size_t from_row, size_t l, int trailing_closed,
+                              blt_infer_stats *stats, blt_arena *arena) {
     const size_t E = d->model->config.encoder_config.embed_dim;
     const size_t V = d->model->config.decoder_config.vocab_size;
     const size_t n = l - from_row;
@@ -311,7 +290,7 @@ static uint8_t prefill_argmax(draft_ctx *d, const blt_model_enc_out *enc, const 
 
     size_t logits_shape[2] = {n, V};
     blt_tensor logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
-    blt_kv_decode_step(d->cache, &enc->global_out, patches, num_patches, &d0, &logits, arena);
+    blt_kv_decode_step(d->cache, &enc->global_out, patches, num_patches, &d0, trailing_closed, &logits, arena);
     if (stats != NULL) {
         stats->nfe_decoder++;
     }
@@ -344,7 +323,7 @@ static uint8_t draft_step(draft_ctx *d, const blt_model_enc_out *enc, const blt_
 
     size_t logits_shape[2] = {1, V};
     blt_tensor logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
-    blt_kv_decode_step(d->cache, &enc->global_out, patches, num_patches, &d0, &logits, arena);
+    blt_kv_decode_step(d->cache, &enc->global_out, patches, num_patches, &d0, 0, &logits, arena);
     if (stats != NULL) {
         stats->nfe_decoder++;
     }
@@ -385,20 +364,12 @@ void blt_generate_greedy_selfspec(const blt_model *model, const blt_entropy_lm *
             r_eff = target_len - l - 1;
         }
 
-        // 1. Segment the committed prefix
-        blt_tensor entropy_vals;
-        compute_entropy_vals(arena, entropy_model, output_bytes, l, &entropy_vals);
-
-        blt_tensor entropy_host_view;
-        float *entropy_host_buf = NULL;
-        const blt_tensor *entropy_for_patcher =
-            stage_entropy_host(&entropy_vals, &entropy_host_view, &entropy_host_buf);
-
+        // 1. Segment the committed prefix (prefix-decidable rule; the trailing
+        //    patch is closed only if a boundary fires at l).
         blt_patch_info patches[BLT_SELFSPEC_MAX_PATCHES];
-        size_t num_patches =
-            blt_segment_patches(entropy_for_patcher, output_bytes, patches, BLT_SELFSPEC_MAX_PATCHES, patcher_config);
-        free(entropy_host_buf);
-        entropy_host_buf = NULL;
+        int trailing_closed = 0;
+        size_t num_patches = segment_with_trailing_closed(arena, entropy_model, patcher_config, output_bytes, l,
+                                                          patches, BLT_SELFSPEC_MAX_PATCHES, &trailing_closed);
 
         // 2. Freeze latents (one encoder+global pass)
         size_t bytes_shape[1] = {l};
@@ -421,7 +392,7 @@ void blt_generate_greedy_selfspec(const blt_model *model, const blt_entropy_lm *
         blt_kv_cache_refresh_cross(cache, &enc.global_out, patches, num_patches, common, arena);
 
         // 4. Prefill chunk -> first draft byte
-        uint8_t next = prefill_argmax(&d, &enc, patches, num_patches, self_valid, l, stats, arena);
+        uint8_t next = prefill_argmax(&d, &enc, patches, num_patches, self_valid, l, trailing_closed, stats, arena);
 
         if (r_eff == 0) {
             // One byte left — plain AR step, no speculation.
@@ -446,7 +417,10 @@ void blt_generate_greedy_selfspec(const blt_model *model, const blt_entropy_lm *
         memcpy(output_bytes + l, draft, r_eff);
 
         // 6. Verify (Algorithm 2): re-segment, full forward, accept/replace
-        l = blt_verify_draft(model, entropy_model, patcher_config, output_bytes, l, r_eff, target_len, stats, arena);
+        l = config->certify_positions ? blt_verify_draft_certified(model, entropy_model, patcher_config, output_bytes,
+                                                                   l, r_eff, target_len, stats, arena)
+                                      : blt_verify_draft(model, entropy_model, patcher_config, output_bytes, l, r_eff,
+                                                         target_len, stats, arena);
 
         arena->offset = round_marker;
     }

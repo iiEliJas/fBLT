@@ -88,9 +88,9 @@ int run_local_decoder_cross_mask(void) {
 
 int run_local_decoder_paper_rule(void) {
     // Patches: starts {0,3,7,8,15}, lengths {3,4,1,7,1}, seq_len 16.
-    // Expected paper-rule groups (Fast-BLT 3.1.1):
-    //   final byte of patch j -> j; non-final -> (j == 0 ? 0 : j-1);
-    //   uncovered -> num_patches-1.
+    // Paper rule: byte p is final iff a patch starts at p+1. Final byte of a
+    // non-terminal patch -> latent j; the last patch's final byte is open ->
+    // previous latent (3). See blt_patch_decoder_latent_at.
     blt_patch_info patches[5];
     size_t starts[] = {0, 3, 7, 8, 15};
     size_t lens[] = {3, 4, 1, 7, 1};
@@ -102,7 +102,7 @@ int run_local_decoder_paper_rule(void) {
         patches[i].peak_entropy = 0.0f;
     }
 
-    const size_t expected[16] = {0, 0, 0, 0, 0, 0, 1, 2, 2, 2, 2, 2, 2, 2, 3, 4};
+    const size_t expected[16] = {0, 0, 0, 0, 0, 0, 1, 2, 2, 2, 2, 2, 2, 2, 3, 3};
     for (size_t pos = 0; pos < seq_len; pos++) {
         size_t got = blt_patch_decoder_latent_at(patches, num_patches, pos);
         TEST_ASSERT(got == expected[pos]);

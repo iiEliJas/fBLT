@@ -119,7 +119,11 @@ size_t blt_patch_decoder_latent_at(const blt_patch_info *patches, size_t num_pat
         const size_t start = patches[j].start_idx;
         if (start > pos) break;
         if (pos < start + patches[j].length) {
-            if (pos + 1 == start + patches[j].length) return j;
+            // Byte p is final iff a patch starts at p+1, i.e. p is the last byte
+            // of a non-terminal patch. The last patch's own final byte has no
+            // successor patch, so it stays open and reads the previous latent.
+            const int is_final = (pos + 1 == start + patches[j].length) && (j + 1 < num_patches);
+            if (is_final) return j;
             return (j == 0) ? 0 : j - 1;
         }
     }

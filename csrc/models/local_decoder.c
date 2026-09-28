@@ -63,7 +63,7 @@ typedef struct {
 
 static ld_context make_context(const blt_local_decoder *model, size_t seq_len, size_t num_hfinal_rows,
                                const blt_patch_info *patches, size_t num_patches, const size_t *doc_boundaries,
-                               size_t num_docs, blt_arena *arena) {
+                               size_t num_docs, int trailing_closed, blt_arena *arena) {
     BLT_REQUIRE(num_hfinal_rows >= 1 && num_hfinal_rows <= seq_len,
                 "blt_local_decoder: num_hfinal_rows must be in [1, seq_len]");
     size_t E = model->config.embed_dim;
@@ -81,6 +81,12 @@ static ld_context make_context(const blt_local_decoder *model, size_t seq_len, s
     blt_patch_build_group_ids(patches, num_patches, num_hfinal_rows, patch_identity_ids, byte_patch_ids);
     for (size_t i = 0; i < seq_len; i++) {
         byte_patch_ids[i] = blt_patch_decoder_latent_at(patches, num_patches, i);
+    }
+    // When the caller knows a boundary fires at seq_len (a new patch starts
+    // there), the last byte IS final and reads its own latent. blt_patch_info
+    // tiles [0,seq_len) and cannot express that, so the caller passes the bit.
+    if (trailing_closed && num_patches >= 1) {
+        byte_patch_ids[seq_len - 1] = num_patches - 1;
     }
 
     // expand the kv (patch) side group ids by k -- each patch's k sub-tokens share its group id
@@ -227,8 +233,8 @@ blt_local_decoder_grad *blt_local_decoder_grad_create(blt_arena *arena, const bl
 void blt_local_decoder_forward_ext(const blt_local_decoder *model, const blt_tensor *byte_hidden_in,
                                    const blt_tensor *patch_in, const blt_patch_info *patches, size_t num_patches,
                                    const blt_tensor *bytes_in, const blt_tensor *targets, const size_t *doc_boundaries,
-                                   size_t num_docs, const blt_local_decoder_d0_opts *d0_opts, blt_tensor *logits_out,
-                                   blt_tensor *loss_out, blt_arena *arena) {
+                                   size_t num_docs, const blt_local_decoder_d0_opts *d0_opts, int trailing_closed,
+                                   blt_tensor *logits_out, blt_tensor *loss_out, blt_arena *arena) {
     BLT_REQUIRE(logits_out != NULL, "blt_local_decoder_forward_ext: logits_out cannot be NULL");
     BLT_REQUIRE(loss_out != NULL || bytes_in == NULL,
                 "blt_local_decoder_forward_ext: bytes_in is only used for the loss; pass NULL when loss_out is NULL");
@@ -267,8 +273,8 @@ void blt_local_decoder_forward_ext(const blt_local_decoder *model, const blt_ten
     BLT_REQUIRE(patch_in->shape[1] == patch_dim,
                 "blt_local_decoder_forward_ext: patch_in must be [num_patches, patch_dim] FP32");
 
-    ld_context ctx =
-        make_context(model, seq_len, num_hfinal_rows, patches, num_patches, doc_boundaries, num_docs, arena);
+    ld_context ctx = make_context(model, seq_len, num_hfinal_rows, patches, num_patches, doc_boundaries, num_docs,
+                                  trailing_closed, arena);
     blt_transformer_config layer_config =
         blt_local_byte_layer_config(config->embed_dim, config->num_heads, config->rope_theta, config->hidden_dim,
                                     &ctx.local_mask, &ctx.rope_cos_view, &ctx.rope_sin_view);
@@ -361,7 +367,7 @@ void blt_local_decoder_forward(const blt_local_decoder *model, const blt_tensor 
     BLT_REQUIRE(logits_out != NULL && loss_out != NULL,
                 "blt_local_decoder_forward: logits_out and loss_out cannot be NULL");
     blt_local_decoder_forward_ext(model, byte_hidden_in, patch_in, patches, num_patches, bytes_in, targets,
-                                  doc_boundaries, num_docs, NULL, logits_out, loss_out, arena);
+                                  doc_boundaries, num_docs, NULL, 0, logits_out, loss_out, arena);
 }
 
 typedef struct {
@@ -397,7 +403,7 @@ void blt_local_decoder_backward(const blt_local_decoder *model, const blt_tensor
     blt_check_nd_fp32(&grad->lm_head_grad, 2, (const size_t[]){E, V},
                       "blt_local_decoder_backward: lm_head_grad must be [embed_dim, vocab_size] FP32");
 
-    ld_context ctx = make_context(model, seq_len, seq_len, patches, num_patches, doc_boundaries, num_docs, arena);
+    ld_context ctx = make_context(model, seq_len, seq_len, patches, num_patches, doc_boundaries, num_docs, 0, arena);
     blt_transformer_config layer_config =
         blt_local_byte_layer_config(config->embed_dim, config->num_heads, config->rope_theta, config->hidden_dim,
                                     &ctx.local_mask, &ctx.rope_cos_view, &ctx.rope_sin_view);

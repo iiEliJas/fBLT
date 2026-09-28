@@ -201,6 +201,9 @@ target_link_libraries(ownlatent_value PRIVATE blt_core m)
 add_executable(leak_probe csrc/tools/leak_probe.c)
 target_link_libraries(leak_probe PRIVATE blt_core m)
 
+add_executable(prefix_invariance csrc/tools/prefix_invariance.c)
+target_link_libraries(prefix_invariance PRIVATE blt_core m)
+
 # -- Benchmarks --------------------------------------------------------------
 add_executable(bench_patcher tests/bench/bench_patcher.c)
 target_include_directories(bench_patcher PRIVATE bench)

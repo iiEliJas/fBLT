@@ -16,9 +16,11 @@ extern "C" {
 
 // BLT-S configuration (Fast-BLT 5.1, Algorithm 2).
 typedef struct {
-    size_t window_k;     // speculative draft window; typical sweep {4, 8, 16}
-    blt_d0_mode d0_mode; // D_0 policy for draft rows; ZEROS default, LEARNED reads
-                         // the decoder-owned d0_embed_weight[token=drafted byte]
+    size_t window_k;       // speculative draft window; typical sweep {4, 8, 16}
+    blt_d0_mode d0_mode;   // D_0 policy for draft rows; ZEROS default, LEARNED reads
+                           // the decoder-owned d0_embed_weight[token=drafted byte]
+    int certify_positions; // 1: verify only at candidate patch boundaries via
+                           // blt_verify_draft_certified; 0 (default): blt_verify_draft
 } blt_self_spec_config;
 
 // Algorithm 2: Verify(x, x', l, r).
@@ -45,15 +47,30 @@ size_t blt_verify_draft(const blt_model *model, const blt_entropy_lm *entropy_mo
                         blt_infer_stats *stats, // nullable
                         blt_arena *arena);
 
+// Retained for API compatibility; now identical to blt_verify_draft.
+//
+// This was the SELFSPEC_BUG.md "Option 3" experiment, which tried to make
+// verification exact by accepting draft bytes only at candidate patch
+// boundaries. Under the paper-aligned patcher that workaround is obsolete:
+// every candidate position is prefix-decidable and its finality matches
+// greedy's, so the restriction is no longer needed and this reduces to the
+// default verifier. --certify-positions is kept (default off) so existing
+// configs keep working, but it no longer changes behaviour.
+size_t blt_verify_draft_certified(const blt_model *model, const blt_entropy_lm *entropy_model,
+                                  const blt_patcher_config *patcher_config, uint8_t *x, size_t l, size_t r,
+                                  size_t target_len,
+                                  blt_infer_stats *stats, // nullable
+                                  blt_arena *arena);
+
 // Boundary-aligned variant of blt_verify_draft (Stage 6 add-on).
 //
-// Same verify pass as blt_verify_draft (including the forced patch boundary
-// at the commit point), but commitment is cut back to the largest natural
-// patch boundary in (l, verified_len]. Draft bytes past that boundary are
-// discarded and re-drafted next round. This mirrors the training-time block
-// construction (blocks start at patch starts) and keeps every commit point
-// on a boundary the patcher reproduces in longer contexts. When the verified
-// range contains no boundary, exactly one byte is committed from the row
+// Same verify pass as blt_verify_draft, but commitment is cut back to the
+// largest natural patch boundary in (l, verified_len]. Draft bytes past that
+// boundary are discarded and re-drafted next round. This mirrors the
+// training-time block construction (blocks start at patch starts) and keeps
+// every commit point on a boundary the patcher reproduces in longer contexts.
+// When the verified range contains no boundary, exactly one byte is committed
+// from the row
 // prediction at l (progress rule).
 //
 // Returns the new committed length (in [l+1, l+r+1]).

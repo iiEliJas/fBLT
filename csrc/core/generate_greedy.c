@@ -74,14 +74,30 @@ void blt_generate_greedy(const blt_model *model, const blt_entropy_lm *entropy_m
         blt_patch_info patches[BLT_GENERATE_MAX_PATCHES];
         size_t num_patches =
             blt_segment_patches(&entropy_host_view, output_bytes, patches, BLT_GENERATE_MAX_PATCHES, patcher_config);
+
+        // Trailing patch closure: a boundary at cur_len is decidable from the
+        // prefix (entropy_data[cur_len-1], bytes[cur_len-1], never the byte we
+        // are about to predict). If it fires, byte cur_len-1 is final and reads
+        // its own latent, matching the paper's prefix-decidable rule.
+        int trailing_closed = 0;
+        if (num_patches >= 1) {
+            const size_t ls = patches[num_patches - 1].start_idx;
+            const size_t ll = patches[num_patches - 1].length;
+            trailing_closed = blt_next_starts_patch(output_bytes, cur_len, entropy_host, ls, ll, patcher_config);
+        }
         free(entropy_host);
 
-        // 3. Full encoder-global-decoder forward pass (single document)
+        // 3. Full encoder-global-decoder forward pass (single document).
+        // Only the last row's latent depends on trailing_closed, so the encode
+        // stage is shared and the decode is called with the flag directly.
         size_t vocab_shape[2] = {cur_len, vocab_size};
         blt_tensor model_logits = blt_tensor_create(arena, vocab_shape, 2, BLT_DTYPE_FP32);
 
-        blt_tensor discard_loss = blt_tensor_create(arena, scalar_shape, 1, BLT_DTYPE_FP32);
-        blt_model_forward(model, &bytes_in, NULL, patches, num_patches, NULL, 0, &model_logits, &discard_loss, arena);
+        blt_model_enc_out enc;
+        blt_model_encode(model, &bytes_in, patches, num_patches, NULL, 0, &enc, arena);
+        blt_local_decoder_forward_ext(model->decoder, &enc.byte_hidden_out, &enc.global_out, patches, num_patches, NULL,
+                                      NULL, NULL, 0, NULL, trailing_closed, &model_logits, NULL, arena);
+        blt_backend_pass_sync(bytes_in.backend);
 
         // 4. Greedy argmax of the last position's logits
         float *last_row = (float *)malloc(vocab_size * sizeof(float));

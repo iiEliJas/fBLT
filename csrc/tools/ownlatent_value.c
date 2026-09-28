@@ -347,7 +347,7 @@ int main(int argc, char **argv) {
         size_t logits_shape[2] = {window, V};
         blt_tensor logits = blt_tensor_create(scratch, logits_shape, 2, BLT_DTYPE_FP32);
         blt_local_decoder_forward_ext(model->decoder, &enc.byte_hidden_out, &enc.global_out, patches, M, NULL, NULL,
-                                      NULL, 0, NULL, &logits, NULL, scratch);
+                                      NULL, 0, NULL, 0, &logits, NULL, scratch);
         blt_tensor_download(&logits, logits_host, window * V * sizeof(float));
 
         size_t n_samp = 0;
@@ -419,7 +419,7 @@ int main(int argc, char **argv) {
             blt_tensor_upload(&o_mod, o_modified, M * E * sizeof(float));
             blt_tensor logits_b = blt_tensor_create(scratch, logits_shape, 2, BLT_DTYPE_FP32);
             blt_local_decoder_forward_ext(model->decoder, &enc.byte_hidden_out, &o_mod, patches, M, NULL, NULL, NULL, 0,
-                                          NULL, &logits_b, NULL, scratch);
+                                          NULL, 0, &logits_b, NULL, scratch);
             blt_tensor_download(&logits_b, logits_host, window * V * sizeof(float));
 
             float margin_b = 0.0f;

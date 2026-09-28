@@ -257,7 +257,7 @@ int main(int argc, char **argv) {
     size_t logits_shape[2] = {len, vocab_size};
     blt_tensor logits = blt_tensor_create(arena, logits_shape, 2, BLT_DTYPE_FP32);
     blt_local_decoder_forward_ext(model->decoder, &enc.byte_hidden_out, &enc.global_out, patches, num_patches, NULL,
-                                  NULL, NULL, 0, NULL, &logits, NULL, arena);
+                                  NULL, NULL, 0, NULL, 0, &logits, NULL, arena);
 
     float *logits_host = (float *)malloc(logits.numel * sizeof(float));
     BLT_REQUIRE(logits_host != NULL, "selfspec_audit: failed to stage logits");
