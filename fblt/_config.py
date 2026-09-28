@@ -137,6 +137,7 @@ class InferConfig:
     seed: int = 11
 
     k: int = 8
+    certify_positions: bool = False
 
     block_size: int = 8
     unmask: str = "confidence"

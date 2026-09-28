@@ -174,6 +174,12 @@ target_link_libraries(last_row_acc PRIVATE blt_core m)
 add_executable(pos_accuracy csrc/tools/pos_accuracy.c)
 target_link_libraries(pos_accuracy PRIVATE blt_core m)
 
+add_executable(masked_acc csrc/tools/masked_acc.c)
+target_link_libraries(masked_acc PRIVATE blt_core m)
+
+add_executable(selfspec_audit csrc/tools/selfspec_audit.c)
+target_link_libraries(selfspec_audit PRIVATE blt_core m)
+
 add_executable(patch_trunc_split csrc/tools/patch_trunc_split.c)
 target_link_libraries(patch_trunc_split PRIVATE blt_core m)
 
@@ -188,6 +194,15 @@ target_link_libraries(eval_paper_rule_split PRIVATE blt_core m)
 
 add_executable(eval_isolate_redirect csrc/tools/eval_isolate_redirect.c)
 target_link_libraries(eval_isolate_redirect PRIVATE blt_core m)
+
+add_executable(ownlatent_value csrc/tools/ownlatent_value.c)
+target_link_libraries(ownlatent_value PRIVATE blt_core m)
+
+add_executable(leak_probe csrc/tools/leak_probe.c)
+target_link_libraries(leak_probe PRIVATE blt_core m)
+
+add_executable(prefix_invariance csrc/tools/prefix_invariance.c)
+target_link_libraries(prefix_invariance PRIVATE blt_core m)
 
 # -- Benchmarks --------------------------------------------------------------
 add_executable(bench_patcher tests/bench/bench_patcher.c)

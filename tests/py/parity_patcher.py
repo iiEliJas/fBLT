@@ -24,16 +24,18 @@ def build_patches(entropy, bytes_array, args):
 
     for idx in range(1, seq_len):
         val = float(entropy[idx].item())
+        open_ent = float(entropy[idx - 1].item())
+        prev_ent = float(entropy[idx - 2].item()) if idx >= 2 else open_ent
         boundary = False
 
-        if args.reset_on_newline and bytes_array[idx].item() == 0x0A:
+        if args.reset_on_newline and bytes_array[idx - 1].item() == 0x0A:
             boundary = True
         elif current_len >= args.max_patch_length:
             boundary = True
         else:
-            global_rule = val > args.threshold_global
-            monotonic_rule = (idx > current_start) and (
-                (val - float(entropy[idx - 1].item())) > args.threshold_monotonic
+            global_rule = open_ent > args.threshold_global
+            monotonic_rule = (idx >= current_start + 2) and (
+                (open_ent - prev_ent) > args.threshold_monotonic
             )
 
             if args.rule == "global":

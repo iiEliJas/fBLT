@@ -3,31 +3,36 @@
 
 #include <string.h>
 
+// Paper alignment: a patch starts at i iff H(x_i | x_<i) > threshold. Since
+// entropy_data[j] = H(x_{j+1} | x_{0..j}), that is entropy_data[i-1]. All rules
+// read only x[0..i-1], so "byte p is final" (a patch starts at p+1) is
+// decidable from x[0..p]. Position 0 always opens a patch.
 static int blt_patch_boundary(size_t i, size_t patch_start, size_t patch_len, const float *entropy_data,
                               const uint8_t *bytes, const blt_patcher_config *config) {
-    // Rule 1: Structural context reset
-    if (bytes && config->reset_on_newline && bytes[i] == 0x0A) {
+    // Newline: a patch ends after a newline byte, so the next starts at
+    // newline_index+1; reads bytes[i-1], not bytes[i].
+    if (i >= 1 && bytes && config->reset_on_newline && bytes[i - 1] == 0x0A) {
         return 1;
     }
 
-    // Rule 2: Max patch length
+    // Max patch length
     if (patch_len >= config->max_patch_length) {
         return 1;
     }
 
-    // Rules 3 & 4: Entropy-based threshold
-    float current_entropy = entropy_data[i];
+    const float cur = entropy_data[i - 1];
+    const float prev = (i >= 2) ? entropy_data[i - 2] : cur;
 
     switch (config->rule) {
     case BLT_PATCH_RULE_GLOBAL:
-        return current_entropy > config->threshold_global;
+        return cur > config->threshold_global;
 
     case BLT_PATCH_RULE_MONOTONIC:
-        return (i > patch_start) && ((current_entropy - entropy_data[i - 1]) > config->threshold_monotonic);
+        return (i >= patch_start + 2) && ((cur - prev) > config->threshold_monotonic);
 
     case BLT_PATCH_RULE_BOTH:
-        return (current_entropy > config->threshold_global) ||
-               ((i > patch_start) && ((current_entropy - entropy_data[i - 1]) > config->threshold_monotonic));
+        return (cur > config->threshold_global) ||
+               ((i >= patch_start + 2) && ((cur - prev) > config->threshold_monotonic));
 
     default:
         return 0;
@@ -47,8 +52,9 @@ static int blt_patch_emit(blt_patch_info *patches_out, size_t max_patches, size_
 }
 
 // Entropy-based patcher: divides bytes into patches using per-byte entropy.
-// Boundary at index i if: newline reset, max length, H_i > threshold, or
-// (H_i - H_{i-1}) > monotonic threshold.
+// Boundary at index i if: byte i-1 is a newline, max length,
+// H(x_i|x_<i)=entropy_data[i-1] > threshold, or
+// (entropy_data[i-1] - entropy_data[i-2]) > monotonic threshold.
 
 size_t blt_segment_patches(const blt_tensor *entropy, const uint8_t *bytes, blt_patch_info *patches_out,
                            size_t max_patches, const blt_patcher_config *config) {
@@ -90,4 +96,14 @@ size_t blt_segment_patches(const blt_tensor *entropy, const uint8_t *bytes, blt_
     }
 
     return patch_count;
+}
+
+int blt_next_starts_patch(const uint8_t *bytes, size_t len, const float *entropy_data, size_t patch_start,
+                          size_t patch_len, const blt_patcher_config *config) {
+    BLT_REQUIRE(config != NULL, "blt_next_starts_patch: Config must not be null");
+    BLT_REQUIRE(len >= 1, "blt_next_starts_patch: len must be >= 1");
+    BLT_REQUIRE(entropy_data != NULL, "blt_next_starts_patch: entropy_data must not be null");
+    // Position 0 always opens a patch, so there is no "previous" patch there.
+    if (len == 0) return 0;
+    return blt_patch_boundary(len, patch_start, patch_len, entropy_data, bytes, config);
 }

@@ -127,7 +127,7 @@ void blt_model_decode(const blt_model *model, const blt_model_enc_out *enc, cons
 
     blt_local_decoder_forward_ext(model->decoder, &enc->byte_hidden_out, &enc->global_out, patches, num_patches,
                                   bytes_in, targets, blt_mask_doc_boundaries(doc_boundaries, num_docs), num_docs,
-                                  d0_opts, logits_out, loss_out, arena);
+                                  d0_opts, 0, logits_out, loss_out, arena);
 }
 
 void blt_model_forward(const blt_model *model, const blt_tensor *bytes_in, const blt_tensor *targets,

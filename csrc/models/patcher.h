@@ -32,6 +32,13 @@ typedef struct {
 size_t blt_segment_patches(const blt_tensor *entropy, const uint8_t *bytes, blt_patch_info *patches_out,
                            size_t max_patches, const blt_patcher_config *config);
 
+// Whether a new patch would start at position `len`, given the prefix's last
+// patch [patch_start, patch_start+patch_len) and the per-byte entropy over the
+// prefix. Uses only entropy_data[len-1] and bytes[len-1] (never x_len), so byte
+// len-1's finality is decidable from x[0..len) alone.
+int blt_next_starts_patch(const uint8_t *bytes, size_t len, const float *entropy_data, size_t patch_start,
+                          size_t patch_len, const blt_patcher_config *config);
+
 #ifdef __cplusplus
 }
 #endif

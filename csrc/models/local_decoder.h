@@ -119,6 +119,7 @@ void blt_local_decoder_forward_ext(
     const blt_tensor *targets,    // [seq_len] UINT8 — CE targets; NULL = use bytes_in
     const size_t *doc_boundaries, // mask-builder convention; see above
     size_t num_docs, const blt_local_decoder_d0_opts *d0_opts,
+    int trailing_closed,    // 1 if a patch starts at seq_len; makes the last byte final (own latent)
     blt_tensor *logits_out, // [seq_len, vocab_size]
     blt_tensor *loss_out,   // scalar or NULL
     blt_arena *arena);

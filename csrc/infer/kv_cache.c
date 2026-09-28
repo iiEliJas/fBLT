@@ -158,7 +158,8 @@ void blt_kv_cache_refresh_cross(blt_kv_cache *cache, const blt_tensor *patch_in,
 }
 
 void blt_kv_decode_step(blt_kv_cache *cache, const blt_tensor *patch_in, const blt_patch_info *patches,
-                        size_t num_patches, const blt_tensor *d0_rows, blt_tensor *logits_out, blt_arena *arena) {
+                        size_t num_patches, const blt_tensor *d0_rows, int trailing_closed, blt_tensor *logits_out,
+                        blt_arena *arena) {
     const blt_local_decoder *dec = cache->decoder;
     const blt_local_decoder_config *cfg = &dec->config;
     const size_t E = cache->embed_dim;
@@ -197,6 +198,11 @@ void blt_kv_decode_step(blt_kv_cache *cache, const blt_tensor *patch_in, const b
     BLT_REQUIRE(q_group_ids != NULL && kv_group_ids != NULL, "blt_kv_decode_step: failed to allocate group id tables");
     for (size_t r = 0; r < n; r++) {
         q_group_ids[r] = blt_patch_decoder_latent_at(patches, num_patches, base + r);
+    }
+    // A boundary at the sequence end makes the last decoded byte final (own
+    // latent), matching the full forward's trailing_closed handling.
+    if (trailing_closed && num_patches >= 1) {
+        q_group_ids[n - 1] = num_patches - 1;
     }
     for (size_t pi = 0; pi < num_patches; pi++) {
         for (size_t s = 0; s < cache->k; s++) {

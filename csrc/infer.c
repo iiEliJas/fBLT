@@ -33,6 +33,7 @@ typedef struct {
 
     // Self-speculation (method = selfspec)
     size_t k;
+    int certify_positions;
 
     // Block generation (method = blockdiff | blockdv)
     size_t block_size;
@@ -93,6 +94,7 @@ static void usage(void) {
                     "\n"
                     "self-speculation (--method selfspec):\n"
                     "  --k N                       draft window size (default 8)\n"
+                    "  --certify-positions         verify only at candidate patch boundaries (default off)\n"
                     "\n"
                     "block diffusion (--method blockdiff|blockdv):\n"
                     "  --block-size B              diffusion block size (default 8)\n"
@@ -230,6 +232,7 @@ int main(int argc, char **argv) {
     a.new_bytes = 64;
     a.method = M_GREEDY;
     a.k = 8;
+    a.certify_positions = 0;
     a.block_size = 8;
     a.unmask_eb = 0;
     a.threshold = 0.7f;
@@ -267,6 +270,8 @@ int main(int argc, char **argv) {
             else BLT_FATAL("infer: unknown --method '%s'", argv[i]);
         } else if (!strcmp(argv[i], "--k") && i + 1 < argc) {
             a.k = strtoull(argv[++i], NULL, 10);
+        } else if (!strcmp(argv[i], "--certify-positions")) {
+            a.certify_positions = 1;
         } else if (!strcmp(argv[i], "--block-size") && i + 1 < argc) {
             a.block_size = strtoull(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "--unmask") && i + 1 < argc) {
@@ -431,6 +436,7 @@ int main(int argc, char **argv) {
         memset(&sc, 0, sizeof(sc));
         sc.window_k = a.k;
         sc.d0_mode = BLT_D0_LEARNED;
+        sc.certify_positions = a.certify_positions;
         blt_generate_greedy_selfspec(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, &sc, &st,
                                      scratch);
         break;

@@ -106,7 +106,8 @@ void blt_kv_cache_refresh_cross(blt_kv_cache *cache, const blt_tensor *patch_in,
 // refresh_cross first). Bit-identical to running the dense
 // blt_local_decoder_forward_ext over the same prefix + these rows.
 void blt_kv_decode_step(blt_kv_cache *cache, const blt_tensor *patch_in, const blt_patch_info *patches,
-                        size_t num_patches, const blt_tensor *d0_rows, blt_tensor *logits_out, blt_arena *arena);
+                        size_t num_patches, const blt_tensor *d0_rows, int trailing_closed, blt_tensor *logits_out,
+                        blt_arena *arena);
 
 #ifdef __cplusplus
 }
