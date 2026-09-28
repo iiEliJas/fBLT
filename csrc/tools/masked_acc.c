@@ -471,7 +471,7 @@ int main(int argc, char **argv) {
     blt_entropy_lm *el = patcher_fixed ? NULL : blt_make_entropy_lm(lm_arena, MS, entropy_lm_path, 11);
     if (el) fprintf(stderr, "[MASKED_ACC] loaded entropy LM: %s\n", entropy_lm_path);
 
-    maskacc_stats stats[MASKACC_MAX_T][3];
+    maskacc_stats stats[MASKACC_MAX_T][MASKACC_NCONV];
     memset(stats, 0, sizeof(stats));
     size_t evaluated = 0;
     size_t skipped = 0;
