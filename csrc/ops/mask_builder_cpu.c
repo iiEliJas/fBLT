@@ -108,6 +108,13 @@ void blt_build_block_diffusion_mask_cpu(const blt_block_diffusion_config *config
         BLT_REQUIRE(config->block_size >= 1, "blt_build_block_diffusion_mask: TRAIN mode needs block_size >= 1");
         BLT_REQUIRE((S - N) % config->block_size == 0,
                     "blt_build_block_diffusion_mask: block section must tile exactly (B * (M-1))");
+        BLT_REQUIRE(config->block_starts != NULL, "blt_build_block_diffusion_mask: TRAIN mode needs block_starts");
+        BLT_REQUIRE(config->num_blocks == (S - N) / config->block_size,
+                    "blt_build_block_diffusion_mask: num_blocks must equal (S - N) / block_size");
+        for (size_t b = 0; b < config->num_blocks; b++) {
+            BLT_REQUIRE(config->block_starts[b] < N,
+                        "blt_build_block_diffusion_mask: block start must lie inside the clean prefix");
+        }
     }
 
     size_t shape[2] = {S, S};
@@ -127,12 +134,16 @@ void blt_build_block_diffusion_mask_cpu(const blt_block_diffusion_config *config
                 // Single live block: all clean + whole block section.
                 allowed = true;
             } else {
-                // TRAIN: prose rule -- clean rows causal; block row i sees all
-                // clean bytes plus every block with block-index <= i's
-                // block-index (bidirectional within own block). Paper prose
-                // (3.2.2) vs Figure 5 matrix ambiguity: prose rule adopted.
+                // TRAIN (Fast-BLT 3.2.2 + Figure 5): a block row in the block
+                // starting at s_i sees clean bytes j < s_i and every column of
+                // its own block. Earlier blocks are excluded, and so is every
+                // clean column at or past s_i -- including the clean twin that
+                // sits at this row's own target position.
                 const size_t B = config->block_size;
-                allowed = (j < N) || ((j - N) / B <= (i - N) / B);
+                const size_t blk = (i - N) / B;
+                const size_t s = config->block_starts[blk];
+                const bool own_block = (j >= N) && ((j - N) / B == blk);
+                allowed = (j < s) || own_block;
             }
 
             m[i * S + j] = allowed ? 0.0f : neg_inf;

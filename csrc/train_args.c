@@ -100,6 +100,8 @@ args_t parse_args(int argc, char **argv) {
                 .save_every = 0,
                 .load_path = NULL,
                 .eval_skip = 0,
+                .monitor_every = 2000,
+                .monitor_windows = 24,
                 .t_min = 0.1f,
                 .lr_decay = 0,
                 .lr_decay_count = 0,
@@ -155,6 +157,9 @@ args_t parse_args(int argc, char **argv) {
         else if (!strcmp(argv[i], "--eval-corpus") && i + 1 < argc) a.eval_path = argv[++i];
         else if (!strcmp(argv[i], "--eval-windows") && i + 1 < argc) a.eval_windows = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--eval-skip") && i + 1 < argc) a.eval_skip = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--monitor-every") && i + 1 < argc) a.monitor_every = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--monitor-windows") && i + 1 < argc)
+            a.monitor_windows = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--eval-every") && i + 1 < argc) a.eval_every = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--t-min") && i + 1 < argc) a.t_min = atof(argv[++i]);
         else if (!strcmp(argv[i], "--lr-decay") && i + 1 < argc) a.lr_decay = atoi(argv[++i]);

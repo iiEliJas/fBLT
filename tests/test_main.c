@@ -75,8 +75,10 @@ int main(void) {
         {"blockgen generation gates", run_blockgen_generation_gates},
         {"blockgen stage6 helpers", run_blockgen_stage6_helpers},
         {"block diffusion mask fixture", run_block_diffusion_mask_fixture},
+        {"block diffusion mask has no leak", run_block_diffusion_mask_no_leak},
         {"block diffusion gradcheck", run_block_diffusion_gradcheck},
         {"block diffusion overfit gate", run_block_diffusion_overfit_gate},
+        {"block diffusion has no label leak", run_block_diffusion_no_label_leak},
         {"block diffusion last-row upweight", run_block_diffusion_last_row_upweight},
     };
 

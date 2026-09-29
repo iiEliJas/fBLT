@@ -70,6 +70,187 @@ static uint64_t t_rng_next(uint64_t *state) {
     return z ^ (z >> 31);
 }
 
+// Training-time leak tripwire. On held-out windows at t=1.0
+// it measures the two numbers that a reintroduced label leak would break:
+// train-layout masked accuracy (a block row able to read the clean twin at its
+// own target drives this toward 1.0) and aligned-novel masked accuracy (a
+// prefix ending exactly at a patch start, with no clean twin to copy from).
+// A healthy leak-free run keeps them close. It also reports L_clean and L_mask
+// so the diffusion objective can be read off the log.
+typedef struct {
+    double l_clean;
+    double l_mask;
+    size_t train_hits, train_total;
+    size_t novel_hits, novel_total;
+    size_t windows;
+} blt_monitor_result;
+
+// One aligned-novel block: prefix bytes [0, P) re-segmented on its own, one
+// fully masked block at positions P..P+B-1, cross-attention to the last closed
+// latent. Mirrors inference, so there is no clean row to copy from.
+static void monitor_novel_block(const blt_model *model, blt_arena *scratch, blt_arena *seg_arena, blt_entropy_lm *lm,
+                                const uint8_t *text, size_t P, size_t B, int use_entropy, blt_d0_mode d0m, size_t *hits,
+                                size_t *total) {
+    if (P < 8) return;
+    blt_patch_info pp[128];
+    blt_arena_reset(seg_arena);
+    size_t Mp = use_entropy ? entropy_segment(seg_arena, lm, text, P, pp, 128) : fixed_stride(P, 4, pp);
+    if (Mp < 2 || Mp >= 128) return;
+    // The caller only ever passes a P that lands on a patch start, so the
+    // final prefix patch is closed and the last closed latent is Mp-1. (masked_acc
+    // handles the mid-patch case too, where it falls back to Mp-2.)
+    const size_t group = (Mp >= 1) ? (Mp - 1) : 0;
+
+    blt_arena_reset(scratch);
+    size_t bshape[1] = {P};
+    blt_tensor bytes_in = blt_tensor_create(scratch, bshape, 1, BLT_DTYPE_UINT8);
+    // scratch is a CUDA arena during training, so bytes_in.data is device
+    // memory; upload does the H2D copy. A raw memcpy would fault.
+    blt_tensor_upload(&bytes_in, text, P);
+    blt_model_enc_out enc;
+    blt_model_encode(model, &bytes_in, pp, Mp, NULL, 0, &enc, scratch);
+
+    blt_block_batch batch;
+    memset(&batch, 0, sizeof(batch));
+    batch.num_clean = P;
+    batch.block_size = B;
+    batch.num_blocks = 1;
+    batch.n_block_rows = B;
+    batch.t = 1.0f;
+    batch.loss_scale = 0.0f;
+    batch.last_row_scale = 1.0f;
+    batch.tokens = (uint32_t *)blt_container_alloc(scratch, B * sizeof(uint32_t));
+    batch.positions = (size_t *)blt_container_alloc(scratch, B * sizeof(size_t));
+    batch.targets = (uint8_t *)blt_container_alloc(scratch, B);
+    batch.cell_valid = (uint8_t *)blt_container_alloc(scratch, B);
+    batch.cell_masked = (uint8_t *)blt_container_alloc(scratch, B);
+    batch.groups = (size_t *)blt_container_alloc(scratch, B * sizeof(size_t));
+    for (size_t r = 0; r < B; r++) {
+        batch.positions[r] = P + r;
+        batch.targets[r] = text[P + r];
+        batch.tokens[r] = BLT_MASK_TOKEN_ID;
+        batch.cell_valid[r] = 1;
+        batch.cell_masked[r] = 1;
+        batch.groups[r] = group;
+    }
+
+    size_t S = P + B;
+    size_t lg[2] = {S, 256};
+    blt_tensor logits = blt_tensor_create(scratch, lg, 2, BLT_DTYPE_FP32);
+    blt_local_decoder_forward_diffusion_infer(model->decoder, &enc.byte_hidden_out, &enc.global_out, pp, Mp, &batch,
+                                              d0m, &logits, scratch);
+    float *L = (float *)malloc(logits.numel * sizeof(float));
+    if (!L) return;
+    blt_tensor_download(&logits, L, logits.numel * sizeof(float));
+    for (size_t r = 0; r < B; r++) {
+        const float *row = L + (P + r) * 256;
+        size_t best = 0;
+        for (size_t v = 1; v < 256; v++)
+            if (row[v] > row[best]) best = v;
+        (*total)++;
+        if (best == (size_t)batch.targets[r]) (*hits)++;
+    }
+    free(L);
+}
+
+static void blt_monitor(const blt_model *model, blt_arena *scratch, blt_arena *seg_arena, blt_entropy_lm *lm,
+                        const uint8_t *bytes, size_t data_len, const args_t *a, size_t step, blt_monitor_result *out) {
+    memset(out, 0, sizeof(*out));
+    const int use_entropy = (lm != NULL);
+    const size_t B = a->block_size;
+    size_t wins = a->monitor_windows;
+    const size_t max_wins = (data_len > a->window + B) ? (data_len - a->window - B) / a->window : 0;
+    if (wins > max_wins) wins = max_wins;
+    if (wins == 0) return;
+
+    double lcl = 0.0, lmk = 0.0;
+    for (size_t wi = 0; wi < wins; wi++) {
+        const uint8_t *text = bytes + wi * a->window;
+        const size_t N = a->window;
+        blt_patch_info patches[128];
+        blt_arena_reset(seg_arena);
+        size_t M = use_entropy ? entropy_segment(seg_arena, lm, text, N, patches, 128) : fixed_stride(N, 4, patches);
+        if (M < 2 || M >= 128) continue;
+        if (N + B * (M - 1) > model->config.decoder_config.max_seq_len) continue;
+
+        blt_arena_reset(scratch);
+        size_t bshape[1] = {N};
+        blt_tensor bytes_in = blt_tensor_create(scratch, bshape, 1, BLT_DTYPE_UINT8);
+        blt_tensor_upload(&bytes_in, text, N);
+        blt_model_enc_out enc;
+        blt_model_encode(model, &bytes_in, patches, M, NULL, 0, &enc, scratch);
+
+        blt_block_batch batch;
+        blt_block_batch_build_t(&batch, scratch, text, N, patches, M, B, (uint64_t)step + wi, 1.0f);
+        size_t S = N + batch.n_block_rows;
+        size_t lg[2] = {S, 256};
+        blt_tensor logits = blt_tensor_create(scratch, lg, 2, BLT_DTYPE_FP32);
+        size_t sc[1] = {1};
+        blt_tensor loss = blt_tensor_create(scratch, sc, 1, BLT_DTYPE_FP32);
+        blt_local_decoder_forward_diffusion(model->decoder, &enc.byte_hidden_out, &enc.global_out, patches, M, text,
+                                            NULL, &batch, a->d0_learned ? BLT_D0_LEARNED : BLT_D0_ZEROS, &logits, &loss,
+                                            scratch);
+        float *L = (float *)malloc(logits.numel * sizeof(float));
+        if (!L) continue;
+        blt_tensor_download(&logits, L, logits.numel * sizeof(float));
+
+        double cl = 0.0;
+        for (size_t i = 0; i + 1 < N; i++) {
+            const float *row = L + i * 256;
+            float mx = row[0];
+            for (size_t v = 1; v < 256; v++)
+                if (row[v] > mx) mx = row[v];
+            double sum = 0.0, pt = 0.0;
+            for (size_t v = 0; v < 256; v++) {
+                const double e = exp((double)row[v] - (double)mx);
+                sum += e;
+                if (v == (size_t)text[i + 1]) pt = e;
+            }
+            cl += -log(fmax(pt / sum, 1e-9));
+        }
+        lcl += cl / (double)(N - 1);
+
+        double mk = 0.0;
+        for (size_t r = 0; r < batch.n_block_rows; r++) {
+            if (!batch.cell_masked[r]) continue;
+            const float *row = L + (N + r) * 256;
+            size_t best = 0;
+            for (size_t v = 1; v < 256; v++)
+                if (row[v] > row[best]) best = v;
+            out->train_total++;
+            if (best == (size_t)batch.targets[r]) out->train_hits++;
+            float mx = row[0];
+            for (size_t v = 1; v < 256; v++)
+                if (row[v] > mx) mx = row[v];
+            double sum = 0.0, pt = 0.0;
+            for (size_t v = 0; v < 256; v++) {
+                const double e = exp((double)row[v] - (double)mx);
+                sum += e;
+                if (v == (size_t)batch.targets[r]) pt = e;
+            }
+            mk += -log(fmax(pt / sum, 1e-9));
+        }
+        if (batch.n_block_rows) lmk += mk / (double)batch.n_block_rows;
+        free(L);
+
+        // Aligned novel: prefix ends at an interior patch start, so every prefix
+        // patch is closed and the block has no clean twin. Take the first start
+        // that clears the minimum prefix and still leaves room for the block.
+        for (size_t j = 1; j + 1 < M; j++) {
+            const size_t P = patches[j].start_idx;
+            if (P < 8 || P + B > N) continue;
+            monitor_novel_block(model, scratch, seg_arena, lm, text, P, B, use_entropy,
+                                a->d0_learned ? BLT_D0_LEARNED : BLT_D0_ZEROS, &out->novel_hits, &out->novel_total);
+            break;
+        }
+        out->windows++;
+    }
+    if (out->windows) {
+        out->l_clean = lcl / (double)out->windows;
+        out->l_mask = lmk / (double)out->windows;
+    }
+}
+
 int main(int argc, char **argv) {
     args_t a = parse_args(argc, argv);
 
@@ -537,6 +718,50 @@ int main(int argc, char **argv) {
                        1000.0 * t_fwd / 50.0, 1000.0 * t_bwd / 50.0, 1000.0 * t_opt / 50.0, 1000.0 * t_step / 50.0);
                 fflush(stdout);
                 t_fwd = t_bwd = t_opt = t_step = 0.0;
+            }
+        }
+
+        if (a.monitor_every > 0 && (step + 1) % a.monitor_every == 0 && a.eval_path != NULL) {
+            FILE *mf = fopen(a.eval_path, "rb");
+            if (mf) {
+                fseek(mf, 0, SEEK_END);
+                long msz = ftell(mf);
+                fseek(mf, 0, SEEK_SET);
+                uint8_t *mbytes = (msz > 0) ? (uint8_t *)malloc((size_t)msz) : NULL;
+                if (mbytes && fread(mbytes, 1, (size_t)msz, mf) == (size_t)msz) {
+                    blt_monitor_result mr;
+                    blt_monitor(model, scratch, host_seg_arena, train_lm, mbytes + a.eval_skip,
+                                (size_t)msz - a.eval_skip, &a, step, &mr);
+                    const double tacc = mr.train_total ? (double)mr.train_hits / (double)mr.train_total : 0.0;
+                    const double nacc = mr.novel_total ? (double)mr.novel_hits / (double)mr.novel_total : 0.0;
+                    const double gap = tacc - nacc;
+                    printf(
+                        "[MONITOR] step %zu  L_clean %.4f  L_mask %.4f  train_acc %.4f (n=%zu)  aligned_novel_acc %.4f "
+                        "(n=%zu)  gap %+.4f\n",
+                        step + 1, mr.l_clean, mr.l_mask, tacc, mr.train_total, nacc, mr.novel_total, gap);
+                    fflush(stdout);
+                    // Tripwires: a reintroduced clean-twin leak sends train_acc to
+                    // ~1.0; a train/novel split after 5k steps means the layouts
+                    // disagree, which the leak-free mask should prevent.
+                    if (mr.train_total > 0 && tacc > 0.95) {
+                        printf("[MONITOR] ABORT: train-layout masked acc %.4f > 0.95 at step %zu -- label leak\n", tacc,
+                               step + 1);
+                        fflush(stdout);
+                        free(mbytes);
+                        fclose(mf);
+                        return 3;
+                    }
+                    if (step + 1 > 5000 && mr.train_total > 0 && mr.novel_total > 0 && gap > 0.10) {
+                        printf("[MONITOR] ABORT: train - aligned_novel = %.4f > 0.10 at step %zu -- mask leak\n", gap,
+                               step + 1);
+                        fflush(stdout);
+                        free(mbytes);
+                        fclose(mf);
+                        return 3;
+                    }
+                }
+                free(mbytes);
+                fclose(mf);
             }
         }
 

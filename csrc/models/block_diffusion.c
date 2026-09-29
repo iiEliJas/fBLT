@@ -179,11 +179,21 @@ static void diff_ctx_build(diff_ctx *c, const blt_local_decoder *model, const bl
         }
     }
 
+    // Per-block start positions s_i (Fast-BLT 3.2.1): block j is the paper's
+    // b_{i-1} for patch p_i with i = j+1, so it begins at patch j+1's start.
+    // The mask needs these because the clean cutoff is a byte position, not N.
+    size_t *block_starts = (size_t *)blt_container_alloc(arena, batch->num_blocks * sizeof(size_t));
+    for (size_t j = 0; j < batch->num_blocks; j++) {
+        block_starts[j] = patches[j + 1].start_idx;
+    }
+
     blt_block_diffusion_config mc = {
         .mode = mask_mode,
         .seq_len = c->S,
         .num_clean = c->N,
         .block_size = batch->block_size,
+        .block_starts = block_starts,
+        .num_blocks = batch->num_blocks,
     };
     blt_build_block_diffusion_mask(&mc, &c->self_mask, arena);
 

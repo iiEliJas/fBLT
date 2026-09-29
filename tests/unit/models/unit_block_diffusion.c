@@ -9,6 +9,8 @@
 
 #include "core/allocator.h"
 #include "core/backend.h"
+#include "models/local_encoder.h"
+#include "models/global_transformer.h"
 #include "models/local_decoder.h"
 #include "models/local_common.h"
 #include "models/block_diffusion.h"
@@ -22,6 +24,24 @@ static void fill_small_uniform(blt_tensor *t, float scale) {
     for (size_t i = 0; i < t->numel; i++) {
         float r = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
         data[i] = r * scale;
+    }
+}
+
+// Deterministic replacement for rand()-based weight init. glibc and MinGW
+// generate different rand() sequences, so a gate keyed on rand() is a
+// different experiment on each platform and its pass/fail is a coin flip.
+static uint64_t det_next(uint64_t *s) {
+    uint64_t z = (*s += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+static void fill_det(blt_tensor *t, float scale, uint64_t *s) {
+    float *data = (float *)t->data;
+    for (size_t i = 0; i < t->numel; i++) {
+        const float u = (float)(double)(det_next(s) >> 40) / (float)(1u << 24);
+        data[i] = (u * 2.0f - 1.0f) * scale;
     }
 }
 
@@ -87,21 +107,24 @@ static size_t fixed_patches(size_t seq_len, size_t patch_len, blt_patch_info *ou
 }
 
 //----------------------------------------------------------------------
-// Test 1: TRAIN mask fixture. The TRAIN mask must reproduce the Fast-BLT
-// 3.2.2 prose rule exactly (N=6, B=4, S=14): clean rows causal; block row i
-// sees all clean bytes and all blocks with block-index <= i's block-index
-// (bidirectional within own block). INFER: clean-causal + fully-open block.
-// NOTE: prose rule adopted; paper's Fig-5 matrix is strictly causal.
+// Test 1: TRAIN mask fixture. The TRAIN mask must reproduce Fast-BLT 3.2.2 /
+// Figure 5 exactly (N=6, B=4, S=14, block starts s_0=2, s_1=4): clean rows
+// causal; a block row in the block starting at s_i sees clean columns j < s_i
+// plus every column of its own block. INFER: clean-causal + fully-open block.
 
 int run_block_diffusion_mask_fixture(void) {
     blt_arena *arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
     TEST_ASSERT(arena != NULL);
 
-    // ---- TRAIN: Fast-BLT 3.2.2 prose rule (not the Fig-5 matrix) ----
+    // ---- TRAIN: Figure 5 rule. Block 0 (rows 6-9) starts at s=2, so it sees
+    // only clean bytes 0-1 -- NOT clean bytes 2-5, which include its own
+    // target positions. Block 1 (rows 10-13) starts at s=4, seeing clean
+    // bytes 0-3. Neither block sees the other. ----
+    const size_t starts[2] = {2, 4};
     const char *want[14] = {
         "10000000000000", "11000000000000", "11100000000000", "11110000000000", "11111000000000",
-        "11111100000000", "11111111110000", "11111111110000", "11111111110000", "11111111110000",
-        "11111111111111", "11111111111111", "11111111111111", "11111111111111",
+        "11111100000000", "11000011110000", "11000011110000", "11000011110000", "11000011110000",
+        "11110000001111", "11110000001111", "11110000001111", "11110000001111",
     };
 
     blt_block_diffusion_config mc = {
@@ -109,6 +132,8 @@ int run_block_diffusion_mask_fixture(void) {
         .seq_len = 14,
         .num_clean = 6,
         .block_size = 4,
+        .block_starts = starts,
+        .num_blocks = 2,
     };
     blt_tensor m;
     blt_build_block_diffusion_mask(&mc, &m, arena);
@@ -143,6 +168,68 @@ int run_block_diffusion_mask_fixture(void) {
             const float got = id[i * 7 + j];
             if (want && !(got == 0.0f)) TEST_ASSERT(!"INFER: expected allowed");
             if (!want && !isinf(got)) TEST_ASSERT(!"INFER: expected blocked");
+        }
+    }
+
+    blt_arena_destroy(arena);
+    return 1;
+}
+
+// Structural invariants of the Figure 5 mask, asserted independently of any
+// hardcoded matrix so they hold for any (N, B, starts) combination:
+//   1. a block row sees no clean column at or past its own block start s_i
+//      (this is the label leak: the clean twin at its target position);
+//   2. a block row sees no column of any other block;
+//   3. a block row sees all clean columns below s_i and all of its own block;
+//   4. clean rows stay causal over clean columns only.
+
+int run_block_diffusion_mask_no_leak(void) {
+    const size_t N = 9, B = 3, NB = 4;
+    const size_t S = N + B * NB;
+    // Starts strictly increasing, interleaved so block order cannot be
+    // reconstructed from position order alone.
+    const size_t starts[4] = {1, 3, 5, 8};
+
+    blt_arena *arena = blt_arena_create(1024 * 1024, BLT_BACKEND_CPU);
+    TEST_ASSERT(arena != NULL);
+
+    blt_block_diffusion_config mc = {
+        .mode = BLT_BDM_TRAIN,
+        .seq_len = S,
+        .num_clean = N,
+        .block_size = B,
+        .block_starts = starts,
+        .num_blocks = NB,
+    };
+    blt_tensor m;
+    blt_build_block_diffusion_mask(&mc, &m, arena);
+    const float *md = (const float *)m.data;
+
+    for (size_t i = 0; i < S; i++) {
+        for (size_t j = 0; j < S; j++) {
+            const bool allowed = (md[i * S + j] == 0.0f);
+
+            if (i < N) {
+                if (allowed != (j < N && j <= i)) {
+                    TEST_ASSERT(!"clean row: expected causal over clean columns only");
+                }
+                continue;
+            }
+
+            const size_t blk = (i - N) / B;
+            const size_t s = starts[blk];
+            const bool own_block = (j >= N) && ((j - N) / B == blk);
+            const bool expect = (j < s) || own_block;
+
+            if (allowed != expect) {
+                TEST_ASSERT(!"block row: allowed set must be {j < s_i} U own block");
+            }
+            if (allowed && j >= s && !own_block) {
+                TEST_ASSERT(!"LEAK: block row attends a column at or past its own start");
+            }
+            if (allowed && j >= N && !own_block) {
+                TEST_ASSERT(!"LEAK: block row attends another block");
+            }
         }
     }
 
@@ -646,17 +733,19 @@ static void sgd_all(blt_model *m, blt_model_grad *g, float lr) {
     blt_sgd_step(&m->decoder->d0_embed_weight, &g->decoder_grad->d0_embed_grad, lr);
 }
 
-int run_block_diffusion_overfit_gate(void) {
-    srand(43);
+// Shared dims for the tiny BLT-D model used by the overfit gate and the
+// label-leak test.
+#define TINY_E 16
+#define TINY_HID 32
+#define TINY_MS 64
+#define TINY_VOCAB 256
 
-    blt_arena *model_arena = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
-    blt_arena *scratch = blt_arena_create(32 * 1024 * 1024, BLT_BACKEND_CPU);
-    TEST_ASSERT(model_arena && scratch);
-
+static blt_model *make_tiny_diffusion_model(blt_arena *model_arena, uint64_t seed) {
+    uint64_t rng = seed;
     // full tiny model (same recipe as unit_model.c)
     blt_model_config cfg;
     memset(&cfg, 0, sizeof(cfg));
-    const size_t E = 16, HID = 32, MS = 64;
+    const size_t E = TINY_E, HID = TINY_HID, MS = TINY_MS;
     cfg.encoder_config.embed_dim = E;
     cfg.encoder_config.patch_dim = 0;
     cfg.encoder_config.num_layers = 1;
@@ -691,51 +780,63 @@ int run_block_diffusion_overfit_gate(void) {
     cfg.decoder_config.cross_attn_all_layers = true;
     cfg.decoder_config.rope_theta = 10000.0f;
     cfg.decoder_config.max_seq_len = MS;
-    cfg.decoder_config.vocab_size = 256;
+    cfg.decoder_config.vocab_size = TINY_VOCAB;
 
     blt_model *model = blt_model_create(model_arena, &cfg);
-    blt_model_grad *grad = blt_model_grad_create(model_arena, model);
-    TEST_ASSERT(model && grad);
-
     // random init everything
-    fill_small_uniform(&model->encoder->byte_embedding_weight, 0.1f);
+    fill_det(&model->encoder->byte_embedding_weight, 0.1f, &rng);
     for (size_t i = 0; i < model->encoder->config.num_layers; i++) {
         blt_local_layer_storage *l = &model->encoder->layers[i];
         fill_constant(&l->norm1_weight, 1.0f);
-        fill_small_uniform(&l->attn_qkv_w, 0.1f);
-        fill_small_uniform(&l->attn_proj_w, 0.1f);
+        fill_det(&l->attn_qkv_w, 0.1f, &rng);
+        fill_det(&l->attn_proj_w, 0.1f, &rng);
         fill_constant(&l->norm2_weight, 1.0f);
-        fill_small_uniform(&l->ffn_up_w, 0.1f);
-        fill_small_uniform(&l->ffn_gate_w, 0.1f);
-        fill_small_uniform(&l->ffn_down_w, 0.1f);
+        fill_det(&l->ffn_up_w, 0.1f, &rng);
+        fill_det(&l->ffn_gate_w, 0.1f, &rng);
+        fill_det(&l->ffn_down_w, 0.1f, &rng);
         fill_constant(&l->cross_norm_weight, 1.0f);
-        fill_small_uniform(&l->cross_weight_q, 0.1f);
-        fill_small_uniform(&l->cross_weight_k, 0.1f);
-        fill_small_uniform(&l->cross_weight_v, 0.1f);
-        fill_small_uniform(&l->cross_weight_proj, 0.1f);
+        fill_det(&l->cross_weight_q, 0.1f, &rng);
+        fill_det(&l->cross_weight_k, 0.1f, &rng);
+        fill_det(&l->cross_weight_v, 0.1f, &rng);
+        fill_det(&l->cross_weight_proj, 0.1f, &rng);
     }
     for (size_t i = 0; i < model->global->stack.num_layers; i++)
         fill_t_layer(&model->global->stack.layer_storage[i], 0.1f);
     for (size_t i = 0; i < model->decoder->config.num_layers; i++) {
         blt_local_layer_storage *l = &model->decoder->layers[i];
         fill_constant(&l->cross_norm_weight, 1.0f);
-        fill_small_uniform(&l->cross_weight_q, 0.1f);
-        fill_small_uniform(&l->cross_weight_k, 0.1f);
-        fill_small_uniform(&l->cross_weight_v, 0.1f);
-        fill_small_uniform(&l->cross_weight_proj, 0.1f);
+        fill_det(&l->cross_weight_q, 0.1f, &rng);
+        fill_det(&l->cross_weight_k, 0.1f, &rng);
+        fill_det(&l->cross_weight_v, 0.1f, &rng);
+        fill_det(&l->cross_weight_proj, 0.1f, &rng);
         fill_constant(&l->norm1_weight, 1.0f);
-        fill_small_uniform(&l->attn_qkv_w, 0.1f);
-        fill_small_uniform(&l->attn_proj_w, 0.1f);
+        fill_det(&l->attn_qkv_w, 0.1f, &rng);
+        fill_det(&l->attn_proj_w, 0.1f, &rng);
         fill_constant(&l->norm2_weight, 1.0f);
-        fill_small_uniform(&l->ffn_up_w, 0.1f);
-        fill_small_uniform(&l->ffn_gate_w, 0.1f);
-        fill_small_uniform(&l->ffn_down_w, 0.1f);
+        fill_det(&l->ffn_up_w, 0.1f, &rng);
+        fill_det(&l->ffn_gate_w, 0.1f, &rng);
+        fill_det(&l->ffn_down_w, 0.1f, &rng);
     }
-    fill_small_uniform(&model->decoder->lm_head_weight, 0.1f);
+    fill_det(&model->decoder->lm_head_weight, 0.1f, &rng);
     {
         float *tbl = (float *)model->decoder->d0_embed_weight.data;
         for (size_t i = 0; i < model->decoder->d0_embed_weight.numel; i++) tbl[i] = (((i * 13) % 17) - 8.0f) * 0.05f;
     }
+
+    return model;
+}
+
+int run_block_diffusion_overfit_gate(void) {
+    srand(43);
+
+    blt_arena *model_arena = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *scratch = blt_arena_create(32 * 1024 * 1024, BLT_BACKEND_CPU);
+    TEST_ASSERT(model_arena && scratch);
+
+    blt_model *model = make_tiny_diffusion_model(model_arena, 0x5EED1234ULL);
+    blt_model_grad *grad = blt_model_grad_create(model_arena, model);
+    TEST_ASSERT(grad != NULL);
+    const size_t E = TINY_E;
 
     const char *snippets[] = {"int x=1;\n", "return 0;\n"};
     const size_t num_snippets = 2;
@@ -756,8 +857,8 @@ int run_block_diffusion_overfit_gate(void) {
             TEST_ASSERT(M >= 2);
 
             blt_block_batch batch;
-            blt_block_batch_build(&batch, scratch, text, N, patches, M,
-                                  /*B=*/4, /*seed=*/1000 + step);
+            blt_block_batch_build_t(&batch, scratch, text, N, patches, M,
+                                    /*B=*/4, /*seed=*/1000 + step, /*t=*/1.0f);
 
             size_t bshape[1] = {N};
             blt_tensor bytes_in = blt_tensor_create(scratch, bshape, 1, BLT_DTYPE_UINT8);
@@ -774,7 +875,7 @@ int run_block_diffusion_overfit_gate(void) {
             blt_global_transformer_forward(model->global, &P, NULL, 0, &O, scratch);
 
             size_t S = N + batch.n_block_rows;
-            size_t lg_shape[2] = {S, 256};
+            size_t lg_shape[2] = {S, TINY_VOCAB};
             blt_tensor logits = blt_tensor_create(scratch, lg_shape, 2, BLT_DTYPE_FP32);
             size_t sc_shape[1] = {1};
             blt_tensor loss = blt_tensor_create(scratch, sc_shape, 1, BLT_DTYPE_FP32);
@@ -813,6 +914,150 @@ int run_block_diffusion_overfit_gate(void) {
     TEST_ASSERT(last_total < 0.35f * first_total); // learning happened
     TEST_ASSERT(last_total < 2.0f);                // and got low
 
+    blt_arena_destroy(scratch);
+    blt_arena_destroy(model_arena);
+    return 1;
+}
+
+//----------------------------------------------------------------------
+// Test 4: gradient-free label-leak check over the full BLT-D forward.
+//
+// Runs the real pipeline (encoder -> global -> diffusion decoder) and asserts
+// that block i's logits depend on nothing but the corrupted cells of block i
+// and the clean bytes below its own start s_i -- the conditioning in Fast-BLT
+// Eq. 6. Randomizing clean bytes at positions >= s_i must leave block i's
+// logits bit-identical; perturbing block i's own unmasked cells, or the clean
+// prefix below s_i, must move them. No gradients are involved, so this pins
+// forward information flow rather than the backward pass.
+
+#define LEAK_N 12
+#define LEAK_B 3
+
+// Host copy of the block-section logits for one full forward pass.
+static float *leak_block_logits(blt_arena *scratch, const blt_model *model, const uint8_t *bytes,
+                                const blt_patch_info *patches, size_t M, const blt_block_batch *batch, size_t vocab) {
+    const size_t N = LEAK_N;
+    const size_t R = batch->n_block_rows;
+    const size_t E = model->encoder->config.embed_dim;
+    const size_t S = N + R;
+
+    blt_arena_reset(scratch);
+
+    size_t bshape[1] = {N};
+    blt_tensor bytes_in = blt_tensor_create(scratch, bshape, 1, BLT_DTYPE_UINT8);
+    memcpy(bytes_in.data, bytes, N);
+
+    size_t p_shape[2] = {M, E};
+    blt_tensor P = blt_tensor_create(scratch, p_shape, 2, BLT_DTYPE_FP32);
+    size_t h_shape[2] = {N, E};
+    blt_tensor h = blt_tensor_create(scratch, h_shape, 2, BLT_DTYPE_FP32);
+    blt_local_encoder_forward(model->encoder, &bytes_in, patches, M, NULL, 0, &P, &h, scratch);
+
+    blt_tensor O = blt_tensor_create(scratch, p_shape, 2, BLT_DTYPE_FP32);
+    blt_global_transformer_forward(model->global, &P, NULL, 0, &O, scratch);
+
+    size_t lg_shape[2] = {S, vocab};
+    blt_tensor logits = blt_tensor_create(scratch, lg_shape, 2, BLT_DTYPE_FP32);
+    size_t sc_shape[1] = {1};
+    blt_tensor loss = blt_tensor_create(scratch, sc_shape, 1, BLT_DTYPE_FP32);
+    blt_local_decoder_forward_diffusion(model->decoder, &h, &O, patches, M, bytes, NULL, batch, BLT_D0_LEARNED, &logits,
+                                        &loss, scratch);
+
+    float *host = (float *)malloc(S * vocab * sizeof(float));
+    TEST_ASSERT(host != NULL);
+    blt_tensor_download(&logits, host, S * vocab * sizeof(float));
+    memmove(host, host + N * vocab, R * vocab * sizeof(float));
+    return host;
+}
+
+static double leak_max_diff(const float *a, const float *b, size_t n) {
+    double m = 0.0;
+    for (size_t i = 0; i < n; i++) {
+        const double d = fabs((double)a[i] - (double)b[i]);
+        if (d > m) m = d;
+    }
+    return m;
+}
+
+int run_block_diffusion_no_label_leak(void) {
+    srand(77);
+
+    blt_arena *model_arena = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *scratch = blt_arena_create(32 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *batch_arena = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
+    TEST_ASSERT(model_arena && scratch && batch_arena);
+
+    blt_model *model = make_tiny_diffusion_model(model_arena, 0x5EED1234ULL);
+
+    static const uint8_t base[LEAK_N] = {3, 11, 200, 7, 42, 99, 5, 63, 128, 21, 250, 9};
+    blt_patch_info patches[8];
+    const size_t M = fixed_patches(LEAK_N, LEAK_B, patches); // patch starts 0, 3, 6, 9
+    TEST_ASSERT(M == 4);
+
+    const size_t NB = M - 1;
+    const size_t R = LEAK_B * NB;
+    const size_t vocab = TINY_VOCAB;
+
+    // Built once from the baseline bytes into a non-reset arena, so every run
+    // below sees an identical corrupted block section and only the clean
+    // prefix varies.
+    blt_block_batch batch;
+    blt_block_batch_build_t(&batch, batch_arena, base, LEAK_N, patches, M, LEAK_B, /*seed=*/9001, /*t=*/0.3f);
+    TEST_ASSERT(batch.n_block_rows == R);
+    batch.cell_valid[1] = 1;
+    batch.cell_masked[1] = 0;
+    batch.tokens[1] = 17;
+
+    float *base_logits = leak_block_logits(scratch, model, base, patches, M, &batch, vocab);
+    TEST_ASSERT(base_logits != NULL);
+
+    // 1. Randomizing clean bytes at positions >= s_i must leave block i's
+    //    logits bit-identical, for every block. Those clean columns include
+    //    the twin of every byte block i is asked to predict.
+    for (size_t j = 0; j < NB; j++) {
+        const size_t s = patches[j + 1].start_idx;
+        uint8_t mutated[LEAK_N];
+        memcpy(mutated, base, LEAK_N);
+        for (size_t p = s; p < LEAK_N; p++) mutated[p] = (uint8_t)((p * 37 + 11) & 0xFF);
+
+        float *got = leak_block_logits(scratch, model, mutated, patches, M, &batch, vocab);
+        const size_t off = j * LEAK_B * vocab;
+        const size_t len = LEAK_B * vocab;
+        if (memcmp(got + off, base_logits + off, len * sizeof(float)) != 0) {
+            printf("    LEAK: block %zu moved by %.3e when clean bytes >= %zu changed\n", j,
+                   leak_max_diff(got + off, base_logits + off, len), s);
+            free(got);
+            free(base_logits);
+            TEST_ASSERT(!"block logits must not depend on clean bytes at or past s_i");
+        }
+        free(got);
+    }
+
+    // 2. Block 0's own unmasked cell must matter, and must stay inside block 0.
+    batch.tokens[1] = 200;
+    float *own = leak_block_logits(scratch, model, base, patches, M, &batch, vocab);
+    const double d_own = leak_max_diff(own, base_logits, LEAK_B * vocab);
+    const bool others_stable =
+        memcmp(own + LEAK_B * vocab, base_logits + LEAK_B * vocab, (NB - 1) * LEAK_B * vocab * sizeof(float)) == 0;
+    batch.tokens[1] = 17;
+    free(own);
+    TEST_ASSERT(d_own > 1e-6);
+    TEST_ASSERT(others_stable);
+
+    // 3. The clean prefix below s_0 is the only clean input block 0 may use,
+    //    so changing it must move block 0's logits.
+    uint8_t pre[LEAK_N];
+    memcpy(pre, base, LEAK_N);
+    for (size_t p = 0; p < patches[1].start_idx; p++) pre[p] = (uint8_t)((p * 53 + 7) & 0xFF);
+    float *prel = leak_block_logits(scratch, model, pre, patches, M, &batch, vocab);
+    const double d_pre = leak_max_diff(prel, base_logits, LEAK_B * vocab);
+    free(prel);
+    free(base_logits);
+    TEST_ASSERT(d_pre > 1e-6);
+
+    printf("    leak test: own-cell delta=%.3e clean-prefix delta=%.3e\n", d_own, d_pre);
+
+    blt_arena_destroy(batch_arena);
     blt_arena_destroy(scratch);
     blt_arena_destroy(model_arena);
     return 1;

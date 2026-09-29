@@ -98,6 +98,8 @@ class TrainConfig:
     eval_corpus: typing.Optional[str] = None
     eval_windows: int = 200
     eval_skip: int = 0
+    monitor_every: int = 2000
+    monitor_windows: int = 24
     eval_every: int = 0
 
     save_weights: typing.Optional[str] = None

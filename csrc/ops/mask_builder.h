@@ -41,14 +41,15 @@ void blt_build_attention_mask(const blt_mask_config *config, blt_tensor *out_mas
 // rows/cols [num_clean, S).
 
 typedef enum {
-    BLT_BDM_TRAIN = 0, // Fast-BLT 3.2.2 prose rule: clean rows causal; block row i
-                       // sees all clean bytes plus every block with block-index <=
-                       // i's block-index (bidirectional within own block); pinned
-                       // by the fixture test. Figure 5's matrix is strictly
-                       // causal -- prose rule adopted.
+    BLT_BDM_TRAIN = 0, // Fast-BLT 3.2.2 + Figure 5: clean rows causal; a block row
+                       // in the block starting at s_i attends clean columns j < s_i
+                       // plus every column of its OWN block. No cross-block
+                       // attention, and no clean column at or past s_i. Matches
+                       // Eq. 6's conditioning p(x_{s_i+k} | b^t_{i-1}, x_{<s_i}).
     BLT_BDM_INFER      // Fast-BLT section 3.1.1: clean rows causal; every block row
                        // sees all clean positions and the WHOLE block section
                        // bidirectionally (single live block during generation).
+                       // This is the TRAIN rule specialised to s_i = N.
 } blt_block_diffusion_mode;
 
 typedef struct {
@@ -57,6 +58,13 @@ typedef struct {
     size_t num_clean;  // N: clean prefix length (rows [0, N))
     size_t block_size; // B; TRAIN only — blocks tile [N, N + B*(M-1)) exactly.
                        // INFER ignores it (everything past N is one region).
+
+    // TRAIN only: block_starts[blk] is the original byte position s_i where
+    // block blk begins (paper's b_{i-1} for patch p_i, i = blk+1). num_blocks
+    // entries; must equal (seq_len - num_clean) / block_size. Required in TRAIN
+    // mode because the clean cutoff is a byte position, not the N boundary.
+    const size_t *block_starts;
+    size_t num_blocks;
 } blt_block_diffusion_config;
 
 // Creates a square FP32 additive mask [seq_len, seq_len]:
