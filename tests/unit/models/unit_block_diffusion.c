@@ -27,6 +27,24 @@ static void fill_small_uniform(blt_tensor *t, float scale) {
     }
 }
 
+// Deterministic replacement for rand()-based weight init. glibc and MinGW
+// generate different rand() sequences, so a gate keyed on rand() is a
+// different experiment on each platform and its pass/fail is a coin flip.
+static uint64_t det_next(uint64_t *s) {
+    uint64_t z = (*s += 0x9E3779B97F4A7C15ULL);
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+static void fill_det(blt_tensor *t, float scale, uint64_t *s) {
+    float *data = (float *)t->data;
+    for (size_t i = 0; i < t->numel; i++) {
+        const float u = (float)(double)(det_next(s) >> 40) / (float)(1u << 24);
+        data[i] = (u * 2.0f - 1.0f) * scale;
+    }
+}
+
 static void fill_constant(blt_tensor *t, float value) {
     float *data = (float *)t->data;
     for (size_t i = 0; i < t->numel; i++) {
@@ -722,7 +740,8 @@ static void sgd_all(blt_model *m, blt_model_grad *g, float lr) {
 #define TINY_MS 64
 #define TINY_VOCAB 256
 
-static blt_model *make_tiny_diffusion_model(blt_arena *model_arena) {
+static blt_model *make_tiny_diffusion_model(blt_arena *model_arena, uint64_t seed) {
+    uint64_t rng = seed;
     // full tiny model (same recipe as unit_model.c)
     blt_model_config cfg;
     memset(&cfg, 0, sizeof(cfg));
@@ -765,40 +784,40 @@ static blt_model *make_tiny_diffusion_model(blt_arena *model_arena) {
 
     blt_model *model = blt_model_create(model_arena, &cfg);
     // random init everything
-    fill_small_uniform(&model->encoder->byte_embedding_weight, 0.1f);
+    fill_det(&model->encoder->byte_embedding_weight, 0.1f, &rng);
     for (size_t i = 0; i < model->encoder->config.num_layers; i++) {
         blt_local_layer_storage *l = &model->encoder->layers[i];
         fill_constant(&l->norm1_weight, 1.0f);
-        fill_small_uniform(&l->attn_qkv_w, 0.1f);
-        fill_small_uniform(&l->attn_proj_w, 0.1f);
+        fill_det(&l->attn_qkv_w, 0.1f, &rng);
+        fill_det(&l->attn_proj_w, 0.1f, &rng);
         fill_constant(&l->norm2_weight, 1.0f);
-        fill_small_uniform(&l->ffn_up_w, 0.1f);
-        fill_small_uniform(&l->ffn_gate_w, 0.1f);
-        fill_small_uniform(&l->ffn_down_w, 0.1f);
+        fill_det(&l->ffn_up_w, 0.1f, &rng);
+        fill_det(&l->ffn_gate_w, 0.1f, &rng);
+        fill_det(&l->ffn_down_w, 0.1f, &rng);
         fill_constant(&l->cross_norm_weight, 1.0f);
-        fill_small_uniform(&l->cross_weight_q, 0.1f);
-        fill_small_uniform(&l->cross_weight_k, 0.1f);
-        fill_small_uniform(&l->cross_weight_v, 0.1f);
-        fill_small_uniform(&l->cross_weight_proj, 0.1f);
+        fill_det(&l->cross_weight_q, 0.1f, &rng);
+        fill_det(&l->cross_weight_k, 0.1f, &rng);
+        fill_det(&l->cross_weight_v, 0.1f, &rng);
+        fill_det(&l->cross_weight_proj, 0.1f, &rng);
     }
     for (size_t i = 0; i < model->global->stack.num_layers; i++)
         fill_t_layer(&model->global->stack.layer_storage[i], 0.1f);
     for (size_t i = 0; i < model->decoder->config.num_layers; i++) {
         blt_local_layer_storage *l = &model->decoder->layers[i];
         fill_constant(&l->cross_norm_weight, 1.0f);
-        fill_small_uniform(&l->cross_weight_q, 0.1f);
-        fill_small_uniform(&l->cross_weight_k, 0.1f);
-        fill_small_uniform(&l->cross_weight_v, 0.1f);
-        fill_small_uniform(&l->cross_weight_proj, 0.1f);
+        fill_det(&l->cross_weight_q, 0.1f, &rng);
+        fill_det(&l->cross_weight_k, 0.1f, &rng);
+        fill_det(&l->cross_weight_v, 0.1f, &rng);
+        fill_det(&l->cross_weight_proj, 0.1f, &rng);
         fill_constant(&l->norm1_weight, 1.0f);
-        fill_small_uniform(&l->attn_qkv_w, 0.1f);
-        fill_small_uniform(&l->attn_proj_w, 0.1f);
+        fill_det(&l->attn_qkv_w, 0.1f, &rng);
+        fill_det(&l->attn_proj_w, 0.1f, &rng);
         fill_constant(&l->norm2_weight, 1.0f);
-        fill_small_uniform(&l->ffn_up_w, 0.1f);
-        fill_small_uniform(&l->ffn_gate_w, 0.1f);
-        fill_small_uniform(&l->ffn_down_w, 0.1f);
+        fill_det(&l->ffn_up_w, 0.1f, &rng);
+        fill_det(&l->ffn_gate_w, 0.1f, &rng);
+        fill_det(&l->ffn_down_w, 0.1f, &rng);
     }
-    fill_small_uniform(&model->decoder->lm_head_weight, 0.1f);
+    fill_det(&model->decoder->lm_head_weight, 0.1f, &rng);
     {
         float *tbl = (float *)model->decoder->d0_embed_weight.data;
         for (size_t i = 0; i < model->decoder->d0_embed_weight.numel; i++) tbl[i] = (((i * 13) % 17) - 8.0f) * 0.05f;
@@ -814,7 +833,7 @@ int run_block_diffusion_overfit_gate(void) {
     blt_arena *scratch = blt_arena_create(32 * 1024 * 1024, BLT_BACKEND_CPU);
     TEST_ASSERT(model_arena && scratch);
 
-    blt_model *model = make_tiny_diffusion_model(model_arena);
+    blt_model *model = make_tiny_diffusion_model(model_arena, 0x5EED1234ULL);
     blt_model_grad *grad = blt_model_grad_create(model_arena, model);
     TEST_ASSERT(grad != NULL);
     const size_t E = TINY_E;
@@ -838,8 +857,8 @@ int run_block_diffusion_overfit_gate(void) {
             TEST_ASSERT(M >= 2);
 
             blt_block_batch batch;
-            blt_block_batch_build(&batch, scratch, text, N, patches, M,
-                                  /*B=*/4, /*seed=*/1000 + step);
+            blt_block_batch_build_t(&batch, scratch, text, N, patches, M,
+                                    /*B=*/4, /*seed=*/1000 + step, /*t=*/1.0f);
 
             size_t bshape[1] = {N};
             blt_tensor bytes_in = blt_tensor_create(scratch, bshape, 1, BLT_DTYPE_UINT8);
@@ -968,7 +987,7 @@ int run_block_diffusion_no_label_leak(void) {
     blt_arena *batch_arena = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
     TEST_ASSERT(model_arena && scratch && batch_arena);
 
-    blt_model *model = make_tiny_diffusion_model(model_arena);
+    blt_model *model = make_tiny_diffusion_model(model_arena, 0x5EED1234ULL);
 
     static const uint8_t base[LEAK_N] = {3, 11, 200, 7, 42, 99, 5, 63, 128, 21, 250, 9};
     blt_patch_info patches[8];
