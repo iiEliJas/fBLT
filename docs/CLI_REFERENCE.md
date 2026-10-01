@@ -190,55 +190,17 @@ The run **aborts with exit code 3** if either tripwire fires:
 Both conditions mean the run is not measuring what it claims to, so failing
 loudly beats producing a checkpoint that looks fine.
 
-### Paper-Exact Loss (`--paper-loss 1`)
+### Loss Normalization
 
-| | paper | repo default |
-|---|---|---|
-| `L_clean` (Eq. 5) | `-sum_{i=1}^{N} log p` | **mean** over `N-1` rows |
-| `L_mask` (Eq. 6) | `-(1/t) sum_{blocks} sum_k 1[masked] log p` | `loss_scale * (1/t) * sum` |
-| total (Eq. 7) | `L_clean + L_mask` | same, with `mask_scale` weighting |
+`--paper-loss 1` selects the paper's Eq. 5 + Eq. 6 + Eq. 7 exactly: `L_clean` as
+a sum rather than a mean, and no `mask_scale` weighting. The `1/t` factor and the
+sum over masked cells are already paper-exact, so this only changes `L_clean`.
 
-The `1/t` factor and the sum-over-masked-cells are **already paper-exact**; the
-single code deviation is that `L_clean` is a mean. `--paper-loss 1` scales it
-by `clean_rows`, making both terms the paper's sums.
+`--mask-loss-norm 1` instead makes `L_mask` a per-token mean, which shrinks the
+gradient but deviates from Eq. 6. `--paper-loss` takes precedence over it.
 
-Because `L_clean` then dominates by ~`N`, the clean:mask balance shifts by two
-orders of magnitude versus the default. `mask_scale` should be left at 1.0 for a
-true Eq. 7 sum (`0.3` is a repo stabilization, not the paper).
-
-Measured gradient effect (toy run, `--optimizer adamw`):
-
-| | median pre-clip grad norm | max/min spread |
-|---|---|---|
-| default (mean clean) | 134961 | 40.3x |
-| `--paper-loss 1` | 197805 | **2.5x** |
-
-The spread matters more than the magnitude: a *constant* rescale cancels in
-Adam's `m/sqrt(v)`, while a varying one corrupts the moment estimates. The
-paper form is much closer to constant, so gradient clipping becomes largely
-harmless under it. Gradients are still far above a typical `--max-norm`, so
-re-derive that threshold.
-
-### Mask Loss Normalization
-
-`L_mask` is `1/t` times a **sum** over masked cells, exactly as paper Eq. 6
-writes it. Because the cell count varies with each window's patch count, that
-sum makes the gradient magnitude scale with patch density. A fixed
-`--max-norm` then clips by a factor that differs step to step, and a *varying*
-rescale is what breaks Adam's moment estimates — a constant one would cancel
-in `m/sqrt(v)`.
-
-Measured on a 60-step toy run (`--report-every 20`, 3 samples):
-
-| `--mask-loss-norm` | median pre-clip grad norm | max/min spread |
-|---|---|---|
-| 0 (sum) | 83551 | 68.3x |
-| 1 (per-token mean) | 1201 | **5.6x** |
-
-So `--mask-loss-norm 1` shrinks the gradient ~70x and, more importantly, cuts
-the step-to-step clip-factor spread ~12x. It does not by itself bring the norm
-under a typical `--max-norm` of 5.0, so re-derive that threshold after enabling
-it.
+Both change the loss scale substantially; re-derive `--lr` and `--max-norm` after
+enabling either. Measurements and rationale: `docs/experiments/loss_normalization.md`.
 
 ### Patching
 
