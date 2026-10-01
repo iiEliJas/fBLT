@@ -497,8 +497,8 @@ int main(int argc, char **argv) {
     }
 
     // Print stats to stderr
-    fprintf(stderr, "[infer] nfe_enc_glob=%zu, nfe_dec=%zu, drafted=%zu, accepted=%zu (%.1f%%)\n",
-            st.nfe_encoder_global, st.nfe_decoder, st.bytes_drafted, st.bytes_accepted,
+    fprintf(stderr, "[infer] nfe_enc_glob=%zu, nfe_dec=%zu, drafted=%zu, ar=%zu, accepted=%zu (%.1f%%)\n",
+            st.nfe_encoder_global, st.nfe_decoder, st.bytes_drafted, st.bytes_ar, st.bytes_accepted,
             (double)(100.0f * blt_infer_stats_acceptance_rate(&st)));
     fprintf(stderr, "[infer] wall_clock: %.3f ms\n", elapsed_ms);
 

@@ -263,7 +263,7 @@ size_t blt_draft_block(const blt_model *model, const blt_model_enc_out *enc, con
 
 static void segment_prefix(blt_arena *arena, const blt_entropy_lm *entropy_model,
                            const blt_patcher_config *patcher_config, const uint8_t *bytes, size_t len,
-                           blt_patch_info *patches, size_t max_patches, size_t *num_patches_out) {
+                           blt_patch_info *patches, size_t max_patches, size_t *num_patches_out, float **entropy_out) {
     // Must mirror compute_entropy_vals in self_speculation.c bit-for-bit.
     size_t shape1[1] = {len};
     blt_tensor bytes_in = blt_tensor_create(arena, shape1, 1, BLT_DTYPE_UINT8);
@@ -288,6 +288,11 @@ static void segment_prefix(blt_arena *arena, const blt_entropy_lm *entropy_model
     // The patcher is host-only: stage device entropies through host memory.
     if (ent_tensor.backend == BLT_BACKEND_CPU) {
         *num_patches_out = blt_segment_patches(&ent_tensor, bytes, patches, max_patches, patcher_config);
+        if (entropy_out) {
+            *entropy_out = (float *)malloc(len * sizeof(float));
+            BLT_REQUIRE(*entropy_out != NULL, "segment_prefix: entropy staging alloc failed");
+            memcpy(*entropy_out, ent_tensor.data, len * sizeof(float));
+        }
         return;
     }
     float *ent_host = (float *)malloc(len * sizeof(float));
@@ -296,7 +301,46 @@ static void segment_prefix(blt_arena *arena, const blt_entropy_lm *entropy_model
     blt_tensor ent_view;
     view_1d(&ent_view, ent_host, len, BLT_DTYPE_FP32, BLT_BACKEND_CPU);
     *num_patches_out = blt_segment_patches(&ent_view, bytes, patches, max_patches, patcher_config);
-    free(ent_host);
+    if (entropy_out) {
+        *entropy_out = ent_host;
+    } else {
+        free(ent_host);
+    }
+}
+
+// One greedy AR byte at position `len`, mirroring the clean-row path in
+// generate_greedy.c: re-encode the committed prefix, decode the whole prefix,
+// then argmax the last row. Used to finish an open patch before a block is
+// drafted at the next patch start.
+static uint8_t ar_next_byte(const blt_model *model, const blt_patch_info *patches, size_t num_patches,
+                            const uint8_t *bytes, size_t len, int trailing_closed, blt_arena *scratch) {
+    const size_t V = model->config.decoder_config.vocab_size;
+
+    size_t shape1[1] = {len};
+    blt_tensor prefix_bytes = blt_tensor_create(scratch, shape1, 1, BLT_DTYPE_UINT8);
+    blt_tensor_upload(&prefix_bytes, bytes, len);
+
+    blt_model_enc_out enc;
+    blt_model_encode(model, &prefix_bytes, patches, num_patches, NULL, 0, &enc, scratch);
+
+    size_t vocab_shape[2] = {len, V};
+    blt_tensor logits = blt_tensor_create(scratch, vocab_shape, 2, BLT_DTYPE_FP32);
+    blt_local_decoder_forward_ext(model->decoder, &enc.byte_hidden_out, &enc.global_out, patches, num_patches, NULL,
+                                  NULL, NULL, 0, NULL, trailing_closed, &logits, NULL, scratch);
+
+    // Mirror the staging in generate_greedy.c: the logits may live on the
+    // device, so sync and download the row before reading it from the host.
+    blt_backend_pass_sync(prefix_bytes.backend);
+    float *row = (float *)malloc(V * sizeof(float));
+    BLT_REQUIRE(row != NULL, "ar_next_byte: staging alloc failed");
+    blt_tensor last_row;
+    view_1d(&last_row, (float *)logits.data + (len - 1) * V, V, BLT_DTYPE_FP32, logits.backend);
+    blt_tensor_download(&last_row, row, V * sizeof(float));
+    size_t best = 0;
+    for (size_t v = 1; v < V; v++)
+        if (row[v] > row[best]) best = v;
+    free(row);
+    return (uint8_t)best;
 }
 
 static void generate_common(const blt_model *model, const blt_entropy_lm *entropy_model,
@@ -339,11 +383,44 @@ static void generate_common(const blt_model *model, const blt_entropy_lm *entrop
         enum { MAX_PATCHES = 256 };
         blt_patch_info patches[MAX_PATCHES];
         size_t num_patches = 0;
-        segment_prefix(scratch, entropy_model, patcher_config, output_bytes, l, patches, MAX_PATCHES, &num_patches);
+        float *ent = NULL;
+        segment_prefix(scratch, entropy_model, patcher_config, output_bytes, l, patches, MAX_PATCHES, &num_patches,
+                       &ent);
         BLT_REQUIRE(num_patches >= 1, "blockdiff generation: empty segmentation");
         BLT_REQUIRE(patcher_config->max_patch_length * num_patches >= l || num_patches < MAX_PATCHES,
                     "blockdiff generation: patch array exhausted; increase "
                     "max_patch_length or the segment budget");
+
+        // Fast-BLT Algorithm 1 places every block at a patch start s_i, which
+        // is also the only layout the model is trained on (blt_block_batch_build
+        // starts block j at patches[i].start_idx). Drafting mid-patch would
+        // cross-attend a one-patch-stale latent, so finish the open patch with
+        // AR bytes first; this boundary test flips as soon as the next patch
+        // start is reached. It cannot be hoisted out of the loop because the
+        // boundary depends on bytes that do not exist yet.
+        {
+            const size_t open_start = patches[num_patches - 1].start_idx;
+            const size_t open_len = l - open_start;
+            const int starts_here = blt_next_starts_patch(output_bytes, l, ent, open_start, open_len, patcher_config);
+            if (!starts_here) {
+                // mid-patch: no successor patch yet, so the last prefix byte is
+                // not final and the clean-row path is used unchanged.
+                output_bytes[l] = ar_next_byte(model, patches, num_patches, output_bytes, l, 0, scratch);
+                if (stats) {
+                    // The AR byte costs a prefix re-encode plus one decode.
+                    // Tracked separately from drafted/accepted so the block
+                    // acceptance rate stays a property of block drafts.
+                    stats->nfe_encoder_global++;
+                    stats->nfe_decoder++;
+                    stats->bytes_ar++;
+                }
+                l++;
+                free(ent);
+                scratch->offset = round_marker;
+                continue;
+            }
+        }
+        free(ent);
 
         size_t shape1[1] = {l};
         blt_tensor prefix_bytes = blt_tensor_create(scratch, shape1, 1, BLT_DTYPE_UINT8);

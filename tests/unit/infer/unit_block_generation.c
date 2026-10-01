@@ -655,9 +655,12 @@ int run_blockgen_stage6_helpers(void) {
     // aligned commitment must reproduce greedy byte-for-byte.
     TEST_ASSERT(memcmp(out, ref, prompt_len + new_bytes) == 0);
     TEST_ASSERT(st.bytes_drafted >= st.bytes_accepted);
-    TEST_ASSERT(st.bytes_accepted >= new_bytes - 1); // progress per round
+    // Bytes committed per round come from accepted block drafts plus AR bytes
+    // emitted while finishing an open patch, so both count toward progress.
+    TEST_ASSERT(st.bytes_accepted + st.bytes_ar >= new_bytes - 1);
 
-    printf("[BLOCKGEN] stage6 helpers ok; aligned DV drafted=%zu accepted=%zu\n", st.bytes_drafted, st.bytes_accepted);
+    printf("[BLOCKGEN] stage6 helpers ok; aligned DV drafted=%zu accepted=%zu ar=%zu\n", st.bytes_drafted,
+           st.bytes_accepted, st.bytes_ar);
 
     blt_arena_destroy(model_arena);
     blt_arena_destroy(scratch);
