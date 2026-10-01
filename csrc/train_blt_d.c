@@ -80,6 +80,12 @@ static uint64_t t_rng_next(uint64_t *state) {
 typedef struct {
     double l_clean;
     double l_mask;
+    // Per-masked-token CE, normalised by the masked-cell count and converted
+    // to bits/byte so it is directly comparable to causal_bpb. The raw l_mask
+    // above is a sum over masked cells scaled by 1/t, so it tracks t and the
+    // per-window patch count rather than model quality.
+    double clean_bits;
+    double mask_bits;
     size_t train_hits, train_total;
     size_t novel_hits, novel_total;
     size_t windows;
@@ -164,6 +170,8 @@ static void blt_monitor(const blt_model *model, blt_arena *scratch, blt_arena *s
     if (wins == 0) return;
 
     double lcl = 0.0, lmk = 0.0;
+    double mask_ce_sum = 0.0;
+    size_t mask_cells = 0;
     for (size_t wi = 0; wi < wins; wi++) {
         const uint8_t *text = bytes + wi * a->window;
         const size_t N = a->window;
@@ -231,6 +239,10 @@ static void blt_monitor(const blt_model *model, blt_arena *scratch, blt_arena *s
             mk += -log(fmax(pt / sum, 1e-9));
         }
         if (batch.n_block_rows) lmk += mk / (double)batch.n_block_rows;
+        mask_ce_sum += mk;
+        for (size_t r = 0; r < batch.n_block_rows; r++) {
+            if (batch.cell_masked[r]) mask_cells++;
+        }
         free(L);
 
         // Aligned novel: prefix ends at an interior patch start, so every prefix
@@ -249,6 +261,25 @@ static void blt_monitor(const blt_model *model, blt_arena *scratch, blt_arena *s
         out->l_clean = lcl / (double)out->windows;
         out->l_mask = lmk / (double)out->windows;
     }
+    const double ln2 = 0.6931471805599453;
+    out->clean_bits = out->l_clean / ln2;
+    out->mask_bits = mask_cells ? (mask_ce_sum / (double)mask_cells) / ln2 : 0.0;
+}
+
+// AdamW keeps two float32 moments per parameter, so its state arena has to be
+// sized from the model rather than fixed: a 32 MB constant is fine for the toy
+// configs and silently overflows on any real-sized model.
+static void count_params_fn(float *tensor, const blt_param_info *info, void *ctx) {
+    (void)tensor;
+    (void)info;
+    size_t *n = (size_t *)ctx;
+    *n += info->numel;
+}
+
+static size_t blt_count_params(const blt_model *model) {
+    size_t n = 0;
+    blt_model_visit_params(model, NULL, count_params_fn, &n, 0);
+    return n;
 }
 
 int main(int argc, char **argv) {
@@ -298,7 +329,7 @@ int main(int argc, char **argv) {
     blt_arena *model_arena = blt_arena_create(a.use_cuda ? 1024ULL * 1024 * 1024 : 64 * 1024 * 1024, dev);
     blt_arena *scratch = blt_arena_create(512 * 1024 * 1024, dev);
     blt_arena *adamw_state_arena = NULL;
-    if (a.optimizer == 1) adamw_state_arena = blt_arena_create(32ULL * 1024 * 1024, dev);
+    // sized after the model is built, below
     // Host arena for the segmentation LM + patcher (host-only by design),
     // valid in both backends. Segmentation buffers get their own resettable
     // arena so per-step calls never overwrite the LM weights.
@@ -317,6 +348,15 @@ int main(int argc, char **argv) {
     blt_model_config_defaults(&cfg, a.embed, a.hidden, a.enc_layers, a.glob_layers, a.dec_layers, MS, a.cross_last);
 
     blt_model *model = blt_model_create(model_arena, &cfg);
+
+    if (a.optimizer == 1) {
+        // Two float32 AdamW moments per parameter, plus 1 MB of headroom. A
+        // fixed 32 MB constant fits the toy configs and overflows on any
+        // real-sized model.
+        const size_t n_params = blt_count_params(model);
+        const size_t adamw_bytes = 2 * n_params * sizeof(float) + (1u << 20);
+        adamw_state_arena = blt_arena_create(adamw_bytes, dev);
+    }
     if (a.load_path) {
         blt_model_load(model, a.load_path);
         printf("[CKPT] loaded weights from %s\n", a.load_path);
@@ -557,6 +597,9 @@ int main(int argc, char **argv) {
                 }
             }
             blt_block_batch_build_t(&batch, scratch, text, N, patches, M, a.block_size, a.seed + step, t_draw);
+            // --paper-loss is Eq. 5 + Eq. 7 exactly: both terms are sums.
+            batch.mask_norm = a.paper_loss ? 0 : a.mask_loss_norm;
+            batch.clean_sum = a.paper_loss;
             batch.last_row_scale = a.last_row_scale;
             // Floor the timestep: without it, rare tiny-t draws give 1/t
             // weights up to ~1e6 that dominate gradients and starve
@@ -735,10 +778,10 @@ int main(int argc, char **argv) {
                     const double tacc = mr.train_total ? (double)mr.train_hits / (double)mr.train_total : 0.0;
                     const double nacc = mr.novel_total ? (double)mr.novel_hits / (double)mr.novel_total : 0.0;
                     const double gap = tacc - nacc;
-                    printf(
-                        "[MONITOR] step %zu  L_clean %.4f  L_mask %.4f  train_acc %.4f (n=%zu)  aligned_novel_acc %.4f "
-                        "(n=%zu)  gap %+.4f\n",
-                        step + 1, mr.l_clean, mr.l_mask, tacc, mr.train_total, nacc, mr.novel_total, gap);
+                    printf("[MONITOR] step %zu  L_clean %.4f (%.3f bpb)  L_mask %.4f (raw sum/t)  masked_bpb %.3f  "
+                           "train_acc %.4f (n=%zu)  aligned_novel_acc %.4f (n=%zu)  gap %+.4f\n",
+                           step + 1, mr.l_clean, mr.clean_bits, mr.l_mask, mr.mask_bits, tacc, mr.train_total, nacc,
+                           mr.novel_total, gap);
                     fflush(stdout);
                     // Tripwires: a reintroduced clean-twin leak sends train_acc to
                     // ~1.0; a train/novel split after 5k steps means the layouts

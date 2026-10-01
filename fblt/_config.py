@@ -62,6 +62,8 @@ class TrainConfig:
     eps: float = 1e-08
     weight_decay: float = 0.01
     max_norm: float = 5.0
+    paper_loss: int = 0
+    mask_loss_norm: int = 0
     seed: int = 7
     backend: str = "cpu"
     deterministic: bool = False

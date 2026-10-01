@@ -316,134 +316,143 @@ int run_block_diffusion_gradcheck(void) {
 
     gc_scenario sc;
     gc_setup(scratch, &dims, &sc);
+    // Exercise both L_mask normalizations through the numeric gradcheck, so the
+    // analytic backward is verified against finite differences in each mode.
+    for (int mi = 0; mi < 2; mi++) {
+        for (int cs = 0; cs < 2; cs++) {
+            sc.batch.mask_norm = mi;
+            sc.batch.clean_sum = cs;
+            printf("  mask_norm=%d clean_sum=%d\n", mi, cs);
 
-    const blt_d0_mode mode = BLT_D0_LEARNED;
+            const blt_d0_mode mode = BLT_D0_LEARNED;
 
-    blt_local_decoder_grad *grad = blt_local_decoder_grad_create(model_arena, dec);
-    zero_tensor(&grad->lm_head_grad);
-    zero_tensor(&grad->d0_embed_grad);
-    for (size_t i = 0; i < dec->config.num_layers; i++) {
-        blt_local_layer_grad *g = &grad->layer_grads[i];
-        zero_tensor(&g->norm1_weight);
-        zero_tensor(&g->attn_qkv_w);
-        zero_tensor(&g->attn_proj_w);
-        zero_tensor(&g->norm2_weight);
-        zero_tensor(&g->ffn_up_w);
-        zero_tensor(&g->ffn_gate_w);
-        zero_tensor(&g->ffn_down_w);
-        zero_tensor(&g->cross_norm_weight);
-        zero_tensor(&g->cross_weight_q);
-        zero_tensor(&g->cross_weight_k);
-        zero_tensor(&g->cross_weight_v);
-        zero_tensor(&g->cross_weight_proj);
+            blt_local_decoder_grad *grad = blt_local_decoder_grad_create(model_arena, dec);
+            zero_tensor(&grad->lm_head_grad);
+            zero_tensor(&grad->d0_embed_grad);
+            for (size_t i = 0; i < dec->config.num_layers; i++) {
+                blt_local_layer_grad *g = &grad->layer_grads[i];
+                zero_tensor(&g->norm1_weight);
+                zero_tensor(&g->attn_qkv_w);
+                zero_tensor(&g->attn_proj_w);
+                zero_tensor(&g->norm2_weight);
+                zero_tensor(&g->ffn_up_w);
+                zero_tensor(&g->ffn_gate_w);
+                zero_tensor(&g->ffn_down_w);
+                zero_tensor(&g->cross_norm_weight);
+                zero_tensor(&g->cross_weight_q);
+                zero_tensor(&g->cross_weight_k);
+                zero_tensor(&g->cross_weight_v);
+                zero_tensor(&g->cross_weight_proj);
+            }
+
+            size_t gbh_shape[2] = {sc.N, dims.embed_dim};
+            blt_tensor grad_h = blt_tensor_create(scratch, gbh_shape, 2, BLT_DTYPE_FP32);
+            size_t gp_shape[2] = {sc.num_patches, dims.embed_dim};
+            blt_tensor grad_p = blt_tensor_create(scratch, gp_shape, 2, BLT_DTYPE_FP32);
+
+            blt_local_decoder_backward_diffusion(dec, &sc.h, &sc.pin, sc.patches, sc.num_patches, sc.bytes, NULL,
+                                                 &sc.batch, mode, &grad_h, &grad_p, grad, scratch);
+
+            TEST_ASSERT(sc.batch.t > 0.01f && sc.batch.t < 0.99f); // meaningful masking
+            size_t masked_cells = 0;
+            for (size_t r = 0; r < sc.batch.n_block_rows; r++) masked_cells += sc.batch.cell_masked[r];
+            TEST_ASSERT(masked_cells > 0);
+
+            // central-difference probe: (tensor, flat idx, analytic value)
+            struct probe {
+                blt_tensor *t;
+                size_t idx;
+                float analytic;
+                const char *name;
+            };
+            struct probe probes[] = {
+                {&dec->lm_head_weight, 0, 0, "lm_head[0,0]"},
+                {&dec->layers[0].attn_qkv_w, 0, 0, "qkv[0,0]"},
+                {&dec->layers[0].attn_proj_w, 9, 0, "proj[1,1]"},
+                {&dec->layers[0].ffn_down_w, 0, 0, "ffn_down[0,0]"},
+                {&dec->layers[0].ffn_gate_w, 19, 0, "ffn_gate[3,3]"},
+                {&dec->layers[0].norm1_weight, 2, 0, "norm1[2]"},
+                {&dec->layers[0].norm2_weight, 5, 0, "norm2[5]"},
+                {&dec->layers[0].cross_weight_q, 0, 0, "xq[0,0]"},
+                {&dec->layers[0].cross_norm_weight, 1, 0, "xnorm[1]"},
+                {&dec->d0_embed_weight, 3 * dims.embed_dim + 4, 0, "d0_table[3,4]"},
+            };
+
+            // fill analytic values from the right grad tensors
+            const blt_tensor *grad_map[] = {
+                &grad->lm_head_grad,
+                &grad->layer_grads[0].attn_qkv_w,
+                &grad->layer_grads[0].attn_proj_w,
+                &grad->layer_grads[0].ffn_down_w,
+                &grad->layer_grads[0].ffn_gate_w,
+                &grad->layer_grads[0].norm1_weight,
+                &grad->layer_grads[0].norm2_weight,
+                &grad->layer_grads[0].cross_weight_q,
+                &grad->layer_grads[0].cross_norm_weight,
+                &grad->d0_embed_grad,
+            };
+            for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
+                probes[i].analytic = ((const float *)grad_map[i]->data)[probes[i].idx];
+            }
+
+            const float eps = 1e-3f;
+            size_t failures = 0;
+            for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
+                float *w = (float *)probes[i].t->data;
+                const float saved = w[probes[i].idx];
+
+                w[probes[i].idx] = saved + eps;
+                const float lp = gc_loss(scratch, dec, &sc, mode);
+                w[probes[i].idx] = saved - eps;
+                const float lm = gc_loss(scratch, dec, &sc, mode);
+                w[probes[i].idx] = saved;
+
+                const float numeric = (lp - lm) / (2.0f * eps);
+                const float analytic = probes[i].analytic;
+                const float denom = fmaxf(1.0f, fmaxf(fabsf(numeric), fabsf(analytic)));
+                const float rel = fabsf(numeric - analytic) / denom;
+
+                printf("    %-14s analytic=%+.6f numeric=%+.6f rel=%.2e\n", probes[i].name, (double)analytic,
+                       (double)numeric, (double)rel);
+                if (rel > 2e-2f) failures++;
+            }
+
+            // input gradients: h[2][1] and patch_in[1][2]
+            {
+                const size_t hi = 2 * dims.embed_dim + 1;
+                float *hp = (float *)sc.h.data;
+                const float saved = hp[hi];
+                hp[hi] = saved + eps;
+                float lp = gc_loss(scratch, dec, &sc, mode);
+                hp[hi] = saved - eps;
+                float lm = gc_loss(scratch, dec, &sc, mode);
+                hp[hi] = saved;
+                float numeric = (lp - lm) / (2 * eps);
+                float analytic = ((const float *)grad_h.data)[hi];
+                float rel = fabsf(numeric - analytic) / fmaxf(1.0f, fmaxf(fabsf(numeric), fabsf(analytic)));
+                printf("    %-14s analytic=%+.6f numeric=%+.6f rel=%.2e\n", "d/dh[2,1]", (double)analytic,
+                       (double)numeric, (double)rel);
+                if (rel > 2e-2f) failures++;
+
+                const size_t pi_idx = 1 * dims.embed_dim + 2;
+                float *pp = (float *)sc.pin.data;
+                const float sp = pp[pi_idx];
+                pp[pi_idx] = sp + eps;
+                lp = gc_loss(scratch, dec, &sc, mode);
+                pp[pi_idx] = sp - eps;
+                lm = gc_loss(scratch, dec, &sc, mode);
+                pp[pi_idx] = sp;
+                numeric = (lp - lm) / (2 * eps);
+                analytic = ((const float *)grad_p.data)[pi_idx];
+                rel = fabsf(numeric - analytic) / fmaxf(1.0f, fmaxf(fabsf(numeric), fabsf(analytic)));
+                printf("    %-14s analytic=%+.6f numeric=%+.6f rel=%.2e\n", "d/dpin[1,2]", (double)analytic,
+                       (double)numeric, (double)rel);
+                if (rel > 2e-2f) failures++;
+            }
+
+            TEST_ASSERT(failures == 0);
+        }
     }
-
-    size_t gbh_shape[2] = {sc.N, dims.embed_dim};
-    blt_tensor grad_h = blt_tensor_create(scratch, gbh_shape, 2, BLT_DTYPE_FP32);
-    size_t gp_shape[2] = {sc.num_patches, dims.embed_dim};
-    blt_tensor grad_p = blt_tensor_create(scratch, gp_shape, 2, BLT_DTYPE_FP32);
-
-    blt_local_decoder_backward_diffusion(dec, &sc.h, &sc.pin, sc.patches, sc.num_patches, sc.bytes, NULL, &sc.batch,
-                                         mode, &grad_h, &grad_p, grad, scratch);
-
-    TEST_ASSERT(sc.batch.t > 0.01f && sc.batch.t < 0.99f); // meaningful masking
-    size_t masked_cells = 0;
-    for (size_t r = 0; r < sc.batch.n_block_rows; r++) masked_cells += sc.batch.cell_masked[r];
-    TEST_ASSERT(masked_cells > 0);
-
-    // central-difference probe: (tensor, flat idx, analytic value)
-    struct probe {
-        blt_tensor *t;
-        size_t idx;
-        float analytic;
-        const char *name;
-    };
-    struct probe probes[] = {
-        {&dec->lm_head_weight, 0, 0, "lm_head[0,0]"},
-        {&dec->layers[0].attn_qkv_w, 0, 0, "qkv[0,0]"},
-        {&dec->layers[0].attn_proj_w, 9, 0, "proj[1,1]"},
-        {&dec->layers[0].ffn_down_w, 0, 0, "ffn_down[0,0]"},
-        {&dec->layers[0].ffn_gate_w, 19, 0, "ffn_gate[3,3]"},
-        {&dec->layers[0].norm1_weight, 2, 0, "norm1[2]"},
-        {&dec->layers[0].norm2_weight, 5, 0, "norm2[5]"},
-        {&dec->layers[0].cross_weight_q, 0, 0, "xq[0,0]"},
-        {&dec->layers[0].cross_norm_weight, 1, 0, "xnorm[1]"},
-        {&dec->d0_embed_weight, 3 * dims.embed_dim + 4, 0, "d0_table[3,4]"},
-    };
-
-    // fill analytic values from the right grad tensors
-    const blt_tensor *grad_map[] = {
-        &grad->lm_head_grad,
-        &grad->layer_grads[0].attn_qkv_w,
-        &grad->layer_grads[0].attn_proj_w,
-        &grad->layer_grads[0].ffn_down_w,
-        &grad->layer_grads[0].ffn_gate_w,
-        &grad->layer_grads[0].norm1_weight,
-        &grad->layer_grads[0].norm2_weight,
-        &grad->layer_grads[0].cross_weight_q,
-        &grad->layer_grads[0].cross_norm_weight,
-        &grad->d0_embed_grad,
-    };
-    for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
-        probes[i].analytic = ((const float *)grad_map[i]->data)[probes[i].idx];
-    }
-
-    const float eps = 1e-3f;
-    size_t failures = 0;
-    for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
-        float *w = (float *)probes[i].t->data;
-        const float saved = w[probes[i].idx];
-
-        w[probes[i].idx] = saved + eps;
-        const float lp = gc_loss(scratch, dec, &sc, mode);
-        w[probes[i].idx] = saved - eps;
-        const float lm = gc_loss(scratch, dec, &sc, mode);
-        w[probes[i].idx] = saved;
-
-        const float numeric = (lp - lm) / (2.0f * eps);
-        const float analytic = probes[i].analytic;
-        const float denom = fmaxf(1.0f, fmaxf(fabsf(numeric), fabsf(analytic)));
-        const float rel = fabsf(numeric - analytic) / denom;
-
-        printf("    %-14s analytic=%+.6f numeric=%+.6f rel=%.2e\n", probes[i].name, (double)analytic, (double)numeric,
-               (double)rel);
-        if (rel > 2e-2f) failures++;
-    }
-
-    // input gradients: h[2][1] and patch_in[1][2]
-    {
-        const size_t hi = 2 * dims.embed_dim + 1;
-        float *hp = (float *)sc.h.data;
-        const float saved = hp[hi];
-        hp[hi] = saved + eps;
-        float lp = gc_loss(scratch, dec, &sc, mode);
-        hp[hi] = saved - eps;
-        float lm = gc_loss(scratch, dec, &sc, mode);
-        hp[hi] = saved;
-        float numeric = (lp - lm) / (2 * eps);
-        float analytic = ((const float *)grad_h.data)[hi];
-        float rel = fabsf(numeric - analytic) / fmaxf(1.0f, fmaxf(fabsf(numeric), fabsf(analytic)));
-        printf("    %-14s analytic=%+.6f numeric=%+.6f rel=%.2e\n", "d/dh[2,1]", (double)analytic, (double)numeric,
-               (double)rel);
-        if (rel > 2e-2f) failures++;
-
-        const size_t pi_idx = 1 * dims.embed_dim + 2;
-        float *pp = (float *)sc.pin.data;
-        const float sp = pp[pi_idx];
-        pp[pi_idx] = sp + eps;
-        lp = gc_loss(scratch, dec, &sc, mode);
-        pp[pi_idx] = sp - eps;
-        lm = gc_loss(scratch, dec, &sc, mode);
-        pp[pi_idx] = sp;
-        numeric = (lp - lm) / (2 * eps);
-        analytic = ((const float *)grad_p.data)[pi_idx];
-        rel = fabsf(numeric - analytic) / fmaxf(1.0f, fmaxf(fabsf(numeric), fabsf(analytic)));
-        printf("    %-14s analytic=%+.6f numeric=%+.6f rel=%.2e\n", "d/dpin[1,2]", (double)analytic, (double)numeric,
-               (double)rel);
-        if (rel > 2e-2f) failures++;
-    }
-
-    TEST_ASSERT(failures == 0);
 
     blt_arena_destroy(scratch);
     blt_arena_destroy(model_arena);
