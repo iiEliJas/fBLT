@@ -1,4 +1,12 @@
 # BLT-D training on TinyStories (2 enc / 6 global / 2 dec)
+#
+# Paper-exact loss (Fast-BLT Eq. 5 + 6 + 7). paper-loss makes L_clean a sum
+# rather than a mean, scaling the gradient by ~clean_rows, so lr, max-norm and
+# mask-scale move with it rather than being changed alone. Values follow the
+# 30k-step probe recipe; see docs/experiments/paper_loss_probe.md.
+#
+# mask-warmup is dropped on purpose: it ramps loss_scale from 0, and Eq. 7 is an
+# unweighted sum, so loss_scale stays at 1.0 for the whole run.
 corpus: data/tinystories/train.bin
 eval-corpus: data/tinystories/heldout.bin
 embed: 256
@@ -7,17 +15,18 @@ enc-layers: 2
 glob-layers: 6
 dec-layers: 2
 steps: 300000
-lr: 0.05
+optimizer: adamw
+lr: 0.0001
 lr-decay: 1
-optimizer: sgd
+paper-loss: 1
+mask-scale: 1.0
+max-norm: 20000
 diffusion: 1
 block-size: 4
-window: 512 
+window: 512
 t-min: 0.1
 t-warmup-hi: 0.25
 t-hi-start: 0.8
-mask-warmup: 180000
-mask-scale: 0.3
 cross-attn: all
 report-every: 1000
 cuda-scratch-mb: 1024
@@ -25,3 +34,5 @@ entropy-patches: true
 entropy-lm: runs/entropylm/entropy_lm.fblt
 save-weights: runs/tinystories.fblt
 save-every: 10000
+monitor-every: 2000
+monitor-windows: 48
