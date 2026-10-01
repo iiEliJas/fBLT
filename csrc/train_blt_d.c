@@ -80,6 +80,12 @@ static uint64_t t_rng_next(uint64_t *state) {
 typedef struct {
     double l_clean;
     double l_mask;
+    // Per-masked-token CE, normalised by the masked-cell count and converted
+    // to bits/byte so it is directly comparable to causal_bpb. The raw l_mask
+    // above is a sum over masked cells scaled by 1/t, so it tracks t and the
+    // per-window patch count rather than model quality.
+    double clean_bits;
+    double mask_bits;
     size_t train_hits, train_total;
     size_t novel_hits, novel_total;
     size_t windows;
@@ -164,6 +170,8 @@ static void blt_monitor(const blt_model *model, blt_arena *scratch, blt_arena *s
     if (wins == 0) return;
 
     double lcl = 0.0, lmk = 0.0;
+    double mask_ce_sum = 0.0;
+    size_t mask_cells = 0;
     for (size_t wi = 0; wi < wins; wi++) {
         const uint8_t *text = bytes + wi * a->window;
         const size_t N = a->window;
@@ -231,6 +239,10 @@ static void blt_monitor(const blt_model *model, blt_arena *scratch, blt_arena *s
             mk += -log(fmax(pt / sum, 1e-9));
         }
         if (batch.n_block_rows) lmk += mk / (double)batch.n_block_rows;
+        mask_ce_sum += mk;
+        for (size_t r = 0; r < batch.n_block_rows; r++) {
+            if (batch.cell_masked[r]) mask_cells++;
+        }
         free(L);
 
         // Aligned novel: prefix ends at an interior patch start, so every prefix
@@ -249,6 +261,9 @@ static void blt_monitor(const blt_model *model, blt_arena *scratch, blt_arena *s
         out->l_clean = lcl / (double)out->windows;
         out->l_mask = lmk / (double)out->windows;
     }
+    const double ln2 = 0.6931471805599453;
+    out->clean_bits = out->l_clean / ln2;
+    out->mask_bits = mask_cells ? (mask_ce_sum / (double)mask_cells) / ln2 : 0.0;
 }
 
 int main(int argc, char **argv) {
@@ -735,10 +750,10 @@ int main(int argc, char **argv) {
                     const double tacc = mr.train_total ? (double)mr.train_hits / (double)mr.train_total : 0.0;
                     const double nacc = mr.novel_total ? (double)mr.novel_hits / (double)mr.novel_total : 0.0;
                     const double gap = tacc - nacc;
-                    printf(
-                        "[MONITOR] step %zu  L_clean %.4f  L_mask %.4f  train_acc %.4f (n=%zu)  aligned_novel_acc %.4f "
-                        "(n=%zu)  gap %+.4f\n",
-                        step + 1, mr.l_clean, mr.l_mask, tacc, mr.train_total, nacc, mr.novel_total, gap);
+                    printf("[MONITOR] step %zu  L_clean %.4f (%.3f bpb)  L_mask %.4f (raw sum/t)  masked_bpb %.3f  "
+                           "train_acc %.4f (n=%zu)  aligned_novel_acc %.4f (n=%zu)  gap %+.4f\n",
+                           step + 1, mr.l_clean, mr.clean_bits, mr.l_mask, mr.mask_bits, tacc, mr.train_total, nacc,
+                           mr.novel_total, gap);
                     fflush(stdout);
                     // Tripwires: a reintroduced clean-twin leak sends train_acc to
                     // ~1.0; a train/novel split after 5k steps means the layouts

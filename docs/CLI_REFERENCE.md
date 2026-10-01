@@ -159,7 +159,8 @@ Every `--monitor-every` steps, on `--monitor-windows` held-out windows at
 `t=1.0`, training logs one line:
 
 ```
-[MONITOR] step N  L_clean F  L_mask F  train_acc F (n=N)  aligned_novel_acc F (n=N)  gap F
+[MONITOR] step N  L_clean F (F bpb)  L_mask F (raw sum/t)  masked_bpb F
+            train_acc F (n=N)  aligned_novel_acc F (n=N)  gap F
 ```
 
 `train_acc` is masked-cell accuracy in the training layout; `aligned_novel_acc`
@@ -168,6 +169,15 @@ exactly at a patch start, where no clean row exists to copy from. A mask that
 lets a block row read the clean twin at its own target position drives
 `train_acc` toward 1.0; a mask that leaks across blocks opens a gap between the
 two.
+
+`L_mask` is the raw training term: a **sum** over masked cells scaled by `1/t`
+(Eq. 6 carries the `1/t` factor, and `mask_scale` weights it), so its magnitude
+tracks the sampled `t` and the per-window patch count rather than model quality
+— it is not a per-token loss and should not be compared against `L_total`
+values from the paper, which use unscaled sums for both terms. For a
+comparable figure use **`masked_bpb`** (per-masked-token cross-entropy in
+bits/byte) and the `bpb` beside `L_clean`; both divide out `t` and the cell
+count, and 8.0 bits/byte is uniform guessing over256 symbols.
 
 The run **aborts with exit code 3** if either tripwire fires:
 
