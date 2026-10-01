@@ -39,6 +39,7 @@ typedef struct {
     size_t mask_warmup;
     float mask_scale;
     float last_row_scale;
+    int mask_loss_norm; // 1 = L_mask is a per-token mean over masked cells
     const char *train_entlm;
     const char *entropy_lm;
     size_t mask_late_step;

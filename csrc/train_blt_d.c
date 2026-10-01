@@ -572,6 +572,7 @@ int main(int argc, char **argv) {
                 }
             }
             blt_block_batch_build_t(&batch, scratch, text, N, patches, M, a.block_size, a.seed + step, t_draw);
+            batch.mask_norm = a.mask_loss_norm;
             batch.last_row_scale = a.last_row_scale;
             // Floor the timestep: without it, rare tiny-t draws give 1/t
             // weights up to ~1e6 that dominate gradients and starve

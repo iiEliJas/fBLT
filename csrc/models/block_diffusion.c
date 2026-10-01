@@ -463,8 +463,10 @@ void blt_local_decoder_forward_diffusion(const blt_local_decoder *model, const b
         BLT_REQUIRE(logits_host != NULL, "forward_diffusion: staging alloc failed");
         blt_tensor_download(&logits, logits_host, logits.numel * sizeof(float));
         float l_mask = 0.0f;
+        size_t n_masked_cells = 0;
         for (size_t r = 0; r < c.R; r++) {
             if (!batch->cell_masked[r]) continue;
+            n_masked_cells++;
             const float *row = logits_host + (c.N + r) * c.V;
             // -log p[target], stable
             float max_val = row[0];
@@ -481,6 +483,7 @@ void blt_local_decoder_forward_diffusion(const blt_local_decoder *model, const b
             l_mask += -logf(fmaxf(pt / sum, 1e-9f));
         }
         free(logits_host);
+        if (batch->mask_norm && n_masked_cells > 0) l_mask /= (float)n_masked_cells;
         loss += batch->loss_scale * l_mask / batch->t;
     }
 
@@ -544,7 +547,13 @@ void blt_local_decoder_backward_diffusion(const blt_local_decoder *model, const 
     }
 
     if (batch->t > 0.0f && batch->loss_scale != 0.0f) {
-        const float inv_t = batch->loss_scale / batch->t;
+        float inv_t = batch->loss_scale / batch->t;
+        if (batch->mask_norm) {
+            size_t n_masked_cells = 0;
+            for (size_t r = 0; r < c.R; r++)
+                if (batch->cell_masked[r]) n_masked_cells++;
+            if (n_masked_cells > 0) inv_t /= (float)n_masked_cells;
+        }
         float *gl = (float *)grad_logits.data;
         // Masked-cell gradient math runs on a host copy of the logits; the
         // finished rows are written back one at a time.

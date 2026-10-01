@@ -56,6 +56,12 @@ typedef struct {
     float last_row_scale; // multiplier (w) on row N-1's L_clean contribution when
                           // targets != NULL (all-rows path). The row is counted w
                           // times: loss += (w-1)/N * CE_last. Default 1.0 = off.
+    int mask_norm;        // 0 = L_mask is a SUM over masked cells (legacy, and
+                          // what paper Eq. 6 literally writes); 1 = divide by the
+                          // masked-cell count so L_mask is a per-token mean.
+                          // The sum form scales the gradient with the number of
+                          // patches in the window, which makes a fixed global-norm
+                          // clip saturate by a per-step-varying factor. Default 0.
 } blt_block_batch;
 
 // Builds one corrupted training example (Fast-BLT §3.2.1).

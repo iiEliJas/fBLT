@@ -109,6 +109,7 @@ args_t parse_args(int argc, char **argv) {
                 .mask_warmup = 0,
                 .mask_scale = 1.0f,
                 .last_row_scale = 1.0f,
+                .mask_loss_norm = 0,
                 .mask_late_step = 0,
                 .mask_late_scale = 1.0f,
                 .entropy_patches = 0,
@@ -172,6 +173,7 @@ args_t parse_args(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--lr-decay-factor") && i + 1 < argc) a.lr_decay_factor = atof(argv[++i]);
         else if (!strcmp(argv[i], "--mask-warmup") && i + 1 < argc) a.mask_warmup = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--mask-scale") && i + 1 < argc) a.mask_scale = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--mask-loss-norm") && i + 1 < argc) a.mask_loss_norm = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--last-row-scale") && i + 1 < argc) a.last_row_scale = atof(argv[++i]);
         else if (!strcmp(argv[i], "--mask-late-step") && i + 1 < argc) a.mask_late_step = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--mask-late-scale") && i + 1 < argc) a.mask_late_scale = atof(argv[++i]);

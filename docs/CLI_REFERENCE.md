@@ -151,6 +151,7 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 | `--mask-scale F` | 1.0 | Ceiling for L_mask weight |
 | `--mask-late-step N` + `--mask-late-scale F` | 0 | Late ramp from mask_scale to mask_late_scale |
 | `--t-warmup-hi F` + `--t-hi-start F` | 0 + 0.8 | High-t curriculum (fraction + start floor) |
+| `--mask-loss-norm 0\|1` | 0 | 1 = L_mask is a per-token mean over masked cells; 0 = sum over masked cells (paper Eq. 6 literally writes a sum) |
 | `--last-row-scale F` | 1.0 | Scale row N-1's L_clean (corrected window+1 targets only); ~511 evens its gradient with the interior rows (1.0 = off) |
 
 ### Leak Monitor
@@ -187,6 +188,27 @@ The run **aborts with exit code 3** if either tripwire fires:
 
 Both conditions mean the run is not measuring what it claims to, so failing
 loudly beats producing a checkpoint that looks fine.
+
+### Mask Loss Normalization
+
+`L_mask` is `1/t` times a **sum** over masked cells, exactly as paper Eq. 6
+writes it. Because the cell count varies with each window's patch count, that
+sum makes the gradient magnitude scale with patch density. A fixed
+`--max-norm` then clips by a factor that differs step to step, and a *varying*
+rescale is what breaks Adam's moment estimates — a constant one would cancel
+in `m/sqrt(v)`.
+
+Measured on a 60-step toy run (`--report-every 20`, 3 samples):
+
+| `--mask-loss-norm` | median pre-clip grad norm | max/min spread |
+|---|---|---|
+| 0 (sum) | 83551 | 68.3x |
+| 1 (per-token mean) | 1201 | **5.6x** |
+
+So `--mask-loss-norm 1` shrinks the gradient ~70x and, more importantly, cuts
+the step-to-step clip-factor spread ~12x. It does not by itself bring the norm
+under a typical `--max-norm` of 5.0, so re-derive that threshold after enabling
+it.
 
 ### Patching
 
