@@ -136,6 +136,8 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 | `--eval-windows N` | Eval window count (default 200) |
 | `--eval-skip N` | Bytes to skip before first eval window |
 | `--eval-every N` | Run causal BPB eval every N steps (default 0, disabled) |
+| `--monitor-every N` | Leak-monitor interval in steps (default 2000, 0 = disabled) |
+| `--monitor-windows N` | Held-out windows per monitor check (default 24) |
 
 ### Diffusion Schedule
 
@@ -150,6 +152,31 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 | `--mask-late-step N` + `--mask-late-scale F` | 0 | Late ramp from mask_scale to mask_late_scale |
 | `--t-warmup-hi F` + `--t-hi-start F` | 0 + 0.8 | High-t curriculum (fraction + start floor) |
 | `--last-row-scale F` | 1.0 | Scale row N-1's L_clean (corrected window+1 targets only); ~511 evens its gradient with the interior rows (1.0 = off) |
+
+### Leak Monitor
+
+Every `--monitor-every` steps, on `--monitor-windows` held-out windows at
+`t=1.0`, training logs one line:
+
+```
+[MONITOR] step N  L_clean F  L_mask F  train_acc F (n=N)  aligned_novel_acc F (n=N)  gap F
+```
+
+`train_acc` is masked-cell accuracy in the training layout; `aligned_novel_acc`
+is masked-cell accuracy for a single block placed after a prefix that ends
+exactly at a patch start, where no clean row exists to copy from. A mask that
+lets a block row read the clean twin at its own target position drives
+`train_acc` toward 1.0; a mask that leaks across blocks opens a gap between the
+two.
+
+The run **aborts with exit code 3** if either tripwire fires:
+
+- `train_acc > 0.95` — the clean-twin leak is back
+- `train_acc - aligned_novel_acc > 0.10` after 5k steps — the layouts disagree,
+  which a leak-free block mask should prevent
+
+Both conditions mean the run is not measuring what it claims to, so failing
+loudly beats producing a checkpoint that looks fine.
 
 ### Patching
 
@@ -359,6 +386,47 @@ Evaluation tools for measuring prediction accuracy on held-out data. All three s
 | `--entropy-lm FILE` | (none) | Trained entropy-LM weights for patching |
 
 Build: `cmake --build build --target sanity_check`, `cmake --build build --target last_row_acc`, `cmake --build build --target pos_accuracy`
+
+---
+
+### `masked_acc` — Masked-cell accuracy by layout
+
+Build: `cmake --build build --target masked_acc`
+
+Measures masked-cell top-1 accuracy separately for each layout, so a layout
+that can copy a clean twin is never compared against one that cannot.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--checkpoint FILE` | *required* | Model checkpoint (.fblt) |
+| `--corpus FILE` | *required* | Held-out byte corpus |
+| `--entropy-lm FILE` | (none) | Entropy-LM weights; required unless `--patcher fixed` |
+| `--layout twin\|novel` | twin | `novel` adds the two inference-time layouts |
+| `--t F` | 0.5, 1.0 | Mask probability; repeatable |
+| `--block-size N` | 4 | Cells per block |
+| `--windows N` | 32 | Held-out windows to evaluate |
+| `--sites N` | 1 | Novel-layout sites sampled per window |
+| `--novel-prefix-max N` | 256 | Cap on novel-layout prefix length in bytes |
+| `--patcher entropy\|fixed` | entropy | Segmentation rule; `fixed` is deterministic |
+| `--guard` | off | Assert the leak tripwires at `t=1.0` and exit 1 on failure |
+
+With `--layout novel`, four layouts are reported per `t`:
+
+| Layout | Block placement | Cross-attention |
+|--------|-----------------|----------------|
+| `train` | at a patch start `s_i` | `o_{i-1}` (training rule) |
+| `train_lastlat` | at a patch start `s_i` | last closed latent |
+| `aligned` | after a prefix ending exactly at a patch start | last closed latent |
+| `midpatch` | after a prefix ending 1..max_patch_len-1 bytes into an open patch | last closed latent |
+
+The last two have no clean row at the block's own position, so nothing can be
+copied. Output gives overall accuracy, cell 0 vs cell B−1 accuracy, and AR
+top-1 on clean rows, plus 95% CIs on the convention and aligned-vs-midpatch
+deltas. `aligned` is the headline number.
+
+`--guard` fails (exit 1) when train-layout accuracy at `t=1.0` reaches 0.99 or
+above (clean-twin leak) or differs from `aligned` by 0.10 or more (mask leak).
+It requires `--layout novel`, and a `--t 1.0` sweep point.
 
 ---
 
