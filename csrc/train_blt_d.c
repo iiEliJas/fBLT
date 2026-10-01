@@ -266,6 +266,22 @@ static void blt_monitor(const blt_model *model, blt_arena *scratch, blt_arena *s
     out->mask_bits = mask_cells ? (mask_ce_sum / (double)mask_cells) / ln2 : 0.0;
 }
 
+// AdamW keeps two float32 moments per parameter, so its state arena has to be
+// sized from the model rather than fixed: a 32 MB constant is fine for the toy
+// configs and silently overflows on any real-sized model.
+static void count_params_fn(float *tensor, const blt_param_info *info, void *ctx) {
+    (void)tensor;
+    (void)info;
+    size_t *n = (size_t *)ctx;
+    *n += info->numel;
+}
+
+static size_t blt_count_params(const blt_model *model) {
+    size_t n = 0;
+    blt_model_visit_params(model, NULL, count_params_fn, &n, 0);
+    return n;
+}
+
 int main(int argc, char **argv) {
     args_t a = parse_args(argc, argv);
 
@@ -313,7 +329,7 @@ int main(int argc, char **argv) {
     blt_arena *model_arena = blt_arena_create(a.use_cuda ? 1024ULL * 1024 * 1024 : 64 * 1024 * 1024, dev);
     blt_arena *scratch = blt_arena_create(512 * 1024 * 1024, dev);
     blt_arena *adamw_state_arena = NULL;
-    if (a.optimizer == 1) adamw_state_arena = blt_arena_create(32ULL * 1024 * 1024, dev);
+    // sized after the model is built, below
     // Host arena for the segmentation LM + patcher (host-only by design),
     // valid in both backends. Segmentation buffers get their own resettable
     // arena so per-step calls never overwrite the LM weights.
@@ -332,6 +348,15 @@ int main(int argc, char **argv) {
     blt_model_config_defaults(&cfg, a.embed, a.hidden, a.enc_layers, a.glob_layers, a.dec_layers, MS, a.cross_last);
 
     blt_model *model = blt_model_create(model_arena, &cfg);
+
+    if (a.optimizer == 1) {
+        // Two float32 AdamW moments per parameter, plus 1 MB of headroom. A
+        // fixed 32 MB constant fits the toy configs and overflows on any
+        // real-sized model.
+        const size_t n_params = blt_count_params(model);
+        const size_t adamw_bytes = 2 * n_params * sizeof(float) + (1u << 20);
+        adamw_state_arena = blt_arena_create(adamw_bytes, dev);
+    }
     if (a.load_path) {
         blt_model_load(model, a.load_path);
         printf("[CKPT] loaded weights from %s\n", a.load_path);
