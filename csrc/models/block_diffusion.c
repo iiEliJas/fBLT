@@ -443,6 +443,8 @@ void blt_local_decoder_forward_diffusion(const blt_local_decoder *model, const b
 
         blt_cross_entropy_forward(&logits_view, &targets_t, loss_out);
         blt_tensor_download(loss_out, &loss, sizeof(float));
+        // cross_entropy_forward yields a mean; paper Eq. 5 is a sum over i=1..N.
+        if (batch->clean_sum) loss *= (float)clean_rows;
         if (targets != NULL && batch->last_row_scale != 1.0f) {
             blt_tensor last_row_view;
             blt_tensor_view_2d(&last_row_view, (float *)logits.data + (c.N - 1) * c.V, 1, c.V, logits.backend);
@@ -537,6 +539,7 @@ void blt_local_decoder_backward_diffusion(const blt_local_decoder *model, const 
         size_t gv_shape[2] = {clean_rows, c.V};
         blt_tensor grad_view = blt_tensor_create(arena, gv_shape, 2, BLT_DTYPE_FP32);
         blt_cross_entropy_backward(&logits_view, &targets_t, &grad_view);
+        if (batch->clean_sum) blt_scale(&grad_view, (float)clean_rows);
         if (targets != NULL && batch->last_row_scale != 1.0f) {
             blt_tensor last_grad_view;
             blt_tensor_view_2d(&last_grad_view, (float *)grad_view.data + (c.N - 1) * c.V, 1, c.V, grad_view.backend);

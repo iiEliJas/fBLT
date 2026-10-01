@@ -151,6 +151,7 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 | `--mask-scale F` | 1.0 | Ceiling for L_mask weight |
 | `--mask-late-step N` + `--mask-late-scale F` | 0 | Late ramp from mask_scale to mask_late_scale |
 | `--t-warmup-hi F` + `--t-hi-start F` | 0 + 0.8 | High-t curriculum (fraction + start floor) |
+| `--paper-loss 0\|1` | 0 | 1 = paper-exact loss: `L_clean` a SUM (Eq. 5) and `L_mask` a SUM (Eq. 6), combined per Eq. 7. Implies `--mask-loss-norm 0` |
 | `--mask-loss-norm 0\|1` | 0 | 1 = L_mask is a per-token mean over masked cells; 0 = sum over masked cells (paper Eq. 6 literally writes a sum) |
 | `--last-row-scale F` | 1.0 | Scale row N-1's L_clean (corrected window+1 targets only); ~511 evens its gradient with the interior rows (1.0 = off) |
 
@@ -188,6 +189,35 @@ The run **aborts with exit code 3** if either tripwire fires:
 
 Both conditions mean the run is not measuring what it claims to, so failing
 loudly beats producing a checkpoint that looks fine.
+
+### Paper-Exact Loss (`--paper-loss 1`)
+
+| | paper | repo default |
+|---|---|---|
+| `L_clean` (Eq. 5) | `-sum_{i=1}^{N} log p` | **mean** over `N-1` rows |
+| `L_mask` (Eq. 6) | `-(1/t) sum_{blocks} sum_k 1[masked] log p` | `loss_scale * (1/t) * sum` |
+| total (Eq. 7) | `L_clean + L_mask` | same, with `mask_scale` weighting |
+
+The `1/t` factor and the sum-over-masked-cells are **already paper-exact**; the
+single code deviation is that `L_clean` is a mean. `--paper-loss 1` scales it
+by `clean_rows`, making both terms the paper's sums.
+
+Because `L_clean` then dominates by ~`N`, the clean:mask balance shifts by two
+orders of magnitude versus the default. `mask_scale` should be left at 1.0 for a
+true Eq. 7 sum (`0.3` is a repo stabilization, not the paper).
+
+Measured gradient effect (toy run, `--optimizer adamw`):
+
+| | median pre-clip grad norm | max/min spread |
+|---|---|---|
+| default (mean clean) | 134961 | 40.3x |
+| `--paper-loss 1` | 197805 | **2.5x** |
+
+The spread matters more than the magnitude: a *constant* rescale cancels in
+Adam's `m/sqrt(v)`, while a varying one corrupts the moment estimates. The
+paper form is much closer to constant, so gradient clipping becomes largely
+harmless under it. Gradients are still far above a typical `--max-norm`, so
+re-derive that threshold.
 
 ### Mask Loss Normalization
 
