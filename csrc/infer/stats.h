@@ -17,6 +17,7 @@ typedef struct {
     size_t nfe_decoder;        // decoder-only invocations (drafts, verification decodes)
     size_t bytes_drafted;      // speculative bytes produced
     size_t bytes_accepted;     // committed bytes from drafting (includes forced progress)
+    size_t bytes_ar;           // bytes produced by AR fallback instead of a block draft
 } blt_infer_stats;
 
 // Zeroes all counters.
