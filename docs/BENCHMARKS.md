@@ -1,148 +1,235 @@
 # Benchmarks
 
-Inference verification at 2.97M parameters (embed=192, hidden=384, 2/2/2 layers, 40k steps, 83% warmup, mask-scale 0.3, high-t warmup on).
+Inference verification on the 7.8M-parameter TinyStories BLT-D checkpoint (embed=256, hidden=512,
+2 encoder / 6 global / 2 decoder layers, 600k steps, AdamW, `block_size=4`, entropy patching).
 
 ## Headline finding
 
-**At 2.97M params, all verified inference methods (BLT-S, BLT-DV) cost more memory bandwidth than greedy.** BLT-DV acceptance rates (1.6-5.2%) are 18-42x lower than the paper's 3B results. Root cause likely because of to the 340x scale gap (paper's smallest model is 1B params). **OPEN** item: follow-up testing on a larger checkpoint needed.
+**At this scale BLT-DV is a net win, but only at the trained block size.** At `B=4`, with the
+entropy LM the model was trained with, BLT-DV accepts 65% of drafted bytes and produces output
+byte-identical to greedy, at 0.85x the memory bandwidth and 0.89x the wall-clock of greedy
+(350 ms vs 394 ms per 64-byte prompt). Adaptive-B, which starts at `B=8` and backs off, recovers
+most of that: 35.2% acceptance at 0.99x bandwidth.
+
+Every configuration at `B=8` or above loses badly, because block cells past the trained `B` form a
+bidirectional block that L_mask never supervised. BLT-S (self-speculation) is a net loss at every
+window size tested. So the honest summary is: verified speculation helps at this scale only where
+the draft matches what the model was trained to draft.
 
 ## Setup
 
 | | |
 |---|---|
-| Checkpoint | `s101.fblt` (2.97M params) | (Note: public checkpoint will be uploaded soon)
-| Corpus | 67.5 MB C code (`data/train.bin`), 3.7 MB held-out (`data/heldout.bin`) |
-| Model | BLT: local encoder + global patch transformer + local decoder, 2 layers each, E=192, H=384 |
-| Prompts | 8 held-out prompts, 64 bytes each so combined over 512 bytes per config |
-| Quality metric | BPB (bits per byte, lower is better) |
-| Speed metrics | NFE (forward passes per byte), bandwidth (Eq. 8 from Fast-BLT paper) |
+| Checkpoints | `runs/tinystories_600k/tinystories_600k.fblt` (7.83M params), `runs/tinystories_300k/tinystories_paper_360k.fblt` |
+| Entropy LM | `runs/entropylm/entropy_lm.fblt` (required, see below) |
+| Corpus | TinyStories, 171.6 MB train (`data/tinystories/train.bin`), 9.1 MB held out (`data/tinystories/heldout.bin`) |
+| Prompts | 8 held-out prompts at offsets `200000 + p*100000`, 64 bytes each, 64 new bytes |
+| Quality metrics | causal BPB, masked-cell accuracy |
+| Speed metrics | NFE/byte, bandwidth (Eq. 8), wall-clock |
+
+### Passing the entropy LM is not optional
+
+`--entropy-lm` is **required** whenever entropy patching is used. A random-init entropy LM puts
+per-byte entropy near `ln(256) = 5.54`, above the 2.5 patch threshold at every position, so every
+byte starts its own patch and the model runs on an all-1-byte-patch layout it never saw in
+training. `bin/infer` and `infer_bench` both fail hard rather than measure this; `--fixed-patches`
+is the one legitimate case that needs no LM.
+
+## Model quality
+
+Two checkpoints from the same run, evaluated on the held-out split
+(`train_blt_d --steps 0 --eval-windows 200`, 102,400 bytes):
+
+| checkpoint | causal BPB (held out) |
+|---|---:|
+| 30k probe | 1.7536 |
+| 360k | 1.1611 |
+| 600k | **0.9978** |
+
+Quality improves monotonically with training. There is no overfitting: the whole 600k-step run is
+1.07 epochs over 171.6 MB, so the model has seen each byte roughly once.
 
 ## Inference methods
 
-| Method | How it generates | Expected cost |
+| Method | How it generates | Cost |
 |---|---|---|
-| **greedy** (baseline) | one full encoder+global+decoder forward per byte | 1.0 decoder NFE/byte, 1.0 enc NFE/byte |
-| **BLT-S** (self-speculation) | draft k bytes with decoder-only passes, verify all k with one full forward and accept the longest matching prefix | more decoder NFEs, far fewer encoder NFEs |
-| **BLT-D** (block diffusion) | start a block of B masked positions, iteratively unmask the most confident ones; accept drafts as-is | cheapest per byte, output may diverge from greedy |
-| **BLT-DV** (diffusion + verification) | BLT-D drafts, then a full causal forward verifies them like BLT-S | output matches greedy; draft makes it cheaper |
+| **greedy** (baseline) | one full encoder+global+decoder forward per byte | 1.0 enc and 1.0 dec NFE/byte |
+| **BLT-S** (self-speculation) | draft k bytes decoder-only, verify all k with one full forward, accept the longest matching prefix | more decoder NFEs, fewer encoder NFEs |
+| **BLT-D** (block diffusion) | start a block of B masked positions, iteratively unmask the most confident ones | cheapest per byte, output diverges from greedy |
+| **BLT-DV** (diffusion + verification) | BLT-D drafts, then a causal forward verifies them like BLT-S | output identical to greedy; cheap only when acceptance is high |
 
 ## Results
 
 ### Bandwidth analysis (Eq. 8)
 
-Memory bandwidth = `b * [N_dec * P_dec + N_enc * (P_enc + P_glob)] / 10^9` GB, where b=2 (fp16), P_dec=1,131,840, P_enc+P_glob=1,839,744. Greedy baseline = 5.94 MB.
+Memory bandwidth = `b * [N_dec * P_dec + N_enc * (P_enc + P_glob)] / 10^9` GB with `b=2` (fp16).
+
+For this checkpoint, `P_dec = 1,967,872` and `P_enc + P_glob = 5,862,912`, giving a greedy baseline
+of **15.66 MB/byte**. Both counts come from `blt_model_visit_params` using the visitor's
+`is_dec` / `is_enc || is_glob` flags. (The method reproduces the previously published 2.97M
+constants exactly, which is how it was validated.)
 
 #### Entropy patching (default)
 
-| Method | dec/byte | enc/byte | BW (MB) | BW ratio vs greedy |
-|---|---:|---:|---:|---:|
-| bltd greedy | 1.000 | 1.000 | 5.94 | 1.000 |
-| bltd selfspec k=4 | 2.221 | 0.904 | 8.35 | 1.406 |
-| bltd selfspec k=8 | 3.883 | 0.904 | 12.12 | 2.039 |
-| bltd selfspec k=16 | 6.855 | 0.904 | 18.84 | 3.171 |
-| bltd blockdiff B=4 | 0.441 | 0.250 | 1.92 | 0.323 |
-| bltd blockdiff B=8 | 0.311 | 0.125 | 1.16 | 0.196 |
-| bltd blockdiff B=16 | 0.225 | 0.062 | 0.74 | 0.124 |
-| bltd blockdv B=4 | 1.994 | 1.672 | 10.67 | 1.795 |
-| bltd blockdv B=8 | 2.318 | 1.660 | 11.36 | 1.911 |
-| bltd blockdv B=16 | 2.852 | 1.645 | 12.51 | 2.105 |
-| bltd blockdv onestep | 1.656 | 1.656 | 9.84 | 1.656 |
-| bltd blockdv_eb g=1.0 | 2.480 | 1.660 | 11.72 | 1.972 |
-| bltd blockdv_eb g=2.0 | 2.035 | 1.660 | 10.71 | 1.803 |
-| bltd blockdiff_eb | 0.396 | 0.125 | 1.36 | 0.228 |
-| bltd blockdv_hetv | 2.318 | 1.660 | 11.36 | 1.911 |
-| bltd blockdv_bal | 2.709 | 1.926 | 13.22 | 2.224 |
-| bltd blockdv_adapt | 2.014 | 1.672 | 10.71 | 1.802 |
-| bltd blockdv_adapt_bal | 2.332 | 1.930 | 12.38 | 2.083 |
+| Method | dec/byte | enc/byte | acceptance | agree | BW (MB) | BW vs greedy |
+|---|---:|---:|---:|---:|---:|---:|
+| greedy | 1.000 | 1.000 | – | 1.000 | 15.66 | 1.000x |
+| selfspec k=4 | 2.336 | 0.957 | 28.0% | 1.000 | 20.42 | 1.304x |
+| selfspec k=8 | 4.074 | 0.957 | 14.5% | 1.000 | 27.26 | 1.740x |
+| selfspec k=16 | 7.189 | 0.957 | 7.7% | 1.000 | 39.52 | 2.523x |
+| blockdiff B=4 | 0.838 | 0.508 | – | 0.182 | 9.25 | 0.591x |
+| blockdiff B=8 | 0.908 | 0.400 | – | 0.150 | 8.27 | 0.528x |
+| blockdiff B=16 | 0.906 | 0.240 | – | 0.135 | 6.38 | 0.408x |
+| **blockdv B=4** | **1.043** | **0.787** | **65.0%** | **1.000** | **13.33** | **0.851x** |
+| blockdv B=8 | 2.045 | 1.031 | 10.8% | 1.000 | 20.14 | 1.286x |
+| blockdv B=16 | 3.283 | 1.055 | 4.9% | 1.000 | 25.29 | 1.615x |
+| blockdv onestep (B=8) | 1.109 | 1.109 | 5.6% | 1.000 | 17.37 | 1.109x |
+| blockdv eb γ=1.0 (B=8) | 2.145 | 1.031 | 10.9% | 1.000 | 20.53 | 1.311x |
+| blockdv eb γ=2.0 (B=8) | 2.004 | 1.033 | 10.8% | 1.000 | 20.00 | 1.277x |
+| blockdiff eb (B=8) | 0.984 | 0.357 | – | 0.113 | 8.07 | 0.515x |
+| blockdv hetv (B=8) | 2.045 | 1.031 | 10.8% | 1.000 | 20.14 | 1.286x |
+| blockdv boundary-aligned (B=8) | 2.219 | 1.082 | 16.8% | 1.000 | 21.42 | 1.368x |
+| blockdv adaptive (from B=8) | 1.359 | 0.861 | 35.2% | 1.000 | 15.45 | 0.986x |
+| blockdv adaptive + aligned | 1.385 | 0.846 | 36.9% | 1.000 | 15.37 | 0.981x |
 
-Raw BLT-D (blockdiff) is cheaper than greedy (0.12-0.32x), but output diverges (agreement 0.05-0.06). BLT-S and BLT-DV both cost more than greedy at this scale (1.41-3.17x).
-
-#### Fixed-stride-4 patching
-
-| Method | dec/byte | enc/byte | agree | BW (MB) | BW ratio vs greedy |
-|---|---:|---:|---:|---:|---:|
-| bltd greedy | 1.000 | 1.000 | 1.000 | 5.94 | 1.000 |
-| bltd selfspec k=4 | 2.102 | 0.859 | 0.203 | 7.92 | 1.332 |
-| bltd selfspec k=8 | 3.645 | 0.857 | 0.199 | 11.40 | 1.919 |
-| bltd selfspec k=16 | 6.402 | 0.857 | 0.199 | 17.65 | 2.969 |
-| bltd blockdiff B=4 | 0.424 | 0.250 | 0.055 | 1.88 | 0.316 |
-| bltd blockdiff B=8 | 0.291 | 0.125 | 0.049 | 1.12 | 0.188 |
-| bltd blockdiff B=16 | 0.254 | 0.062 | 0.045 | 0.80 | 0.135 |
-| bltd blockdv B=4 | 2.312 | 1.789 | 0.469 | 11.82 | 1.988 |
-| bltd blockdv B=8 | 2.725 | 1.762 | 0.463 | 12.65 | 2.129 |
-| bltd blockdv B=16 | 3.518 | 1.758 | 0.463 | 14.43 | 2.428 |
-| bltd blockdv onestep | 1.762 | 1.762 | 0.463 | 10.47 | 1.762 |
-| bltd blockdv_eb g=1.0 | 3.018 | 1.762 | 0.463 | 13.32 | 2.240 |
-| bltd blockdv_eb g=2.0 | 2.455 | 1.762 | 0.463 | 12.04 | 2.026 |
-| bltd blockdiff_eb | 0.312 | 0.125 | 0.051 | 1.17 | 0.196 |
-| bltd blockdv_hetv | 2.725 | 1.762 | 0.463 | 12.65 | 2.129 |
-
-![Quality/cost frontier of generation methods](../graphs/nfe_quality_frontier.png)
-*Decoder NFE/byte vs. agreement with greedy output, entropy patching, 2.97M-param checkpoint.*
-
-![Where each method spends its forward passes](../graphs/enc_dec_map.png)
-*Encoder+global NFE/byte vs. decoder NFE/byte, entropy patching, 2.97M-param checkpoint. BLT-D variants cluster near the origin; BLT-S variants are all over the x-axis as k increases.*
-
-### Acceptance rates vs paper
-
-The Fast-BLT paper reports acceptance rates at 1B-3B params on FR→EN translation. This repro is 2.97M params on C source code (~340x smaller). Different domain, different scale so expect different numbers. But we will still compare them:
-
-**BLT-S acceptance rates (C code, 2.97M params vs paper's 3B FR→EN):**
-
-| k | Paper 3B (FR→EN) | This repro 2.97M (C code) | Gap | Confidence |
-|---|---:|---:|---|---|
-| 4 | 94.9% | 30.8% | 3.1x lower | CONFIRMED |
-| 8 | 87.2% | 15.8% | 5.5x lower | CONFIRMED |
-| 16 | 69.9% | 8.5% | 8.2x lower | CONFIRMED |
-
-**BLT-DV acceptance rates (C code, 2.97M params vs paper's 3B FR→EN):**
-
-| Config | Paper 3B (FR→EN) | This repro 2.97M (C code) | Gap | Confidence |
-|---|---:|---:|---|---|
-| B=4, α=0.3 | 94.4% | 5.2% | 18.1x lower | CONFIRMED |
-| B=8, α=0.3 | 86.3% | 2.8% | 30.8x lower | CONFIRMED |
-| B=16, α=0.3 | 67.2% | 1.6% | 42.0x lower | CONFIRMED |
-| B=8, one-step | 84.6% | 2.9% | 29.2x lower | CONFIRMED |
-
-![Speculative acceptance rates by method](../graphs/acceptance.png)
-*Drafted-byte acceptance rate by method, 2.97M-param checkpoint. BLT-S k=4 leads at 31%, declining with k. BLT-DV variants cluster at 2–25%.*
-
-Note: `blockdv_onestep` config uses B=8 (per `BLTD_CFGS_ALL` in `infer_bench.c`), so the paper comparison uses the paper's BLT-D-8 3B one-step row (84.63%), not B=4's 93.12%. Paper results are FR→EN; this repro is C source code (the-stack-smol).
+Raw BLT-D (`blockdiff`) is the cheapest thing here at 0.41-0.59x bandwidth, but its output
+diverges from greedy: agreement is only 0.135-0.182, so it is not a drop-in substitute.
 
 ### Wall-clock latency
 
+Mean ms per prompt, 64 new bytes, 8 prompts, RTX 4060.
+
+| Method | entropy patching | fixed-stride-4 |
+|---|---:|---:|
+| greedy | 394 | 424 |
+| selfspec k=4 | 504 | 515 |
+| selfspec k=16 | 950 | 986 |
+| blockdiff B=4 | 251 | 197 |
+| **blockdv B=4** | **350** | 479 |
+| blockdv B=8 | 551 | 626 |
+| blockdv B=16 | 720 | 861 |
+| blockdv adaptive | 408 | 500 |
+
+BLT-DV at `B=4` is the only verified method that beats greedy on both bandwidth and wall-clock.
+Wall-clock is not a clean comparison across methods since KV-cache usage and encoder passes
+differ, but the direction matches the NFE counts.
+
+![Speculative acceptance rates by method](../graphs/acceptance.png)
+*Drafted-byte acceptance by method. BLT-DV at the trained `B=4` leads at 65%; everything at
+`B>=8` collapses because those block cells were never supervised by L_mask.*
+
+![NFE vs quality frontier](../graphs/nfe_quality_frontier.png)
+*Decoder NFEs/byte against agreement with greedy. `blockdv B=4` sits below and left of greedy:
+fewer encoder passes and slightly more decoder passes, for identical output.*
+
+![Encoder/decoder NFE map](../graphs/enc_dec_map.png)
+*Encoder and decoder NFEs per byte. Verified methods trade encoder passes for decoder passes.*
+
 ![Mean wall-clock latency per prompt](../graphs/latency.png)
-*Mean wall-clock ms per prompt (64 new bytes). KV-cache usage differs between inference paths, so these are rough wall-clock numbers, not a clean comparison.*
+*Mean wall-clock ms per prompt (64 new bytes).*
 
-### Entropy vs fixed-stride patching
+## Acceptance vs the paper
 
-| Patching | agree (BLT-DV) | BW ratio |
-|---|---:|---:|---|
-| Entropy | 1.000 | 1.66-2.11x |
-| Fixed-stride-4 | 0.463-0.469 | 1.76-2.43x |
+The Fast-BLT paper reports acceptance at 1B-3B params on FR→EN translation. This is 7.8M params on
+English story prose, so both scale and domain differ, and the gap below is not attributable to
+either alone.
 
-At this checkpoint, entropy patching gives byte-identical output between BLT-DV and greedy (agree=1.0) for all BLT-DV variants. Fixed-stride-4 breaks it so much that only ~46% of bytes match greedy. Fixed-stride patching doesn't work here because commit points land mid-patch.
+| Config | Paper 3B (FR→EN) | This repro (7.8M, TinyStories) |
+|---|---:|---:|
+| B=4 | 94.4% | **65.0%** |
+| B=8 | 86.3% | 10.8% |
+| B=16 | 67.2% | 4.9% |
+| B=8, one-step | 84.6% | 5.6% |
+
+**BLT-S acceptance (no paper-comparable B axis):**
+
+| k | This repro |
+|---|---:|
+| 4 | 28.0% |
+| 8 | 14.5% |
+| 16 | 7.7% |
+
+`B=4` is the only setting where the two are in the same regime, and there the model reaches 65%
+against the paper's 94.4%. The `B=8` and `B=16` rows are not a scale result: the model was
+trained at `B=4`, so those rows measure a train/inference mismatch, not a capability limit. A
+`B=8` comparison would need a model trained at `B=8`.
+
+## Entropy vs fixed-stride patching
+
+| Patching | blockdv B=4 acceptance | agree | BW vs greedy |
+|---|---:|---:|---:|
+| Entropy (matches training) | **65.0%** | 1.000 | 0.851x |
+| Fixed-stride-4 | 28.7% | 1.000 | 1.107x |
+
+Entropy patching more than doubles acceptance and is the difference between BLT-DV being cheaper
+than greedy and being more expensive. This model was trained with entropy patching, so fixed-stride
+commit points land mid-patch and every draft byte has to be re-verified.
+
+Note that with fixed-stride patching `blockdiff` agreement drops to 0.088-0.115, versus 0.135-0.182
+with entropy patching.
+
+## What changed from the previous numbers
+
+The previous version of this document reported BLT-DV acceptance of 1.6-5.2% and concluded that
+"acceptance at this scale is 18-42x lower than the paper, root cause likely the 340x scale gap".
+That conclusion was wrong, and the numbers were measuring a broken configuration rather than the
+model.
+
+`bench/infer_bench.c` defaulted `--entropy-lm` to NULL, which builds a random-init entropy LM, so
+every byte became its own patch. The old rows are still in `bench/results.jsonl` under phase
+`6_infer` and match the old tables digit for digit (`bltd_blockdv_B4_a0.70` = 0.0523). Re-running
+the same checkpoint with its trained entropy LM gives 0.650.
+
+Two code bugs also contributed and are fixed in PRs #26 (draft pass cross-attended a stale latent
+for the patch-closing byte) and #29 (inference defaulted `--block-size` to 8 against a model
+trained at 4). Both `bin/infer` and `infer_bench` now hard-fail on a missing entropy LM.
+
+The old checkpoint (`s101.fblt`, 2.97M params) no longer exists, so those specific numbers can
+never be re-verified bit-for-bit. This section reports the checkpoint that does exist.
 
 ## Reproducing
 
-```bash
-make CUDA=1 train-blt-d
-./bin-cuda/train_blt_d --backend cuda \
-  --corpus data/train.bin --eval-corpus data/heldout.bin \
-  --embed 192 --hidden 384 --layers 2 \
-  --steps 40000 --lr 0.05 --lr-decay 1 \
-  --mask-warmup 33200 --mask-scale 0.3 \
-  --t-min 0.1 --t-warmup-hi 0.25 --t-hi-start 0.8 \
-  --cross-attn all --optimizer sgd \
-  --diffusion 1 --block-size 4 --window 48 \
-  --save-weights runs/my_checkpoint.fblt
+Build and run:
 
-make CUDA=1 bench-infer
-./bin-cuda/infer_bench --backend cuda \
-  --plain runs/my_checkpoint.fblt \
-  --bltd runs/my_checkpoint.fblt \
-  --prompts 8 --new-bytes 64
+```bash
+cmake -S . -B build-cuda -DUSE_CUDA=ON
+cmake --build build-cuda --target infer_bench -j$(nproc)
+
+source scripts/cuda_env.sh   # WSL2 only
+
+./build-cuda/infer_bench --backend cuda \
+  --plain runs/tinystories_600k/tinystories_600k.fblt \
+  --bltd runs/tinystories_600k/tinystories_600k.fblt \
+  --entropy-lm runs/entropylm/entropy_lm.fblt \
+  --heldout data/tinystories/heldout.bin \
+  --embed 256 --hidden 512 --enc-layers 2 --glob-layers 6 --dec-layers 2 --cross-attn all \
+  --prompts 8 --new-bytes 64 \
+  --results bench/results_tinystories_10m.jsonl
 ```
+
+Add `--fixed-patches` for the fixed-stride comparison. `--entropy-lm` and the shape flags are both
+mandatory: without them the tool aborts rather than measure a model on a layout it never saw.
+
+Held-out quality:
+
+```bash
+./build-cuda/train_blt_d --corpus data/tinystories/train.bin \
+  --load-weights runs/tinystories_600k/tinystories_600k.fblt --steps 0 \
+  --embed 256 --hidden 512 --enc-layers 2 --glob-layers 6 --dec-layers 2 \
+  --entropy-lm runs/entropylm/entropy_lm.fblt --entropy-patches \
+  --eval-corpus data/tinystories/heldout.bin --eval-windows 200 --backend cuda
+```
+
+Plots:
+
+```bash
+pip install matplotlib
+python fblt/scripts/bench_plots.py --results bench/results_tinystories_10m.jsonl --out graphs
+```
+
+Raw measurements are committed at `bench/results_tinystories_10m.jsonl` (44 rows, phase
+`6_infer`). `bench/results.jsonl` is gitignored and holds the full untracked history, including the
+superseded broken-configuration run.
 
 ## CUDA benchmarks
 
@@ -191,6 +278,12 @@ All times in milliseconds (ms), 3 runs averaged.
 ### Macro benchmarks, training cell and generation cell
 
 `macro_training_cell`: embed + 2×matmul + layernorm + SwiGLU + add (one full decoder layer, fwd+bwd). `macro_generation_cell`: autoregressive byte generation with KV-cache (naive greedy, 48-byte window). Both measured with `--iters 10`, 3 runs.
+
+The training cell is synthetic and needs no checkpoint. The generation cell does load one, and its
+default `--ckpt` path (`runs/followup1_base_s104.fblt`) no longer exists in this repo, so these rows
+cannot be reproduced as-is. Its shape is hardcoded to E=192 / H=384 / 2-2-2 with no shape flags, so
+it also cannot load the 7.8M TinyStories checkpoint. Any checkpoint of that shape works, since the
+measurement is timing-only and weight-independent.
 
 #### Bench config (E=64, H=128)
 
