@@ -283,25 +283,44 @@ Inference methods: `greedy` (default), `selfspec`, `blockdiff`, `blockdv`. See `
 ## Benchmarks
 Full results: [BENCHMARKS.md](docs/BENCHMARKS.md).
 
-CUDA delivers **76x training speedup** and **34x generation speedup** over CPU at production config (E=192, H=384, 2.97M params). CPU baseline is single-threaded naive loops. Matmul fp32 hits **6.4 TFLOP/s** on the desktop RTX 4060 (**42.4% MFU** against the 15.11 TFLOP/s spec peak). BF16 mixed-precision matmuls reach **~20 TFLOP/s** (~3x the fp32 rate).
+CUDA delivers **76x training speedup** and **34x generation speedup** over CPU at production config (E=192, H=384, 2.97M params). The training cell is synthetic; the generation cell loads a checkpoint whose default path no longer exists in this repo, so those two numbers are historical rather than reproducible as-is. CPU baseline is single-threaded naive loops. Matmul fp32 hits **6.4 TFLOP/s** on the desktop RTX 4060 (**42.4% MFU** against the 15.11 TFLOP/s spec peak). BF16 mixed-precision matmuls reach **~20 TFLOP/s** (~3x the fp32 rate).
 
-`infer_bench` is a separate research/benchmarking tool that compares inference methods and writes metrics to `bench/results.jsonl`.
+The CUDA figures above come from `bench/cuda_bench`, which uses synthetic weights and needs no checkpoint.
+
+Inference comparisons use a separate tool, `infer_bench`:
 
 ```bash
-cmake --build build --target bench-infer  # needs runs/*_40k.fblt checkpoints
-python3 fblt/scripts/bench_plots.py    # writes graphs/*.png
+cmake --build build-cuda --target infer_bench
+./build-cuda/infer_bench --backend cuda \
+  --plain runs/tinystories_600k/tinystories_600k.fblt \
+  --bltd runs/tinystories_600k/tinystories_600k.fblt \
+  --entropy-lm runs/entropylm/entropy_lm.fblt \
+  --heldout data/tinystories/heldout.bin \
+  --embed 256 --hidden 512 --enc-layers 2 --glob-layers 6 --dec-layers 2 \
+  --prompts 8 --new-bytes 64 \
+  --results bench/results_tinystories_10m.jsonl
+python3 fblt/scripts/bench_plots.py --results bench/results_tinystories_10m.jsonl --out graphs
 ```
 
-Three inference modes, benchmarked on the 2.97M-param checkpoint:
+`--entropy-lm` is mandatory: without the trained entropy LM every byte becomes its own patch and the
+numbers describe nothing. `--block-size` must match training. Both tools abort rather than measure a
+mismatch.
 
-- **BLT-S**: draft k bytes with decoder-only passes, verify with one full forward. Byte-identical output, fewer encoder/global passes.
-- **BLT-D**: decoder generates a whole block of future bytes in parallel from masked states. Cheapest per byte, but drafts drift.
+Three inference modes, benchmarked on the 7.8M-param TinyStories BLT-D checkpoint (600k steps,
+trained at `B=4` with entropy patching):
+
+- **BLT-S**: draft k bytes with decoder-only passes, verify with one full forward. Byte-identical output, fewer encoder passes.
+- **BLT-D**: decoder generates a whole block of future bytes in parallel from masked states. Cheapest per byte, but drafts drift (18% agreement with greedy at B=4).
 - **BLT-DV**: BLT-D drafts, then the model verifies them. Output matches greedy so the draft just makes it cheaper.
 
-**Headline finding:** At 2.97M params, all verified inference methods (BLT-S, BLT-DV) cost *more* memory bandwidth than greedy. BLT-DV acceptance rates (1.6-5.2%) are 18-42x lower than the paper's 3B results. Root cause likely because of the 340x scale gap.
+**Headline finding:** at the trained block size, BLT-DV is a net win. At `B=4` it accepts 65.0% of
+drafted bytes, produces output byte-identical to greedy, and costs 0.85x the memory bandwidth and
+0.89x the wall-clock of greedy (350 ms vs 394 ms per 64-byte prompt). At `B=8` and above it loses
+badly (10.8% and 4.9%), because block cells past the trained size form a block L_mask never
+supervised. Entropy patching more than doubles acceptance over fixed-stride (65.0% vs 28.7%).
 
 ![Speculative acceptance rates by method](graphs/acceptance.png)
-*Drafted-byte acceptance rate by method, 2.97M-param checkpoint. BLT-S k=4 leads at 31%, declining sharply with k. BLT-DV variants cluster at 2-25%.*
+*Drafted-byte acceptance by method. BLT-DV at the trained `B=4` leads at 65%; every `B>=8` variant collapses.*
 
 ![Mean wall-clock latency per prompt](graphs/latency.png)
 *Mean wall-clock ms per prompt (64 new bytes). KV-cache usage differs between inference paths, so these are rough wall-clock numbers, not a clean comparison.*
@@ -344,7 +363,10 @@ person from trying it too ;D
 
 - Seed-dependent non-determinism from CUDA atomics.
 
-- Acceptance-rate root cause at this scale is unknown.
+- [CLOSED] Acceptance-rate root cause at this scale. The previously reported 1.6-5.2% was measured with a
+random-init entropy LM in `infer_bench`, which put every byte in its own patch. With the trained LM
+the same checkpoint accepts 65.0% at B=4. `infer_bench` now refuses to run without `--entropy-lm`
+(see PR #33). See docs/BENCHMARKS.md.
 
 - [CLOSED] [last_row_gap.md](docs/experiments/last_row_gap.md) Last-row accuracy inside each training window sits far below interior-row accuracy (~40% vs ~98%). 
 Two Hypotheses are being considered. Either the last row gets far less supervision per window than interior rows.
@@ -358,7 +380,8 @@ Or patches that get cut off at the window edge are harder for the model to repre
 - Inference improvements
 - Multi-GPU / larger-scale training runs
 - MacOS support
-- Test acceptance rates on larger checkpoints (root-cause investigation)
+- Test acceptance rates on models trained at larger B, since B=8 and above currently measure a
+  train/inference mismatch rather than a capability limit
 
 ## Docs
 

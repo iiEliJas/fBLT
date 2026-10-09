@@ -28,6 +28,9 @@ data/
 # Generated files
 configs/sweep_state.json
 bench/*.jsonl
+# Baseline data referenced by docs/BENCHMARKS.md is committed so the published
+# numbers and graphs can be regenerated from a clean checkout.
+!bench/results_tinystories_10m.jsonl
 bench/ckpts/
 
 # Tool output
