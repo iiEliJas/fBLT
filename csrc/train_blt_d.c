@@ -567,7 +567,7 @@ int main(int argc, char **argv) {
         if (a.use_cuda) blt_cuda_scratch_reset();
 #endif
 
-        const size_t w = step % num_windows;
+        const size_t w = train_window_index(step, num_windows, a.seed);
         const uint8_t *text = corpus + w * a.window;
         const size_t N = a.window;
 
