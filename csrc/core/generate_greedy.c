@@ -11,25 +11,21 @@
 
 #define BLT_GENERATE_MAX_PATCHES 4096
 
-static uint8_t argmax_byte(const float *row, size_t vocab_size) {
-    size_t best = 0;
-    float best_val = row[0];
-    for (size_t v = 1; v < vocab_size; v++) {
-        if (row[v] > best_val) {
-            best_val = row[v];
-            best = v;
-        }
-    }
-    return (uint8_t)best;
-}
-
-void blt_generate_greedy(const blt_model *model, const blt_entropy_lm *entropy_model,
-                         const blt_patcher_config *patcher_config, const uint8_t *prompt_bytes, size_t prompt_len,
-                         size_t max_new_bytes, uint8_t *output_bytes, blt_arena *arena) {
+// opts may be NULL, which means argmax at every step. History for the penalty
+// and ngram ban is the whole emitted sequence including the prompt.
+static void generate_loop(const blt_model *model, const blt_entropy_lm *entropy_model,
+                          const blt_patcher_config *patcher_config, const uint8_t *prompt_bytes, size_t prompt_len,
+                          size_t max_new_bytes, uint8_t *output_bytes, const blt_decode_options *opts,
+                          blt_arena *arena) {
     BLT_REQUIRE(model != NULL && entropy_model != NULL && patcher_config != NULL && prompt_bytes != NULL &&
                     output_bytes != NULL && arena != NULL,
                 "blt_generate_greedy: arguments cannot be NULL");
     BLT_REQUIRE(prompt_len >= 2, "blt_generate_greedy: prompt_len must be >= 2");
+    if (opts) {
+        BLT_REQUIRE(opts->temperature >= 0.0f, "blt_generate_greedy: temperature must be >= 0");
+        BLT_REQUIRE(opts->repeat_penalty > 0.0f, "blt_generate_greedy: repeat_penalty must be > 0");
+    }
+    uint64_t rng = opts ? (opts->seed ? opts->seed : 1) : 1;
 
     memcpy(output_bytes, prompt_bytes, prompt_len);
     size_t cur_len = prompt_len;
@@ -99,14 +95,14 @@ void blt_generate_greedy(const blt_model *model, const blt_entropy_lm *entropy_m
                                       NULL, NULL, 0, NULL, trailing_closed, &model_logits, NULL, arena);
         blt_backend_pass_sync(bytes_in.backend);
 
-        // 4. Greedy argmax of the last position's logits
+        // 4. Pick the last position's next byte.
         float *last_row = (float *)malloc(vocab_size * sizeof(float));
         BLT_REQUIRE(last_row != NULL, "blt_generate_greedy: staging alloc failed");
         blt_tensor last_row_view;
         view_1d(&last_row_view, (float *)model_logits.data + (cur_len - 1) * vocab_size, vocab_size, BLT_DTYPE_FP32,
                 model_logits.backend);
         blt_tensor_download(&last_row_view, last_row, vocab_size * sizeof(float));
-        uint8_t next_byte = argmax_byte(last_row, vocab_size);
+        uint8_t next_byte = blt_decode_select(opts, last_row, vocab_size, output_bytes, cur_len, &rng);
         free(last_row);
 
         output_bytes[cur_len] = next_byte;
@@ -114,4 +110,21 @@ void blt_generate_greedy(const blt_model *model, const blt_entropy_lm *entropy_m
 
         arena->offset = step_marker;
     }
+}
+void blt_generate_greedy(const blt_model *model, const blt_entropy_lm *entropy_model,
+                         const blt_patcher_config *patcher_config, const uint8_t *prompt_bytes, size_t prompt_len,
+                         size_t max_new_bytes, uint8_t *output_bytes, blt_arena *arena) {
+    generate_loop(model, entropy_model, patcher_config, prompt_bytes, prompt_len, max_new_bytes, output_bytes, NULL,
+                  arena);
+}
+
+void blt_generate_sample(const blt_model *model, const blt_entropy_lm *entropy_model,
+                         const blt_patcher_config *patcher_config, const uint8_t *prompt_bytes, size_t prompt_len,
+                         size_t max_new_bytes, uint8_t *output_bytes, const blt_decode_options *opts,
+                         blt_arena *arena) {
+    BLT_REQUIRE(opts != NULL, "blt_generate_sample: opts cannot be NULL");
+    BLT_REQUIRE(blt_decode_is_sampling(opts),
+                "blt_generate_sample: no sampling knob enabled; use blt_generate_greedy instead");
+    generate_loop(model, entropy_model, patcher_config, prompt_bytes, prompt_len, max_new_bytes, output_bytes, opts,
+                  arena);
 }

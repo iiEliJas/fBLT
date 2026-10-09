@@ -10,6 +10,7 @@
 #include "core/backend.h"
 #include "models/model.h"
 #include "models/checkpoint.h"
+#include "core/decode_select.h"
 #include "models/entropy_lm.h"
 #include "models/patcher.h"
 #include "models/model_builder.h"
@@ -58,6 +59,11 @@ typedef struct {
     // Patcher
     int fixed_patches;
     int allow_random_entropy_lm;
+    float temperature;
+    float top_p;
+    float repeat_penalty;
+    size_t no_repeat_ngram;
+    int sampling_given;
     float patch_threshold_global;
     float patch_threshold_monotonic;
     size_t max_patch_length;
@@ -239,6 +245,11 @@ int main(int argc, char **argv) {
     a.certify_positions = 0;
     a.block_size = 4;
     a.block_size_given = 0;
+    a.temperature = 0.0f;
+    a.top_p = 0.0f;
+    a.repeat_penalty = 1.0f;
+    a.no_repeat_ngram = 0;
+    a.sampling_given = 0;
     a.unmask_eb = 0;
     a.threshold = 0.7f;
     a.boundary_aligned = 0;
@@ -319,6 +330,18 @@ int main(int argc, char **argv) {
             a.fixed_patches = 1;
         } else if (!strcmp(argv[i], "--allow-random-entropy-lm")) {
             a.allow_random_entropy_lm = 1;
+        } else if (!strcmp(argv[i], "--temperature") && i + 1 < argc) {
+            a.temperature = (float)atof(argv[++i]);
+            a.sampling_given = 1;
+        } else if (!strcmp(argv[i], "--top-p") && i + 1 < argc) {
+            a.top_p = (float)atof(argv[++i]);
+            a.sampling_given = 1;
+        } else if (!strcmp(argv[i], "--repeat-penalty") && i + 1 < argc) {
+            a.repeat_penalty = (float)atof(argv[++i]);
+            a.sampling_given = 1;
+        } else if (!strcmp(argv[i], "--no-repeat-ngram") && i + 1 < argc) {
+            a.no_repeat_ngram = (size_t)atol(argv[++i]);
+            a.sampling_given = 1;
         } else if (!strcmp(argv[i], "--patch-threshold-global") && i + 1 < argc) {
             a.patch_threshold_global = atof(argv[++i]);
         } else if (!strcmp(argv[i], "--patch-threshold-monotonic") && i + 1 < argc) {
@@ -351,6 +374,30 @@ int main(int argc, char **argv) {
     BLT_REQUIRE(a.glob_layers > 0, "infer: --glob-layers is required");
     BLT_REQUIRE(a.dec_layers > 0, "infer: --dec-layers is required");
     BLT_REQUIRE(a.use_cuda >= 0, "infer: --backend cpu|cuda is required");
+
+    blt_decode_options dopts;
+    blt_decode_options_defaults(&dopts);
+    dopts.temperature = a.temperature;
+    dopts.top_p = a.top_p;
+    dopts.repeat_penalty = a.repeat_penalty;
+    dopts.no_repeat_ngram = a.no_repeat_ngram;
+    dopts.seed = a.seed;
+
+    if (a.sampling_given) {
+        BLT_REQUIRE(a.temperature == 0.0f || a.temperature > 0.0f,
+                    "infer: --temperature must be > 0 (omit the flag for greedy)");
+        BLT_REQUIRE(a.top_p == 0.0f || (a.top_p > 0.0f && a.top_p <= 1.0f), "infer: --top-p must be in (0, 1]");
+        BLT_REQUIRE(a.repeat_penalty > 0.0f, "infer: --repeat-penalty must be > 0");
+        BLT_REQUIRE(a.no_repeat_ngram == 0 || a.no_repeat_ngram >= 2,
+                    "infer: --no-repeat-ngram must be >= 2 (an order-1 ban would forbid the whole alphabet)");
+        // The speculative methods verify each draft against greedy AR argmax, so
+        // a sampled byte can never match that prediction. Acceptance would be
+        // zero by construction rather than by model quality.
+        BLT_REQUIRE(a.method == M_GREEDY,
+                    "infer: --temperature, --top-p, --repeat-penalty and --no-repeat-ngram need --method greedy.\n"
+                    "       selfspec, blockdiff and blockdv verify each draft against the greedy AR\n"
+                    "       prediction, so a sampled byte can never be accepted.");
+    }
 
     // Block cells past the trained B form a bidirectional block the L_mask
     // objective never scored, so there is no safe default to fall back on.
@@ -459,7 +506,14 @@ int main(int argc, char **argv) {
 
     switch (a.method) {
     case M_GREEDY:
-        blt_generate_greedy(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, scratch);
+        if (blt_decode_is_sampling(&dopts)) {
+            fprintf(stderr, "[infer] sampling: T=%.3f top_p=%.3f repeat_penalty=%.3f no_repeat_ngram=%zu seed=%d\n",
+                    (double)dopts.temperature, (double)dopts.top_p, (double)dopts.repeat_penalty, dopts.no_repeat_ngram,
+                    a.seed);
+            blt_generate_sample(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, &dopts, scratch);
+        } else {
+            blt_generate_greedy(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, scratch);
+        }
         st.nfe_encoder_global = a.new_bytes;
         st.nfe_decoder = a.new_bytes;
         break;

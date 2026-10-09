@@ -92,6 +92,7 @@ set(BLT_CORE_SOURCES
   csrc/infer/block_generation.c
   csrc/infer/self_speculation.c
   csrc/core/generate_greedy.c
+  csrc/core/decode_select.c
   csrc/core/flops.c
 )
 
