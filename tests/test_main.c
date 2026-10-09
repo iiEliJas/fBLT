@@ -37,6 +37,7 @@ int main(void) {
         {"deterministic regression", run_deterministic_regression_test},
         {"topk from logits", run_topk_from_logits_tests},
         {"train window order", run_train_window_order_tests},
+        {"decode select sampling", run_decode_select_tests},
     };
 
     const test_case model_tests[] = {

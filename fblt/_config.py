@@ -143,6 +143,11 @@ class InferConfig:
     method: str = "greedy"
     seed: int = 11
 
+    temperature: float = 0.0
+    top_p: float = 0.0
+    repeat_penalty: float = 1.0
+    no_repeat_ngram: int = 0
+
     k: int = 8
     certify_positions: bool = False
 

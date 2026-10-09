@@ -323,7 +323,48 @@ Exactly one required.
 |------|---------|-------------|
 | `--new-bytes N` | 64 | Number of bytes to generate |
 | `--method MODE` | greedy | `greedy`, `selfspec`, `blockdiff`, `blockdv` |
-| `--seed N` | 11 | RNG seed (for random-init entropy LM) |
+| `--seed N` | 11 | RNG seed for the sampling stream and for a random-init entropy LM |
+
+### Sampling Options
+
+Only valid with `--method greedy`. Omit all of them for plain argmax decoding.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--temperature F` | 0 | Sampling temperature; 0 means no rescaling |
+| `--top-p F` | 0 | Nucleus mass in `(0,1]`; 0 disables nucleus truncation |
+| `--repeat-penalty F` | 1.0 | Divides the logits of already-emitted bytes; 1.0 disables |
+| `--no-repeat-ngram N` | 0 | Bans bytes that would repeat an N-gram already in the sequence; 0 disables |
+
+They apply in this order, which matters when several are combined:
+
+1. `--no-repeat-ngram` bans
+2. `--repeat-penalty` on already-emitted bytes
+3. divide by `--temperature`
+4. softmax
+5. keep the smallest prefix whose mass reaches `--top-p`
+6. draw
+
+Bans come before the penalty so a banned byte stays banned regardless of how the
+softmax shifts. If the history is short enough that the ban would cover the whole
+alphabet, the ban is dropped rather than leaving nothing to sample from.
+
+`--repeat-penalty` and `--no-repeat-ngram` are deterministic on their own: with
+`--temperature 0` and `--top-p 0` they still run, so you get repeatable output with
+repetition suppressed.
+
+These flags are rejected for `selfspec`, `blockdiff`, and `blockdv`. All three verify a draft
+against the greedy AR argmax, so a sampled byte can never equal the prediction it is checked
+against and acceptance would be zero by construction rather than by model quality.
+
+```bash
+build-cuda/infer --checkpoint runs/my_model.fblt \
+  --embed 256 --hidden 512 --enc-layers 2 --glob-layers 6 --dec-layers 2 \
+  --backend cuda --method greedy \
+  --entropy-lm runs/entropylm/entropy_lm.fblt \
+  --temperature 0.8 --top-p 0.9 --seed 7 \
+  --prompt "Once upon a time" --new-bytes 200
+```
 
 ### Self-Speculation Options
 
