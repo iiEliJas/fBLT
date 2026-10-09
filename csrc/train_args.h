@@ -28,6 +28,10 @@ typedef struct {
     const char *save_path;
     size_t save_every;
     const char *load_path;
+    const char *save_optim_path;
+    const char *load_optim_path;
+    size_t start_step;
+    int start_step_given;
     size_t eval_skip;
     size_t monitor_every;
     size_t monitor_windows;

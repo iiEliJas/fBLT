@@ -69,6 +69,10 @@ static void usage(void) {
                     "  --save-weights PATH     write weights after training (first %%d is replaced by step)\n"
                     "  --save-every N          save checkpoint every N steps (0 = only at end)\n"
                     "  --load-weights PATH     load weights before training\n"
+                    "  --save-optim PATH       write AdamW moments + step counter alongside the weights\n"
+                    "  --load-optim PATH       restore AdamW moments + step counter (needs --load-weights)\n"
+                    "  --start-step N          absolute step to start at; defaults to the value stored in\n"
+                    "                         --load-optim, else 0\n"
                     "  --report-every K        print every K steps (default 25)\n"
                     "\n"
                     "logging (diagnostic, all optional):\n"
@@ -156,7 +160,12 @@ args_t parse_args(int argc, char **argv) {
         else if (!strcmp(argv[i], "--save-weights") && i + 1 < argc) a.save_path = argv[++i];
         else if (!strcmp(argv[i], "--save-every") && i + 1 < argc) a.save_every = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--load-weights") && i + 1 < argc) a.load_path = argv[++i];
-        else if (!strcmp(argv[i], "--eval-corpus") && i + 1 < argc) a.eval_path = argv[++i];
+        else if (!strcmp(argv[i], "--save-optim") && i + 1 < argc) a.save_optim_path = argv[++i];
+        else if (!strcmp(argv[i], "--load-optim") && i + 1 < argc) a.load_optim_path = argv[++i];
+        else if (!strcmp(argv[i], "--start-step") && i + 1 < argc) {
+            a.start_step = strtoull(argv[++i], NULL, 10);
+            a.start_step_given = 1;
+        } else if (!strcmp(argv[i], "--eval-corpus") && i + 1 < argc) a.eval_path = argv[++i];
         else if (!strcmp(argv[i], "--eval-windows") && i + 1 < argc) a.eval_windows = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--eval-skip") && i + 1 < argc) a.eval_skip = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--monitor-every") && i + 1 < argc) a.monitor_every = strtoull(argv[++i], NULL, 10);

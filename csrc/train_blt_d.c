@@ -530,11 +530,26 @@ int main(int argc, char **argv) {
     size_t num_windows = (size_t)(fsize - a.window) / a.window;
     BLT_REQUIRE(num_windows >= 1, "corpus smaller than one training window");
 
-    size_t total_epochs = (a.steps + num_windows - 1) / num_windows;
+    size_t total_epochs = (a.start_step + a.steps + num_windows - 1) / num_windows;
     printf("train_blt_d: %zu windows (~%zu epochs)\n", num_windows, total_epochs);
 
     adamw_state *aw = NULL;
     if (a.optimizer == 1) aw = adamw_state_create(adamw_state_arena, model);
+
+    // Without this the optimizer restarts cold on every invocation: m = v = 0 and
+    // the bias-correction counter at 0, so the first steps behave like
+    // from-scratch AdamW rather than a continuation.
+    if (a.load_optim_path) {
+        BLT_REQUIRE(a.load_path != NULL, "train_blt_d: --load-optim requires --load-weights");
+        BLT_REQUIRE(a.optimizer == 1, "train_blt_d: --load-optim only applies to --optimizer adamw");
+        BLT_REQUIRE(aw != NULL, "train_blt_d: --load-optim given but the AdamW state was not created");
+        size_t stored_step = 0;
+        adamw_state_load(aw, &stored_step, a.load_optim_path);
+        printf("[CKPT] loaded optimizer state from %s (global_step=%zu adamw_step=%zu)\n", a.load_optim_path,
+               stored_step, aw->step);
+        if (!a.start_step_given) a.start_step = stored_step;
+    }
+    const size_t end_step = a.start_step + a.steps;
 
     double running = 0.0f;
     size_t running_n = 0;
@@ -560,7 +575,7 @@ int main(int argc, char **argv) {
     double last_t = train_start, ema_sps = 0.0, excl_s = 0.0;
     size_t last_step = 0;
 
-    for (size_t step = 0; step < a.steps; step++) {
+    for (size_t step = a.start_step; step < end_step; step++) {
         if (timing) ts0 = blt_time_sec();
         blt_arena_reset(scratch);
 #ifdef BLT_WITH_CUDA
@@ -589,8 +604,8 @@ int main(int argc, char **argv) {
             // --t-warmup-hi fraction of steps, so early training emphasizes
             // heavily-masked blocks (the regime block drafting relies on)
             // before annealing into the full U(0,1) distribution.
-            if (a.t_warmup_frac > 0.0f && a.steps > 0 && a.t_hi_start > a.t_min) {
-                const size_t warm = (size_t)((double)a.steps * (double)a.t_warmup_frac);
+            if (a.t_warmup_frac > 0.0f && end_step > 0 && a.t_hi_start > a.t_min) {
+                const size_t warm = (size_t)((double)end_step * (double)a.t_warmup_frac);
                 if (warm > 0 && step < warm) {
                     const float thr = a.t_hi_start + (a.t_min - a.t_hi_start) * ((float)step / (float)warm);
                     if (t_draw < thr) t_draw = thr;
@@ -612,8 +627,8 @@ int main(int argc, char **argv) {
                 batch.loss_scale = (float)step / (float)a.mask_warmup;
             }
             float cap = a.mask_scale;
-            if (a.mask_late_step > 0 && step >= a.mask_late_step && a.steps > a.mask_late_step) {
-                const float frac = (float)(step - a.mask_late_step) / (float)(a.steps - a.mask_late_step);
+            if (a.mask_late_step > 0 && step >= a.mask_late_step && end_step > a.mask_late_step) {
+                const float frac = (float)(step - a.mask_late_step) / (float)(end_step - a.mask_late_step);
                 cap = a.mask_scale + (a.mask_late_scale - a.mask_scale) * frac;
             }
             if (batch.loss_scale > cap) batch.loss_scale = cap;
@@ -656,12 +671,12 @@ int main(int argc, char **argv) {
             blt_local_decoder_forward_diffusion(model->decoder, &h, &O, patches, M, text, &targets, &batch,
                                                 a.d0_learned ? BLT_D0_LEARNED : BLT_D0_ZEROS, &logits, &loss, scratch);
 
-            if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
+            if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
                 log_forward_activation_dump(adump_fp, step + 1, &P, &h, &O, &logits);
 
             float lv;
             blt_tensor_download(&loss, &lv, sizeof(float));
-            if (loss_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
+            if (loss_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
                 fprintf(loss_fp, "%zu %.6f\n", step + 1, (double)lv);
             if (timing) {
                 tsB = blt_time_sec();
@@ -681,7 +696,7 @@ int main(int argc, char **argv) {
 
             blt_local_encoder_backward(model->encoder, &bytes_in, patches, M, NULL, 0, &grad_P, &grad_h,
                                        grad->encoder_grad, scratch);
-            if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
+            if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
                 log_gradient_activation_dump(adump_fp, step + 1, model, grad);
             if (timing) {
                 tsC = blt_time_sec();
@@ -695,19 +710,19 @@ int main(int argc, char **argv) {
             blt_tensor loss = blt_tensor_create(scratch, sc_shape, 1, BLT_DTYPE_FP32);
             blt_model_forward(model, &bytes_in, &targets, patches, M, NULL, 0, &logits, &loss, scratch);
 
-            if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
+            if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
                 log_forward_activation_dump(adump_fp, step + 1, NULL, NULL, NULL, &logits);
 
             float lv;
             blt_tensor_download(&loss, &lv, sizeof(float));
-            if (loss_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
+            if (loss_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
                 fprintf(loss_fp, "%zu %.6f\n", step + 1, (double)lv);
             running += lv;
             running_n++;
 
             blt_model_backward(model, &bytes_in, &targets, patches, M, NULL, 0, grad, scratch);
 
-            if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
+            if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
                 log_gradient_activation_dump(adump_fp, step + 1, model, grad);
         }
 
@@ -718,15 +733,15 @@ int main(int argc, char **argv) {
                 if (step >= a.lr_decay_steps[d]) lr *= a.lr_decay_factor;
             }
         } else if (a.lr_decay) {
-            if (step >= (a.steps * 85) / 100) lr *= 0.09f;
-            else if (step >= (a.steps * 60) / 100) lr *= 0.3f;
+            if (step >= (end_step * 85) / 100) lr *= 0.09f;
+            else if (step >= (end_step * 60) / 100) lr *= 0.3f;
         }
 
         if (timing) tsC = blt_time_sec();
-        if (cnorm_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
+        if (cnorm_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
             log_component_norms(cnorm_fp, step + 1, model, grad);
         float pre_clip_norm = clip_all(model, grad, a.max_norm);
-        if (gnorm_fp && ((step + 1) % a.report_every == 0 || step + 1 == a.steps))
+        if (gnorm_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
             fprintf(gnorm_fp, "%zu %.6f\n", step + 1, pre_clip_norm);
         if (unorm_fp && pre_clip_norm > 100.0f) {
             float post_clip = pre_clip_norm <= a.max_norm ? pre_clip_norm : a.max_norm;
@@ -742,7 +757,7 @@ int main(int argc, char **argv) {
             } else {
                 u_norm = lr * post_clip;
             }
-            if ((step + 1) % a.report_every == 0 || step + 1 == a.steps)
+            if ((step + 1) % a.report_every == 0 || step + 1 == end_step)
                 fprintf(unorm_fp, "%zu %.6f %.6f\n", step + 1, post_clip, u_norm);
         }
         if (a.optimizer == 1) {
@@ -808,7 +823,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        if ((step + 1) % a.report_every == 0 || step + 1 == a.steps) {
+        if ((step + 1) % a.report_every == 0 || step + 1 == end_step) {
             size_t epoch = step / num_windows;
             double now = blt_time_sec();
             double sps = ((now - last_t) - excl_s) / (double)(step + 1 - last_step);
@@ -817,10 +832,10 @@ int main(int argc, char **argv) {
             last_t = now;
             last_step = step + 1;
             excl_s = 0.0;
-            double remaining = (double)(a.steps - step - 1) * ema_sps;
+            double remaining = (double)(end_step - step - 1) * ema_sps;
             size_t rem_h = (size_t)remaining / 3600;
             size_t rem_m = ((size_t)remaining % 3600) / 60;
-            printf("step %6zu/%zu  epoch %zu/%zu  avg_loss %.4f  ETA %zuh%02zum\n", step + 1, a.steps, epoch,
+            printf("step %6zu/%zu  epoch %zu/%zu  avg_loss %.4f  ETA %zuh%02zum\n", step + 1, end_step, epoch,
                    total_epochs, running / running_n, rem_h, rem_m);
             fflush(stdout);
             running = 0.0;
@@ -832,6 +847,11 @@ int main(int argc, char **argv) {
             char path_buf[4096];
             blt_format_save_path(path_buf, sizeof(path_buf), a.save_path, step + 1);
             blt_model_save(model, path_buf);
+            if (a.save_optim_path && aw) {
+                char opath_buf[4096];
+                blt_format_save_path(opath_buf, sizeof(opath_buf), a.save_optim_path, step + 1);
+                adamw_state_save(aw, step + 1, opath_buf);
+            }
             printf("[CKPT] periodic save step %zu -> %s\n", step + 1, path_buf);
             fflush(stdout);
         }
@@ -886,8 +906,13 @@ int main(int argc, char **argv) {
 
     if (a.save_path) {
         char path_buf[4096];
-        blt_format_save_path(path_buf, sizeof(path_buf), a.save_path, a.steps);
+        blt_format_save_path(path_buf, sizeof(path_buf), a.save_path, end_step);
         blt_model_save(model, path_buf);
+        if (a.save_optim_path && aw) {
+            char opath_buf[4096];
+            blt_format_save_path(opath_buf, sizeof(opath_buf), a.save_optim_path, end_step);
+            adamw_state_save(aw, end_step, opath_buf);
+        }
         printf("[CKPT] saved weights to %s\n", path_buf);
     }
 
