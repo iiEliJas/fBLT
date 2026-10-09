@@ -92,6 +92,59 @@ fblt-train --config configs/train/production.yaml --backend cpu \
 
 For heldout evaluation, set `--eval-corpus` to a separate `.bin` file not overlapping with your training data. The inference benchmark (`infer_bench`) defaults to `data/heldout.bin` for this purpose.
 
+### Resuming training
+
+Checkpointing stores weights and, optionally, the optimizer state. Saving both lets a run be
+extended in place rather than restarted:
+
+```yaml
+# configs/train/production.yaml
+save_weights: runs/prod/checkpoint.fblt
+save_optim: runs/prod/checkpoint.fbop     # AdamW moments + step counter
+```
+
+```bash
+# first run
+fblt-train --config configs/train/production.yaml --backend cuda --override steps=300000
+
+# extend it by another 300k steps
+fblt-train --config configs/train/production.yaml --backend cuda --override steps=300000 \
+  --override load_weights=runs/prod/checkpoint.fblt \
+  --override load_optim=runs/prod/checkpoint.fbop
+```
+
+`steps` is how many steps to run this time. The step counter continues from the optimizer
+snapshot, so logs and step-indexed schedules (`lr_decay_steps`, `mask_late_step`) pick up where
+they stopped, and a resumed run is bit-identical to one long uninterrupted run. Use
+`--override start_step=N` to override the stored counter.
+
+Omitting `load_optim` still resumes the weights, but the optimizer restarts cold from zeroed
+moments, so the first steps behave like from-scratch AdamW.
+
+### Matching training at inference
+
+Block-diffusion inference only works if it segments bytes the same way training did. Two settings
+have to line up:
+
+- the **entropy LM** used for patching, which is trained separately and passed with `entropy_lm`
+- the **block size** `B`, which must equal the `block_size` the checkpoint was trained with
+
+`fblt-infer` reads both from the `resolved_config.yaml` next to the checkpoint, so the quickstart
+command above works unchanged. The `build/infer` binary has no way to know them and requires both
+to be passed explicitly:
+
+```bash
+build-cuda/infer --checkpoint runs/prod/checkpoint.fblt \
+  --embed 256 --hidden 512 --enc-layers 2 --glob-layers 6 --dec-layers 2 \
+  --backend cuda --method blockdv --block-size 4 \
+  --entropy-lm runs/entropylm/entropy_lm.fblt \
+  --prompt "Once upon a time" --new-bytes 200
+```
+
+Training with `--entropy-patches`? Keep `--entropy-lm` set in your training config so the
+snapshot can be carried over. Models trained without it use fixed-stride-4 patching, which
+inference selects automatically.
+
 ## Build
 
 ```bash
