@@ -37,6 +37,7 @@ typedef struct {
 
     // Block generation (method = blockdiff | blockdv)
     size_t block_size;
+    int block_size_given;
     int unmask_eb;
     float threshold;
     int boundary_aligned;
@@ -98,7 +99,8 @@ static void usage(void) {
                     "  --certify-positions         verify only at candidate patch boundaries (default off)\n"
                     "\n"
                     "block diffusion (--method blockdiff|blockdv):\n"
-                    "  --block-size B              diffusion block size (default 8)\n"
+                    "  --block-size B              diffusion block size; REQUIRED for blockdiff/blockdv and\n"
+                    "                              must equal the --block-size the model was trained with\n"
                     "  --unmask confidence|eb      unmasking strategy (default confidence)\n"
                     "  --threshold F               alpha for confidence, gamma for eb (default 0.7/1.0)\n"
                     "  --boundary-aligned          commit only at patch boundaries\n"
@@ -235,7 +237,8 @@ int main(int argc, char **argv) {
     a.method = M_GREEDY;
     a.k = 8;
     a.certify_positions = 0;
-    a.block_size = 8;
+    a.block_size = 4;
+    a.block_size_given = 0;
     a.unmask_eb = 0;
     a.threshold = 0.7f;
     a.boundary_aligned = 0;
@@ -277,6 +280,7 @@ int main(int argc, char **argv) {
             a.certify_positions = 1;
         } else if (!strcmp(argv[i], "--block-size") && i + 1 < argc) {
             a.block_size = strtoull(argv[++i], NULL, 10);
+            a.block_size_given = 1;
         } else if (!strcmp(argv[i], "--unmask") && i + 1 < argc) {
             ++i;
             if (!strcmp(argv[i], "confidence")) a.unmask_eb = 0;
@@ -347,6 +351,16 @@ int main(int argc, char **argv) {
     BLT_REQUIRE(a.glob_layers > 0, "infer: --glob-layers is required");
     BLT_REQUIRE(a.dec_layers > 0, "infer: --dec-layers is required");
     BLT_REQUIRE(a.use_cuda >= 0, "infer: --backend cpu|cuda is required");
+
+    // Block cells past the trained B form a bidirectional block the L_mask
+    // objective never scored, so there is no safe default to fall back on.
+    if ((a.method == M_BLOCKDIFF || a.method == M_BLOCKDV) && !a.block_size_given) {
+        BLT_FATAL("infer: --method %s requires an explicit --block-size matching the training config.\n"
+                  "       Cells beyond the trained block size attend partners L_mask never supervised, and\n"
+                  "       acceptance collapses (measured on the 10M TinyStories BLT-D model: 91%% at B=4 vs\n"
+                  "       15%% at B=8). The value is in block_size in the run's resolved_config.yaml.",
+                  method_name(a.method));
+    }
 
 #ifndef BLT_WITH_CUDA
     if (a.use_cuda) {

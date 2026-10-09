@@ -143,7 +143,7 @@ class InferConfig:
     k: int = 8
     certify_positions: bool = False
 
-    block_size: int = 8
+    block_size: int = 4
     unmask: str = "confidence"
     threshold: typing.Optional[float] = None
     boundary_aligned: bool = False

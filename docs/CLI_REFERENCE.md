@@ -306,7 +306,7 @@ Used with `--method blockdiff` or `blockdv`.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--block-size B` | 8 | Diffusion block size |
+| `--block-size B` | 4 | Diffusion block size; required for `blockdiff` and `blockdv` |
 | `--unmask STRAT` | confidence | `confidence` or `eb` (entropy-bounded) |
 | `--threshold F` | 0.7/1.0 | Alpha (confidence) or gamma (eb) |
 | `--boundary-aligned` | off | Commit only at patch boundaries |
@@ -316,13 +316,18 @@ Used with `--method blockdiff` or `blockdv`.
 | `--accept-target F` | 0.5 | Rolling acceptance target |
 | `--adapt-window N` | 8 | Rounds per rolling average |
 
-`--block-size` must match the `block_size` the checkpoint was trained with. Cells past the
-trained `B` form a bidirectional block the L_mask objective never scored, and acceptance
-collapses (measured on the 10M TinyStories BLT-D model: 91% at `B=4` vs 15% at `B=8`).
+`--block-size` must equal the `block_size` the checkpoint was trained with, and `blockdiff` and
+`blockdv` refuse to start without it. Block cells past the trained `B` form a bidirectional block
+that L_mask never supervised, so each one attends partners the model was never trained to
+condition on. Acceptance collapses accordingly (measured on the 10M TinyStories BLT-D model:
+91% at `B=4`, 15% at `B=8`).
+
+The trained value is the `block_size` entry in the run's `resolved_config.yaml`, which
+`fblt-infer` reads automatically.
 
 Drafted bytes are verified against the causal AR predictions that greedy decoding would make.
-The draft pass and the verifier now agree on cross-attention for the final clean byte, which is
-the patch-closing byte whenever a block is appended at a patch start.
+The draft pass and the verifier agree on cross-attention for the final clean byte, which is the
+patch-closing byte whenever a block is appended at a patch start.
 
 ### Model Options
 
@@ -367,7 +372,7 @@ build/infer --checkpoint runs/my_model.fblt \
 # BLT-DV with entropy patching
 build/infer --checkpoint runs/my_model.fblt \
   --embed 192 --hidden 384 --enc-layers 2 --glob-layers 2 --dec-layers 2 \
-  --backend cpu --method blockdv --block-size 8 --threshold 0.7 \
+  --backend cpu --method blockdv --block-size 4 --threshold 0.7 \
   --entropy-lm runs/entlm.bin --prompt "def " --new-bytes 128
 
 # CUDA inference with output to file
