@@ -1,9 +1,12 @@
+import argparse
 import dataclasses
+import re
+from pathlib import Path
 
 import pytest
 import yaml
 
-from fblt._config import InferConfig, TrainConfig, load_config
+from fblt._config import InferConfig, TrainConfig, add_config_args, load_config
 from fblt.infer import _SHAPE_FIELDS
 from fblt.train import (
     _DEFAULT_OUTPUTS,
@@ -238,3 +241,90 @@ def test_default_output_paths(tmp_path, monkeypatch):
 
     assert cfg2.save_weights == "custom/path/model.fblt"
     assert cfg2.grad_norm_log == str(run_dir / "grad_norm.log")
+
+
+# ------------------------------------------------------------------
+# Every C flag must be reachable as a real CLI flag
+#
+# The wrapper used to require --override key=value for anything not declared in
+# argparse by hand. Now every dataclass field becomes a flag, so these tests fail
+# if a C flag is added without a matching field, or if a field is renamed and the
+# flag goes missing.
+#
+# The flag list is parsed out of the C sources rather than from a built binary:
+# the python CI jobs do not build every target, and a guard that silently skips
+# is not a guard. The strcmp() list is the authoritative one, since that is what
+# the argument parser actually accepts.
+#
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# Declared by hand in the wrappers instead of generated from the dataclass.
+_HAND_DECLARED = {
+    InferConfig: {"--backend", "--checkpoint", "--prompt", "--prompt-file", "--output"},
+    TrainConfig: {"--backend"},
+}
+
+# Wrapper-only arguments that the C binaries do not have.
+_WRAPPER_ONLY = {"--config", "--override", "--run-name", "--help"}
+
+_FLAG_RE = re.compile(r'strcmp\(\s*argv\[i\]\s*,\s*"(--[a-z0-9-]+)"')
+
+
+def _c_flags(source_relpath):
+    text = (_REPO_ROOT / source_relpath).read_text(encoding="utf-8")
+    return set(_FLAG_RE.findall(text)) - _WRAPPER_ONLY
+
+
+def _config_flags(config_class):
+    flags = {"--" + f.name.replace("_", "-") for f in dataclasses.fields(config_class)}
+    flags |= _HAND_DECLARED.get(config_class, set())
+    return flags
+
+
+def test_infer_c_flags_all_reachable():
+    missing = _c_flags("csrc/infer.c") - _config_flags(InferConfig)
+    assert not missing, f"infer flags with no wrapper flag: {sorted(missing)}"
+
+
+def test_train_c_flags_all_reachable():
+    missing = _c_flags("csrc/train_args.c") - _config_flags(TrainConfig)
+    assert not missing, f"train_blt_d flags with no wrapper flag: {sorted(missing)}"
+
+
+@pytest.mark.parametrize("config_class", [InferConfig, TrainConfig])
+def test_every_field_becomes_a_flag(config_class):
+    parser = argparse.ArgumentParser()
+    add_config_args(parser, config_class)
+    opts = {a for action in parser._actions for a in action.option_strings}
+    for field in dataclasses.fields(config_class):
+        assert "--" + field.name.replace("_", "-") in opts, field.name
+
+
+@pytest.mark.parametrize("config_class", [InferConfig, TrainConfig])
+def test_generated_flag_types_match_annotations(config_class):
+    """An int field must not accept "abc", and a float field must accept "0.5"."""
+    parser = argparse.ArgumentParser()
+    add_config_args(parser, config_class)
+    actions = {a.dest: a for a in parser._actions if a.dest != "help"}
+    for field in dataclasses.fields(config_class):
+        action = actions.get(field.name)
+        if action is None or action.type is None:
+            continue
+        flag = "--" + field.name.replace("_", "-")
+        if field.type is int:
+            with pytest.raises(SystemExit):
+                parser.parse_args([flag, "abc"])
+            assert parser.parse_args([flag, "7"]).__dict__[field.name] == 7
+        elif field.type is float:
+            assert parser.parse_args([flag, "0.5"]).__dict__[field.name] == 0.5
+
+
+@pytest.mark.parametrize("config_class", [InferConfig, TrainConfig])
+def test_unspecified_flags_stay_none(config_class):
+    """None is what lets precedence work: default < YAML < --override < flag."""
+    parser = argparse.ArgumentParser()
+    add_config_args(parser, config_class)
+    ns = parser.parse_args([])
+    for field in dataclasses.fields(config_class):
+        assert getattr(ns, field.name) is None, field.name

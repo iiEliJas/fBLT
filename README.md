@@ -85,9 +85,9 @@ To use your own data, place the `.bin` file in the repo and point the config at 
 # configs/train/production.yaml:
 #   corpus: /path/to/your/train.bin
 
-# Option 2: override on the command line
+# Option 2: pass it on the command line
 fblt-train --config configs/train/production.yaml --backend cpu \
-  --override corpus=/path/to/your/train.bin
+  --corpus /path/to/your/train.bin
 ```
 
 For heldout evaluation, set `--eval-corpus` to a separate `.bin` file not overlapping with your training data. The inference benchmark (`infer_bench`) defaults to `data/heldout.bin` for this purpose.
@@ -105,18 +105,18 @@ save_optim: runs/prod/checkpoint.fbop     # AdamW moments + step counter
 
 ```bash
 # first run
-fblt-train --config configs/train/production.yaml --backend cuda --override steps=300000
+fblt-train --config configs/train/production.yaml --backend cuda --steps 300000
 
 # extend it by another 300k steps
-fblt-train --config configs/train/production.yaml --backend cuda --override steps=300000 \
-  --override load_weights=runs/prod/checkpoint.fblt \
-  --override load_optim=runs/prod/checkpoint.fbop
+fblt-train --config configs/train/production.yaml --backend cuda --steps 300000 \
+  --load-weights runs/prod/checkpoint.fblt \
+  --load-optim runs/prod/checkpoint.fbop
 ```
 
-`steps` is how many steps to run this time. The step counter continues from the optimizer
+`--steps` is how many steps to run this time. The step counter continues from the optimizer
 snapshot, so logs and step-indexed schedules (`lr_decay_steps`, `mask_late_step`) pick up where
 they stopped, and a resumed run is bit-identical to one long uninterrupted run. Use
-`--override start_step=N` to override the stored counter.
+`--start-step N` to override the stored counter.
 
 Omitting `load_optim` still resumes the weights, but the optimizer restarts cold from zeroed
 moments, so the first steps behave like from-scratch AdamW.
@@ -243,7 +243,7 @@ An example for the production config for 2.97M-parameter BLT-D training (embed=1
 fblt-train --config configs/train/production.yaml --backend cuda
 ```
 
-The wrapper creates a run directory under `runs/`, writes a `resolved_config.yaml` with the full config, and calls `train_blt_d`. All `--override key=value` flags are passed through, and `--backend` is always required on the command line (never in YAML).
+The wrapper creates a run directory under `runs/`, writes a `resolved_config.yaml` with the full config, and calls `train_blt_d`. Every `train_blt_d` flag is available directly with underscores turned into dashes, so `--steps`, `--embed`, `--block-size`, `--save-optim` and the rest work without `--override`. `--override key=value` still works as an escape hatch. `--backend` is always required on the command line (never in YAML).
 
 The underlying C binary can still be called directly:
 
@@ -269,16 +269,28 @@ fblt-infer --checkpoint runs/debug_checkpoint.fblt --backend cpu \
   --config configs/infer/greedy.yaml --prompt "int main"
 ```
 
-If the checkpoint was produced by `fblt-train`, the wrapper auto-detects model dimensions from `resolved_config.yaml`. So no need to pass `--embed`, `--hidden`, etc. manually. For checkpoints not produced by the wrapper, pass shape flags via `--override`:
+If the checkpoint was produced by `fblt-train`, the wrapper auto-detects model dimensions from `resolved_config.yaml`. So no need to pass `--embed`, `--hidden`, etc. manually. For checkpoints not produced by the wrapper, pass shape flags directly:
 
 ```bash
 fblt-infer --checkpoint my_model.fblt --backend cpu \
-  --override embed=192 --override hidden=384 \
-  --override enc-layers=2 --override glob-layers=2 --override dec-layers=2 \
+  --embed 192 --hidden 384 --enc-layers 2 --glob-layers 2 --dec-layers 2 \
   --prompt "def "
 ```
 
 Inference methods: `greedy` (default), `selfspec`, `blockdiff`, `blockdv`. See `configs/infer/` for example YAML configs for each method.
+
+Every `infer` flag is available on `fblt-infer` directly, so sampling needs no `--override`:
+
+```bash
+fblt-infer --checkpoint runs/prod/checkpoint.fblt --backend cuda \
+  --prompt "Once upon a time" --new-bytes 200 \
+  --method greedy --temperature 0.8 --top-p 0.9 --seed 7
+```
+
+`--repeat-penalty F` and `--no-repeat-ngram N` also work on their own and stay deterministic.
+Sampling applies to `--method greedy` only; the verified methods check drafts against greedy argmax,
+so they cannot use it. Greedy decoding loops on some prompts at this model scale, and sampling is
+the fix. See [BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ## Benchmarks
 Full results: [BENCHMARKS.md](docs/BENCHMARKS.md).

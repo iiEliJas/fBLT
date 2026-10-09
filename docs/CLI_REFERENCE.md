@@ -36,17 +36,25 @@ CUDA builds default to architecture `89`. For other GPUs, configure with `-DCMAK
 Installed via `pip install -e .`. Wraps `train_blt_d` with YAML config loading and run-directory management.
 
 ```
-fblt-train --backend cpu|cuda [--config FILE] [--override key=value ...] [--run-name NAME]
+fblt-train --backend cpu|cuda [--config FILE] [any train_blt_d flag...] [--run-name NAME]
 ```
 
 | Flag | Required | Description |
 |------|----------|-------------|
 | `--backend {cpu,cuda}` | yes | Compute backend (never in YAML) |
 | `--config FILE` | no | YAML config file (see `configs/train/`) |
-| `--override key=value` | no | Override any config field (repeatable) |
 | `--run-name NAME` | no | Run directory name (default: `{config}-{timestamp}`) |
+| `--override key=value` | no | Escape hatch; a typed flag exists for every field |
 
-The wrapper creates `runs/<run-name>/` with `resolved_config.yaml` containing the full effective config. All `train_blt_d` flags can be set via YAML or `--override`. The `--backend` flag must always be passed on the command line.
+The wrapper creates `runs/<run-name>/` with `resolved_config.yaml` containing the full effective config.
+
+Every `train_blt_d` flag is also a flag here, named the same with underscores turned into dashes.
+`--embed`, `--hidden`, `--glob-layers`, `--block-size`, `--save-optim`, `--load-optim`,
+`--start-step`, `--last-row-scale` and the rest all work directly; `--override key=value` remains
+supported but is no longer needed for anything.
+
+Precedence, lowest to highest: dataclass default, then `--config` YAML, then `--override`, then an
+explicit flag. `--backend` must always be passed on the command line.
 
 ```bash
 fblt-train --config configs/train/production.yaml --backend cuda
@@ -60,7 +68,7 @@ fblt-train --config configs/train/debug.yaml --backend cpu --override steps=100
 Installed via `pip install -e .`. Wraps `infer` with YAML config loading and auto shape-matching.
 
 ```
-fblt-infer --backend cpu|cuda --checkpoint FILE [--config FILE] [--override key=value ...]
+fblt-infer --backend cpu|cuda --checkpoint FILE [--config FILE] [any infer flag...]
            [--prompt TEXT | --prompt-file FILE] [--output FILE]
 ```
 
@@ -69,19 +77,22 @@ fblt-infer --backend cpu|cuda --checkpoint FILE [--config FILE] [--override key=
 | `--backend {cpu,cuda}` | yes | Compute backend (never in YAML) |
 | `--checkpoint FILE` | yes | Model checkpoint (.fblt) |
 | `--config FILE` | no | YAML config file (see `configs/infer/`) |
-| `--override key=value` | no | Override any config field (repeatable) |
 | `--prompt TEXT` | no | Prompt text (mutually exclusive with --prompt-file) |
 | `--prompt-file FILE` | no | Prompt file (mutually exclusive with --prompt) |
 | `--output FILE` | no | Output file (default: stdout) |
+| `--override key=value` | no | Escape hatch; a typed flag exists for every field |
 
-If no `--prompt` or `--prompt-file`, reads from stdin. Auto-detects model dimensions from `resolved_config.yaml` next to the checkpoint (when produced by `fblt-train`).
+Every `infer` flag is also a flag here, named the same with underscores turned into dashes:
+`--method`, `--block-size`, `--entropy-lm`, `--temperature`, `--top-p`, `--repeat-penalty`,
+`--no-repeat-ngram`, `--k`, `--unmask`, `--threshold`, and the rest.
 
 ```bash
 fblt-infer --checkpoint runs/debug_checkpoint.fblt --backend cpu --prompt "int main"
 fblt-infer --checkpoint my_model.fblt --backend cpu \
-  --override embed=192 --override hidden=384 \
-  --override enc-layers=2 --override glob-layers=2 --override dec-layers=2
+  --embed 192 --hidden 384 --enc-layers 2 --glob-layers 2 --dec-layers 2
 ```
+
+If no `--prompt` or `--prompt-file`, reads from stdin. Auto-detects model dimensions from `resolved_config.yaml` next to the checkpoint (when produced by `fblt-train`), so the shape flags are usually unnecessary.
 
 ---
 

@@ -7,12 +7,18 @@ import typing
 import yaml
 
 from fblt._binary import resolve_binary
-from fblt._config import InferConfig, load_config
+from fblt._config import InferConfig, add_config_args, load_config
 from fblt._runner import run_binary
 
 
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="fblt-infer", description="Run BLT inference")
+def _parse_args() -> typing.Tuple[argparse.Namespace, typing.Dict[str, typing.Any]]:
+    """Returns the namespace plus every explicitly-passed config field."""
+    overrides: typing.Dict[str, typing.Any] = {}
+    parser = argparse.ArgumentParser(
+        prog="fblt-infer",
+        description="Run BLT inference",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument("--config", type=str, default=None, help="YAML config path")
     parser.add_argument(
         "--backend",
@@ -31,7 +37,18 @@ def _parse_args() -> argparse.Namespace:
     prompt_group.add_argument("--prompt", type=str, default=None, help="Prompt text")
     prompt_group.add_argument("--prompt-file", type=str, default=None, help="Path to prompt file")
     parser.add_argument("--output", type=str, default=None, help="Output file path")
-    return parser.parse_args()
+
+    # Every remaining InferConfig field becomes a real flag, so the C binary's
+    # full option surface is reachable without --override.
+    add_config_args(
+        parser,
+        InferConfig,
+        skip=("backend", "checkpoint", "prompt", "prompt_file", "output"),
+        overrides=overrides,
+    )
+    args = parser.parse_args()
+    overrides.update({k: v for k, v in vars(args).items() if v is not None})
+    return args, overrides
 
 
 def _check_yaml_no_backend(yaml_path: str) -> None:
@@ -72,7 +89,7 @@ def _find_resolved_config(checkpoint_path: str) -> typing.Optional[str]:
 
 
 def main() -> None:
-    args = _parse_args()
+    args, explicit = _parse_args()
 
     # Reject backend in YAML
     if args.config is not None:
@@ -81,12 +98,16 @@ def main() -> None:
     # Build config
     cfg = load_config(InferConfig, args.config, args.override)
 
-    # track which fields were explicitly overridden via CLI
+    # Explicit flags win over --override and over YAML.
+    for key, val in explicit.items():
+        setattr(cfg, key, val)
+
     overridden_fields: typing.Set[str] = set()
     if args.override:
         for ov in args.override:
             if "=" in ov:
                 overridden_fields.add(ov.split("=", 1)[0].replace("-", "_"))
+    overridden_fields.update(explicit.keys())
 
     # auto shape-matching from resolved_config.yaml — walk up from checkpoint
     resolved_path = _find_resolved_config(args.checkpoint)
@@ -164,3 +185,7 @@ def main() -> None:
         argv.extend(["--block-size", str(cfg.block_size)])
     rc = run_binary(binary, argv)
     sys.exit(rc)
+
+
+if __name__ == "__main__":
+    main()

@@ -8,12 +8,18 @@ import typing
 import yaml
 
 from fblt._binary import resolve_binary
-from fblt._config import TrainConfig, load_config
+from fblt._config import TrainConfig, add_config_args, load_config
 from fblt._runner import run_binary
 
 
-def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="fblt-train", description="Train BLT-D model")
+def _parse_args() -> typing.Tuple[argparse.Namespace, typing.Dict[str, typing.Any]]:
+    """Returns the namespace plus every explicitly-passed config field."""
+    overrides: typing.Dict[str, typing.Any] = {}
+    parser = argparse.ArgumentParser(
+        prog="fblt-train",
+        description="Train BLT-D model",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument("--config", type=str, default=None, help="YAML config path")
     parser.add_argument(
         "--backend",
@@ -28,7 +34,14 @@ def _parse_args() -> argparse.Namespace:
         help="key=value override (repeatable)",
     )
     parser.add_argument("--run-name", type=str, default=None, help="Run name")
-    return parser.parse_args()
+
+    # Every remaining TrainConfig field becomes a real flag, so the C binary's
+    # full option surface is reachable without --override.
+    add_config_args(parser, TrainConfig, skip=("backend",), overrides=overrides)
+
+    args = parser.parse_args()
+    overrides.update({k: v for k, v in vars(args).items() if v is not None})
+    return args, overrides
 
 
 def _check_yaml_no_backend(yaml_path: str) -> None:
@@ -61,7 +74,7 @@ _DEFAULT_OUTPUTS: typing.Dict[str, str] = {
 
 
 def main() -> None:
-    args = _parse_args()
+    args, explicit = _parse_args()
 
     # Reject backend in YAML
     if args.config is not None:
@@ -69,6 +82,10 @@ def main() -> None:
 
     # Build config
     cfg = load_config(TrainConfig, args.config, args.override)
+
+    # Explicit flags win over --override and over YAML.
+    for key, val in explicit.items():
+        setattr(cfg, key, val)
     cfg.backend = args.backend
 
     # Derive run name and directory
@@ -94,3 +111,7 @@ def main() -> None:
     argv = cfg.to_argv()
     rc = run_binary(binary, argv)
     sys.exit(rc)
+
+
+if __name__ == "__main__":
+    main()
