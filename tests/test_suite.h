@@ -58,6 +58,7 @@ int run_block_diffusion_gradcheck(void);
 int run_block_diffusion_overfit_gate(void);
 int run_block_diffusion_no_label_leak(void);
 int run_block_diffusion_last_row_upweight(void);
+int run_block_diffusion_draft_trailing_closed(void);
 
 int run_matmul_parity_test(void);
 int run_softmax_parity_test(void);

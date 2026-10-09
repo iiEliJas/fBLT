@@ -303,6 +303,14 @@ Used with `--method blockdiff` or `blockdv`.
 | `--accept-target F` | 0.5 | Rolling acceptance target |
 | `--adapt-window N` | 8 | Rounds per rolling average |
 
+`--block-size` must match the `block_size` the checkpoint was trained with. Cells past the
+trained `B` form a bidirectional block the L_mask objective never scored, and acceptance
+collapses (measured on the 10M TinyStories BLT-D model: 91% at `B=4` vs 15% at `B=8`).
+
+Drafted bytes are verified against the causal AR predictions that greedy decoding would make.
+The draft pass and the verifier now agree on cross-attention for the final clean byte, which is
+the patch-closing byte whenever a block is appended at a patch start.
+
 ### Model Options
 
 | Flag | Default | Description |

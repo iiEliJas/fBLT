@@ -168,6 +168,12 @@ static void diff_ctx_build(diff_ctx *c, const blt_local_decoder *model, const bl
     for (size_t i = 0; i < c->N; i++) {
         c->q_group_ids[i] = blt_patch_decoder_latent_at(patches, num_patches, i);
     }
+    if (batch->trailing_closed) {
+        // blt_patch_decoder_latent_at cannot see past patches[], so it reports
+        // the open-patch rule for the final byte. When the caller knows a
+        // boundary fires right after it, that byte is final and reads o_M.
+        c->q_group_ids[c->N - 1] = num_patches - 1;
+    }
     for (size_t r = 0; r < c->R; r++) {
         c->q_group_ids[c->N + r] = batch->groups[r];
     }
