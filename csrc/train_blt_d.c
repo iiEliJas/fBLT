@@ -125,6 +125,7 @@ static void monitor_novel_block(const blt_model *model, blt_arena *scratch, blt_
     batch.t = 1.0f;
     batch.loss_scale = 0.0f;
     batch.last_row_scale = 1.0f;
+    batch.trailing_closed = 1;
     batch.tokens = (uint32_t *)blt_container_alloc(scratch, B * sizeof(uint32_t));
     batch.positions = (size_t *)blt_container_alloc(scratch, B * sizeof(size_t));
     batch.targets = (uint8_t *)blt_container_alloc(scratch, B);
@@ -567,7 +568,7 @@ int main(int argc, char **argv) {
         if (a.use_cuda) blt_cuda_scratch_reset();
 #endif
 
-        const size_t w = step % num_windows;
+        const size_t w = train_window_index(step, num_windows, a.seed);
         const uint8_t *text = corpus + w * a.window;
         const size_t N = a.window;
 

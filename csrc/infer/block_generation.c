@@ -175,6 +175,9 @@ size_t blt_draft_block(const blt_model *model, const blt_model_enc_out *enc, con
     batch.n_block_rows = B;
     batch.t = 0.0f;
     batch.loss_scale = 0.0f;
+    // generate_common only calls this once blt_next_starts_patch fires at
+    // prefix_len, so the last prefix byte closes its patch.
+    batch.trailing_closed = 1;
 
     uint32_t tokens[BLT_BLOCKGEN_MAX_B];
     uint8_t masked[BLT_BLOCKGEN_MAX_B];

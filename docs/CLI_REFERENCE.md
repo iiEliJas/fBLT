@@ -107,6 +107,19 @@ fblt-infer --checkpoint my_model.fblt --backend cpu \
 | `--report-every K` | 25 | Print frequency |
 | `--deterministic` | off | Deterministic training (slower, no cuda atomics) |
 
+### Window Order
+
+Training windows are visited in a deterministic shuffled order. Each epoch walks every
+window exactly once, so corpus coverage is identical to sequential striding, but the order
+within an epoch is reseeded and the order is a pure function of `(step, seed)`.
+
+This matters when a run is extended: sequential striding replays the exact byte sequence a
+previous run already trained on, because `(step % num_windows)` starts over at step 0. The
+shuffled order does not.
+
+The order is reproducible from `--seed` alone. Changing `--seed` changes both the window
+order and the diffusion timestep sequence.
+
 ### Optimizer
 
 | Flag | Default | Description |
@@ -312,6 +325,10 @@ condition on. Acceptance collapses accordingly (measured on the 10M TinyStories 
 The trained value is the `block_size` entry in the run's `resolved_config.yaml`, which
 `fblt-infer` reads automatically.
 
+Drafted bytes are verified against the causal AR predictions that greedy decoding would make.
+The draft pass and the verifier agree on cross-attention for the final clean byte, which is the
+patch-closing byte whenever a block is appended at a patch start.
+
 ### Model Options
 
 | Flag | Default | Description |
@@ -326,7 +343,17 @@ The trained value is the `block_size` entry in the run's `resolved_config.yaml`,
 | `--patch-threshold-global F` | 2.5 | Global entropy threshold |
 | `--patch-threshold-monotonic F` | 1.0 | Monotonic threshold |
 | `--max-patch-length N` | 16 | Maximum patch size |
-| `--entropy-lm FILE` | (none) | Trained entropy-LM weights |
+| `--entropy-lm FILE` | (none) | Trained entropy-LM weights; required unless `--fixed-patches` |
+| `--allow-random-entropy-lm` | off | Permit a random-init entropy LM (will not match training) |
+
+Entropy patching without `--entropy-lm` is a fatal error. A random-init entropy LM assigns
+near-maximal entropy to every byte, so every byte clears the threshold and becomes its own
+patch. The model then conditions on an all-1-byte-patch layout it never saw during training,
+which collapses generation quality and speculative acceptance (measured on the 10M TinyStories
+BLT-D model at `B=4`: 92% acceptance with the trained LM, 14% with a random-init one).
+
+`fblt-infer` reads `entropy_lm` from the `resolved_config.yaml` next to the checkpoint when the
+model was trained with entropy patching.
 
 ### I/O Options
 

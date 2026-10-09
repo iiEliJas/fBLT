@@ -1071,3 +1071,139 @@ int run_block_diffusion_no_label_leak(void) {
     blt_arena_destroy(model_arena);
     return 1;
 }
+
+#define TC_N 12
+#define TC_B 3
+
+// Regression: the draft path used to cross-attend a stale latent for the final
+// clean byte. blt_patch_decoder_latent_at only sees patches[], so for the last
+// patch it always returns the open-patch rule (j-1), even when the caller knows
+// a boundary fires right after that byte. Greedy/verify pass trailing_closed and
+// force o_M; the draft path had no such bit, so drafting and verification
+// conditioned that byte on different latents.
+int run_block_diffusion_draft_trailing_closed(void) {
+    blt_arena *model_arena = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *scratch = blt_arena_create(32 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *batch_arena = blt_arena_create(4 * 1024 * 1024, BLT_BACKEND_CPU);
+    TEST_ASSERT(model_arena && scratch && batch_arena);
+
+    blt_model *model = make_tiny_diffusion_model(model_arena, 0x5EED1234ULL);
+    const size_t vocab = TINY_VOCAB;
+
+    static const uint8_t base[TC_N] = {3, 11, 200, 7, 42, 99, 5, 63, 128, 21, 250, 9};
+    blt_patch_info patches[8];
+    const size_t M = fixed_patches(TC_N, TC_B, patches);
+    TEST_ASSERT(M == 4); // patches tile [0, TC_N), so the block starts a new patch
+
+    const size_t E = model->encoder->config.embed_dim;
+    const size_t S = TC_N + TC_B;
+
+    uint32_t tok[TC_B] = {BLT_MASK_TOKEN_ID, BLT_MASK_TOKEN_ID, BLT_MASK_TOKEN_ID};
+    size_t pos[TC_B];
+    uint8_t tgt[TC_B] = {0, 0, 0};
+    uint8_t valid[TC_B] = {1, 1, 1};
+    uint8_t cmask[TC_B] = {1, 1, 1};
+    size_t groups[TC_B];
+    for (size_t b = 0; b < TC_B; b++) {
+        pos[b] = TC_N + b;
+        groups[b] = M - 1; // draft rows attend o_M
+    }
+
+    blt_block_batch batch;
+    memset(&batch, 0, sizeof(batch));
+    batch.num_clean = TC_N;
+    batch.block_size = TC_B;
+    batch.num_blocks = 1;
+    batch.n_block_rows = TC_B;
+    batch.t = 0.0f;
+    batch.loss_scale = 0.0f;
+    batch.tokens = tok;
+    batch.positions = pos;
+    batch.targets = tgt;
+    batch.cell_valid = valid;
+    batch.cell_masked = cmask;
+    batch.groups = groups;
+
+    // Reference: greedy/verify decode the same 12 clean bytes through the
+    // generic causal path with trailing_closed = 1.
+    float *ref = (float *)malloc(TC_N * vocab * sizeof(float));
+    TEST_ASSERT(ref != NULL);
+    {
+        blt_arena_reset(scratch);
+        size_t bshape[1] = {TC_N};
+        blt_tensor bytes_in = blt_tensor_create(scratch, bshape, 1, BLT_DTYPE_UINT8);
+        memcpy(bytes_in.data, base, TC_N);
+        size_t p_shape[2] = {M, E};
+        blt_tensor P = blt_tensor_create(scratch, p_shape, 2, BLT_DTYPE_FP32);
+        size_t h_shape[2] = {TC_N, E};
+        blt_tensor h = blt_tensor_create(scratch, h_shape, 2, BLT_DTYPE_FP32);
+        blt_local_encoder_forward(model->encoder, &bytes_in, patches, M, NULL, 0, &P, &h, scratch);
+        blt_tensor O = blt_tensor_create(scratch, p_shape, 2, BLT_DTYPE_FP32);
+        blt_global_transformer_forward(model->global, &P, NULL, 0, &O, scratch);
+        size_t lg[2] = {TC_N, vocab};
+        blt_tensor lg_t = blt_tensor_create(scratch, lg, 2, BLT_DTYPE_FP32);
+        blt_local_decoder_forward_ext(model->decoder, &h, &O, patches, M, NULL, NULL, NULL, 0, NULL,
+                                      /*trailing_closed=*/1, &lg_t, NULL, scratch);
+        blt_tensor_download(&lg_t, ref, TC_N * vocab * sizeof(float));
+    }
+
+    float *draft_open = (float *)malloc(S * vocab * sizeof(float));
+    float *draft_closed = (float *)malloc(S * vocab * sizeof(float));
+    TEST_ASSERT(draft_open != NULL && draft_closed != NULL);
+
+    for (int pass = 0; pass < 2; pass++) {
+        batch.trailing_closed = pass;
+        blt_arena_reset(scratch);
+        size_t bshape[1] = {TC_N};
+        blt_tensor bytes_in = blt_tensor_create(scratch, bshape, 1, BLT_DTYPE_UINT8);
+        memcpy(bytes_in.data, base, TC_N);
+        size_t p_shape[2] = {M, E};
+        blt_tensor P = blt_tensor_create(scratch, p_shape, 2, BLT_DTYPE_FP32);
+        size_t h_shape[2] = {TC_N, E};
+        blt_tensor h = blt_tensor_create(scratch, h_shape, 2, BLT_DTYPE_FP32);
+        blt_local_encoder_forward(model->encoder, &bytes_in, patches, M, NULL, 0, &P, &h, scratch);
+        blt_tensor O = blt_tensor_create(scratch, p_shape, 2, BLT_DTYPE_FP32);
+        blt_global_transformer_forward(model->global, &P, NULL, 0, &O, scratch);
+        size_t lg[2] = {S, vocab};
+        blt_tensor lg_t = blt_tensor_create(scratch, lg, 2, BLT_DTYPE_FP32);
+        blt_local_decoder_forward_diffusion_infer(model->decoder, &h, &O, patches, M, &batch, BLT_D0_LEARNED, &lg_t,
+                                                  scratch);
+        blt_tensor_download(&lg_t, pass == 0 ? draft_open : draft_closed, S * vocab * sizeof(float));
+    }
+
+    double diff_all = 0.0, diff_last = 0.0, diff_open = 0.0, diff_open_last = 0.0;
+    for (size_t i = 0; i < TC_N; i++) {
+        for (size_t v = 0; v < vocab; v++) {
+            const float a = draft_closed[i * vocab + v];
+            const float b = ref[i * vocab + v];
+            const float o = draft_open[i * vocab + v];
+            const double d = fabs((double)a - (double)b);
+            if (d > diff_all) diff_all = d;
+            if (d > diff_open) diff_open = d;
+            if (i == TC_N - 1) {
+                const double dl = fabs((double)a - (double)b);
+                const double dol = fabs((double)o - (double)b);
+                if (dl > diff_last) diff_last = dl;
+                if (dol > diff_open_last) diff_open_last = dol;
+            }
+        }
+    }
+
+    printf("    trailing_closed: closed-vs-greedy max|d|=%.3e (last byte %.3e) open-vs-greedy max|d|=%.3e (last "
+           "byte %.3e)\n",
+           diff_all, diff_last, diff_open, diff_open_last);
+
+    free(ref);
+    free(draft_open);
+    free(draft_closed);
+    blt_arena_destroy(batch_arena);
+    blt_arena_destroy(scratch);
+    blt_arena_destroy(model_arena);
+
+    // With the flag set, the draft clean prefix must match greedy exactly.
+    TEST_ASSERT(diff_all < 1e-3);
+    // Without it, the last byte must actually differ, else the flag is inert
+    // and the regression can silently come back.
+    TEST_ASSERT(diff_open_last > 1e-4);
+    return 1;
+}

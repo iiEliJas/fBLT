@@ -66,6 +66,13 @@ typedef struct {
                           // The sum form scales the gradient with the number of
                           // patches in the window, which makes a fixed global-norm
                           // clip saturate by a per-step-varying factor. Default 0.
+    int trailing_closed;  // 1 = a patch boundary fires immediately after the last
+                          // clean byte, so that byte IS the final byte of its patch
+                          // and must cross-attend its OWN latent o_M instead of
+                          // o_{M-1} (Fast-BLT 3.1.1). Set on inference paths that
+                          // append a block at a fresh patch start; 0 (open patch)
+                          // is correct for training, where the window is cut
+                          // mid-patch at the window edge.
 } blt_block_batch;
 
 // Builds one corrupted training example (Fast-BLT §3.2.1).

@@ -125,6 +125,26 @@ def main() -> None:
             ):
                 cfg.block_size = resolved["block_size"]
                 updated = True
+            # Training with --entropy-patches segments on a trained entropy LM.
+            # Without it the C binary falls back to a random-init LM, whose
+            # per-byte entropy is near ln(256) and so puts every byte in its own
+            # patch. Carry the path over so inference matches training.
+            if (
+                "entropy_lm" not in overridden_fields
+                and not cfg.fixed_patches
+                and cfg.entropy_lm is None
+                and resolved.get("entropy_patches", False)
+            ):
+                ent = resolved.get("entropy_lm")
+                if ent:
+                    cfg.entropy_lm = ent
+                    updated = True
+                else:
+                    print(
+                        "warning: training used entropy patching but resolved_config.yaml has no "
+                        "entropy_lm path; pass entropy_lm=... explicitly",
+                        file=sys.stderr,
+                    )
             if updated:
                 print("note: auto-detected config from resolved_config.yaml", file=sys.stderr)
 
