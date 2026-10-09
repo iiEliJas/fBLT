@@ -35,6 +35,11 @@ void log_batch_properties(FILE *fp, size_t step, size_t window_offset, const uin
 // Visitor callback: zero out RMSNorm weights. Stays as declaration for use in train_blt_d.c.
 void zero_norm_fn(float *p, const blt_param_info *info, void *ctx);
 
+// Deterministic training-window order. Each epoch walks every window exactly
+// once, but in a different order, so resuming mid-run does not replay the same
+// byte sequence it already trained on.
+size_t train_window_index(size_t step, size_t num_windows, uint64_t seed);
+
 #ifdef __cplusplus
 }
 #endif

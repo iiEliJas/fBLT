@@ -295,3 +295,42 @@ void zero_norm_fn(float *p, const blt_param_info *info, void *ctx) {
         }
     }
 }
+
+static uint64_t train_mix64(uint64_t z) {
+    z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+static size_t train_gcd(size_t a, size_t b) {
+    while (b != 0) {
+        const size_t t = a % b;
+        a = b;
+        b = t;
+    }
+    return a;
+}
+
+// Affine bijection on [0, num_windows): w = (a*j + b) mod num_windows is
+// injective in j exactly when gcd(a, num_windows) == 1, which gives every window
+// exactly one visit per epoch with no shuffling array and no memory scaling with
+// corpus size. a and b are reseeded per epoch, so epoch k is ordered differently
+// from epoch k-1.
+size_t train_window_index(size_t step, size_t num_windows, uint64_t seed) {
+    if (num_windows <= 1) return 0;
+    const size_t epoch = step / num_windows;
+    const size_t j = step % num_windows;
+    const uint64_t s = train_mix64(seed + 0x9E3779B97F4A7C15ULL * (uint64_t)(epoch + 1));
+    const size_t b = (size_t)(train_mix64(s) % (uint64_t)num_windows);
+
+    size_t a = (size_t)(train_mix64(s ^ 0xD1B54A32D192ED03ULL) % (uint64_t)num_windows);
+    if (a == 0) a = 1;
+    // Walk down to the nearest multiplier coprime with num_windows. Bounded so a
+    // pathological num_windows cannot stall the loop; 1 is coprime with every n.
+    for (int tries = 0; tries < 64 && train_gcd(a, num_windows) != 1; tries++) {
+        a = (a <= 1) ? (num_windows - 1) : (a - 1);
+    }
+    if (train_gcd(a, num_windows) != 1) a = 1;
+
+    return (size_t)((((uint64_t)a * (uint64_t)j) + (uint64_t)b) % (uint64_t)num_windows);
+}

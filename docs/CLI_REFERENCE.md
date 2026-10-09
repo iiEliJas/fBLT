@@ -107,6 +107,19 @@ fblt-infer --checkpoint my_model.fblt --backend cpu \
 | `--report-every K` | 25 | Print frequency |
 | `--deterministic` | off | Deterministic training (slower, no cuda atomics) |
 
+### Window Order
+
+Training windows are visited in a deterministic shuffled order. Each epoch walks every
+window exactly once, so corpus coverage is identical to sequential striding, but the order
+within an epoch is reseeded and the order is a pure function of `(step, seed)`.
+
+This matters when a run is extended: sequential striding replays the exact byte sequence a
+previous run already trained on, because `(step % num_windows)` starts over at step 0. The
+shuffled order does not.
+
+The order is reproducible from `--seed` alone. Changing `--seed` changes both the window
+order and the diffusion timestep sequence.
+
 ### Optimizer
 
 | Flag | Default | Description |
