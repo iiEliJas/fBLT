@@ -269,27 +269,42 @@ static void run_method(const method_cfg *mc, const blt_model *model, const blt_m
     agg->agreement = (double)agree_count / (double)compare_count;
 }
 
+// Single source of truth for the tag, so the console table and the jsonl rows
+// cannot drift apart. The console used to print a literal "plain_..."/"bltd_..."
+// placeholder instead of this, which made every row ambiguous.
+// The console column is labelled lat_ms_mean, so average instead of reporting
+// only the first prompt.
+static double lat_mean(const double *samples, size_t n) {
+    double sum = 0.0;
+    for (size_t i = 0; i < n; i++) sum += samples[i];
+    return (n > 0) ? sum / (double)n : 0.0;
+}
+
+static void build_tag(char *tag, size_t cap, const char *model_tag, const method_cfg *mc, int fixed_patches) {
+    snprintf(tag, cap, "%s_%s", model_tag, mc->method_name);
+    if (mc->method == M_SELFSPEC) {
+        char k[16];
+        snprintf(k, sizeof(k), "_k%zu", mc->k_or_B);
+        strncat(tag, k, cap - strlen(tag) - 1);
+    } else if (mc->method == M_BLOCKDIFF || mc->method == M_BLOCKDV) {
+        char k[32];
+        snprintf(k, sizeof(k), "_B%zu_%s%.2f", mc->k_or_B, mc->use_eb ? "g" : "a", (double)mc->threshold);
+        strncat(tag, k, cap - strlen(tag) - 1);
+        if (mc->hetero) strncat(tag, "_hetv", cap - strlen(tag) - 1);
+        if (mc->aligned) strncat(tag, "_bal", cap - strlen(tag) - 1);
+        if (mc->adaptive) strncat(tag, "_adapt", cap - strlen(tag) - 1);
+    }
+
+    if (fixed_patches) {
+        strncat(tag, "_fixp", cap - strlen(tag) - 1);
+    }
+}
+
 static void write_result(const char *model_tag, const method_cfg *mc, const bench_args *a, const double *lat_samples,
                          const agg_metrics *agg, const char *results_path) {
     bench_result r;
     char tag[BENCH_TAG_LEN];
-    snprintf(tag, sizeof(tag), "%s_%s", model_tag, mc->method_name);
-    if (mc->method == M_SELFSPEC) {
-        char k[16];
-        snprintf(k, sizeof(k), "_k%zu", mc->k_or_B);
-        strncat(tag, k, sizeof(tag) - strlen(tag) - 1);
-    } else if (mc->method == M_BLOCKDIFF || mc->method == M_BLOCKDV) {
-        char k[32];
-        snprintf(k, sizeof(k), "_B%zu_%s%.2f", mc->k_or_B, mc->use_eb ? "g" : "a", (double)mc->threshold);
-        strncat(tag, k, sizeof(tag) - strlen(tag) - 1);
-        if (mc->hetero) strncat(tag, "_hetv", sizeof(tag) - strlen(tag) - 1);
-        if (mc->aligned) strncat(tag, "_bal", sizeof(tag) - strlen(tag) - 1);
-        if (mc->adaptive) strncat(tag, "_adapt", sizeof(tag) - strlen(tag) - 1);
-    }
-
-    if (a->fixed_patches) {
-        strncat(tag, "_fixp", sizeof(tag) - strlen(tag) - 1);
-    }
+    build_tag(tag, sizeof(tag), model_tag, mc, a->fixed_patches);
     bench_result_init(&r, "gen_methods", tag, "6_infer");
 
     // Latency stats across prompts.
@@ -398,6 +413,18 @@ int main(int argc, char **argv) {
     printf("[INFER-BENCH] patcher: %s\n", a.fixed_patches ? "fixed-stride-4" : "entropy (thr 2.5/1.0, max 16)");
 
     // Held-out prompts at deep offsets.
+    // A random-init entropy LM puts per-byte entropy near ln(256), above the 2.5
+    // threshold everywhere, so every byte starts its own patch and the model runs
+    // on a layout it never saw in training. That is what made an earlier round of
+    // benchmark numbers meaningless (BLT-DV acceptance 1.6-5.2%). Refuse to
+    // measure it. --fixed-patches is the one legitimate case with no LM.
+    if (!a.fixed_patches && !a.entropy_lm) {
+        BLT_FATAL("infer_bench: entropy patching needs the trained entropy LM used in training.\n"
+                  "            Pass --entropy-lm FILE, or --fixed-patches if the checkpoint was trained\n"
+                  "            with fixed-stride patching. A random-init LM segments every byte into its\n"
+                  "            own patch and the resulting numbers do not describe the model.");
+    }
+
     FILE *f = fopen(a.heldout_path, "rb");
     if (!f) BLT_FATAL("cannot open %s", a.heldout_path);
     fseek(f, 0, SEEK_END);
@@ -476,15 +503,19 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < sizeof(PLAIN_CFGS) / sizeof(PLAIN_CFGS[0]); i++) {
         run_method(&PLAIN_CFGS[i], plain, NULL, lm, &pcfg, prompts, refs_p, outs, &a, scratch, lat, &agg);
         write_result(plain_tag, &PLAIN_CFGS[i], &a, lat, &agg, a.results_path);
-        printf("%-28s %10.3f %10.3f %10.3f %10.3f %12.2f\n", "plain_...", agg.dec_per_byte, agg.enc_per_byte,
-               agg.total_drafted > 0 ? agg.acceptance : -1.0, agg.agreement, 1000.0 * lat[0]);
+        char tag[BENCH_TAG_LEN];
+        build_tag(tag, sizeof(tag), plain_tag, &PLAIN_CFGS[i], a.fixed_patches);
+        printf("%-28s %10.3f %10.3f %10.3f %10.3f %12.2f\n", tag, agg.dec_per_byte, agg.enc_per_byte,
+               agg.total_drafted > 0 ? agg.acceptance : -1.0, agg.agreement, 1000.0 * lat_mean(lat, a.num_prompts));
     }
     for (size_t i = 0; i < num_bltd_cfgs; i++) {
         uint8_t **refs = BLTD_CFGS[i].hetero ? refs_p : refs_b;
         run_method(&BLTD_CFGS[i], bltd, plain, lm, &pcfg, prompts, refs, outs, &a, scratch, lat, &agg);
         write_result(bltd_tag, &BLTD_CFGS[i], &a, lat, &agg, a.results_path);
-        printf("%-28s %10.3f %10.3f %10.3f %10.3f %12.2f\n", "bltd_...", agg.dec_per_byte, agg.enc_per_byte,
-               agg.total_drafted > 0 ? agg.acceptance : -1.0, agg.agreement, 1000.0 * lat[0]);
+        char tag[BENCH_TAG_LEN];
+        build_tag(tag, sizeof(tag), bltd_tag, &BLTD_CFGS[i], a.fixed_patches);
+        printf("%-28s %10.3f %10.3f %10.3f %10.3f %12.2f\n", tag, agg.dec_per_byte, agg.enc_per_byte,
+               agg.total_drafted > 0 ? agg.acceptance : -1.0, agg.agreement, 1000.0 * lat_mean(lat, a.num_prompts));
     }
 
     printf("\n[INFER-BENCH] results appended to %s\n", a.results_path);
