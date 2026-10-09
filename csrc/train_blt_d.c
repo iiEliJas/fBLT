@@ -125,6 +125,7 @@ static void monitor_novel_block(const blt_model *model, blt_arena *scratch, blt_
     batch.t = 1.0f;
     batch.loss_scale = 0.0f;
     batch.last_row_scale = 1.0f;
+    batch.trailing_closed = 1;
     batch.tokens = (uint32_t *)blt_container_alloc(scratch, B * sizeof(uint32_t));
     batch.positions = (size_t *)blt_container_alloc(scratch, B * sizeof(size_t));
     batch.targets = (uint8_t *)blt_container_alloc(scratch, B);

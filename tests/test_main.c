@@ -80,6 +80,7 @@ int main(void) {
         {"block diffusion overfit gate", run_block_diffusion_overfit_gate},
         {"block diffusion has no label leak", run_block_diffusion_no_label_leak},
         {"block diffusion last-row upweight", run_block_diffusion_last_row_upweight},
+        {"block diffusion draft trailing closed", run_block_diffusion_draft_trailing_closed},
     };
 
     const test_case parity_tests[] = {
