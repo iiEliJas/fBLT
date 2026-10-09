@@ -1,3 +1,4 @@
+import argparse
 import dataclasses
 import typing
 
@@ -88,6 +89,7 @@ class TrainConfig:
     mask_scale: float = 1.0
     mask_late_step: int = 0
     mask_late_scale: float = 1.0
+    last_row_scale: float = 1.0
 
     lr_decay: int = 0
     lr_decay_steps: typing.Optional[typing.List[int]] = None
@@ -245,3 +247,75 @@ def _coerce(val: typing.Any, tp: typing.Any, default: typing.Any) -> typing.Any:
         return [_coerce(v.strip(), args[0], None) for v in str(val).split(",")]
 
     return val
+
+
+def _field_to_flag_pub(name: str) -> str:
+    return "--" + name.replace("_", "-")
+
+
+def _cli_type(field: dataclasses.Field) -> typing.Any:
+    """argparse type for a dataclass field, unwrapping Optional[...]."""
+    tp = field.type
+    origin = typing.get_origin(tp)
+    if origin is typing.Union and type(None) in typing.get_args(tp):
+        inner = [a for a in typing.get_args(tp) if a is not type(None)]
+        tp = inner[0] if inner else str
+        origin = typing.get_origin(tp)
+    if origin is list:
+        return str
+    if tp is bool:
+        return None
+    if tp in (int, float, str):
+        return tp
+    return str
+
+
+def add_config_args(
+    parser: argparse.ArgumentParser,
+    config_class: typing.Any,
+    skip: typing.Sequence[str] = (),
+    overrides: typing.Optional[typing.Dict[str, typing.Any]] = None,
+) -> None:
+    """Give every dataclass field a real command-line flag.
+
+    The wrapper used to require --override key=value for anything not listed in
+    argparse by hand, which meant the C binary's full flag surface was reachable
+    only through a stringly-typed escape hatch. Deriving the flags from the
+    dataclass keeps the three in step: a field that exists is a flag you can pass,
+    and its type comes from the annotation.
+
+    Every generated flag defaults to None so "not given" stays distinguishable
+    from "given the default value". That is what lets precedence work:
+    dataclass default < YAML < --override < explicit flag.
+
+    Values land in `overrides` instead of a namespace, so callers can apply them
+    after load_config() without a second code path.
+    """
+    if overrides is None:
+        overrides = {}
+    skip_set = set(skip)
+    for field in dataclasses.fields(config_class):
+        if field.name in skip_set:
+            continue
+        flag = _field_to_flag_pub(field.name)
+        default = field.default
+        help_text = f"[config] {field.name}"
+        if default is not None and default is not dataclasses.MISSING:
+            help_text += f" (default: {default})"
+
+        if field.type is bool or (isinstance(default, bool) and default is not False):
+            parser.add_argument(
+                flag,
+                dest=field.name,
+                action="store_true",
+                default=None,
+                help=help_text,
+            )
+        else:
+            parser.add_argument(
+                flag,
+                dest=field.name,
+                type=_cli_type(field),
+                default=None,
+                help=help_text,
+            )
