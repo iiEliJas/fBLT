@@ -175,3 +175,111 @@ float adamw_update_norm(blt_model *m, blt_model_grad *g, adamw_state *s, const b
     blt_model_visit_param_pairs(m, g, adamw_unorm_fn, &ctx);
     return sqrtf(ctx.sq) * cfg->lr;
 }
+
+// AdamW state serialization. Written next to the weight checkpoint so a run can
+// be extended without losing the moment estimates.
+//
+//   magic  "FBOP" (4 bytes)
+//   u32    version (1)
+//   u64    global_step       (training step at the time of the write)
+//   u64    adamw_step        (number of adamw_all calls; bias-correction counter)
+//   u64    num_pairs
+//   per pair:
+//     u32  ndim
+//     u64  dims[ndim]
+//     f32  exp_avg[numel]
+//     f32  exp_avg_sq[numel]
+//
+// Pair order is adamw_state_create's, which matches blt_model_tensor_at and
+// blt_model_visit_params, so pair i always corresponds to parameter i.
+
+static void optim_tensor_write(const blt_tensor *t, FILE *f, const char *path) {
+    const uint32_t ndim = (uint32_t)t->ndim;
+    if (fwrite(&ndim, sizeof(uint32_t), 1, f) != 1 || fwrite(t->shape, sizeof(size_t), ndim, f) != ndim)
+        BLT_FATAL("optim save: header write failed for pair in '%s'", path);
+    if (t->backend == BLT_BACKEND_CPU) {
+        if (fwrite(t->data, sizeof(float), t->numel, f) != t->numel)
+            BLT_FATAL("optim save: payload write failed for pair in '%s'", path);
+        return;
+    }
+    float *stage = (float *)malloc(t->numel * sizeof(float));
+    BLT_REQUIRE(stage != NULL, "optim save: staging alloc failed");
+    blt_tensor_download(t, stage, blt_tensor_bytes(t));
+    const size_t wrote = fwrite(stage, sizeof(float), t->numel, f);
+    free(stage);
+    if (wrote != t->numel) BLT_FATAL("optim save: payload write failed for pair in '%s'", path);
+}
+
+static void optim_tensor_read(blt_tensor *t, FILE *f, const char *path) {
+    uint32_t ndim = 0;
+    if (fread(&ndim, sizeof(uint32_t), 1, f) != 1 || ndim > BLT_MAX_NDIM)
+        BLT_FATAL("optim load: truncated or invalid ndim in '%s'", path);
+    if (ndim != t->ndim) BLT_FATAL("optim load: ndim %u != %u (model shape mismatch?)", ndim, (uint32_t)t->ndim);
+    for (uint32_t d = 0; d < ndim; d++) {
+        size_t dim = 0;
+        if (fread(&dim, sizeof(size_t), 1, f) != 1) BLT_FATAL("optim load: truncated dims in '%s'", path);
+        if (dim != t->shape[d])
+            BLT_FATAL("optim load: dim[%u] %zu != %zu (model shape mismatch?)", d, dim, t->shape[d]);
+    }
+    if (t->backend == BLT_BACKEND_CPU) {
+        if (fread(t->data, sizeof(float), t->numel, f) != t->numel)
+            BLT_FATAL("optim load: truncated payload in '%s'", path);
+        return;
+    }
+    float *stage = (float *)malloc(t->numel * sizeof(float));
+    BLT_REQUIRE(stage != NULL, "optim load: staging alloc failed");
+    const size_t got = fread(stage, sizeof(float), t->numel, f);
+    if (got != t->numel) {
+        free(stage);
+        BLT_FATAL("optim load: truncated payload in '%s'", path);
+    }
+    blt_tensor_upload(t, stage, blt_tensor_bytes(t));
+    free(stage);
+}
+
+void adamw_state_save(const adamw_state *s, size_t global_step, const char *path) {
+    FILE *f = fopen(path, "wb");
+    if (!f) BLT_FATAL("optim save: cannot open '%s'", path);
+
+    const uint32_t version = 1;
+    const uint64_t n_pairs = (uint64_t)s->n;
+    const uint64_t gstep = (uint64_t)global_step;
+    const uint64_t astep = (uint64_t)s->step;
+    if (fwrite("FBOP", 1, 4, f) != 4 || fwrite(&version, sizeof(uint32_t), 1, f) != 1 ||
+        fwrite(&gstep, sizeof(uint64_t), 1, f) != 1 || fwrite(&astep, sizeof(uint64_t), 1, f) != 1 ||
+        fwrite(&n_pairs, sizeof(uint64_t), 1, f) != 1)
+        BLT_FATAL("optim save: header write failed ('%s')", path);
+
+    for (uint64_t i = 0; i < n_pairs; i++) {
+        optim_tensor_write(&s->flat[i].em, f, path);
+        optim_tensor_write(&s->flat[i].esq, f, path);
+    }
+    fclose(f);
+}
+
+void adamw_state_load(adamw_state *s, size_t *global_step_out, const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) BLT_FATAL("optim load: cannot open '%s'", path);
+
+    char magic[4];
+    uint32_t version = 0;
+    uint64_t gstep = 0, astep = 0, n_pairs = 0;
+    if (fread(magic, 1, 4, f) != 4 || memcmp(magic, "FBOP", 4) != 0) BLT_FATAL("optim load: bad magic in '%s'", path);
+    if (fread(&version, sizeof(uint32_t), 1, f) != 1 || version != 1)
+        BLT_FATAL("optim load: unsupported version %u in '%s'", version, path);
+    if (fread(&gstep, sizeof(uint64_t), 1, f) != 1 || fread(&astep, sizeof(uint64_t), 1, f) != 1 ||
+        fread(&n_pairs, sizeof(uint64_t), 1, f) != 1)
+        BLT_FATAL("optim load: truncated header in '%s'", path);
+    if (n_pairs != (uint64_t)s->n)
+        BLT_FATAL("optim load: pair count %llu != expected %zu (model shape mismatch?)", (unsigned long long)n_pairs,
+                  s->n);
+
+    for (uint64_t i = 0; i < n_pairs; i++) {
+        optim_tensor_read(&s->flat[i].em, f, path);
+        optim_tensor_read(&s->flat[i].esq, f, path);
+    }
+    fclose(f);
+
+    s->step = (size_t)astep;
+    if (global_step_out) *global_step_out = (size_t)gstep;
+}

@@ -145,12 +145,45 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 | `--save-weights PATH` | Write weights after training; if PATH contains `%d`, the first `%d` is replaced by the step number |
 | `--save-every N` | Save checkpoint every N steps (0 = only at end) |
 | `--load-weights PATH` | Load weights before training (steps=0 → eval only) |
+| `--save-optim PATH` | Write AdamW moments and step counter alongside the weights |
+| `--load-optim PATH` | Restore AdamW moments and step counter (requires `--load-weights`) |
+| `--start-step N` | Absolute step to start at; defaults to the value stored in `--load-optim`, else 0 |
 | `--eval-corpus FILE` | Held-out corpus for causal BPB eval |
 | `--eval-windows N` | Eval window count (default 200) |
 | `--eval-skip N` | Bytes to skip before first eval window |
 | `--eval-every N` | Run causal BPB eval every N steps (default 0, disabled) |
 | `--monitor-every N` | Leak-monitor interval in steps (default 2000, 0 = disabled) |
 | `--monitor-windows N` | Held-out windows per monitor check (default 24) |
+
+### Resuming
+
+`--load-weights` alone restarts the optimizer cold: AdamW moment estimates and the
+bias-correction counter both begin at zero, so the first steps behave like from-scratch AdamW rather
+than a continuation. Pass `--load-optim` as well to carry both across.
+
+```bash
+# original run
+build-cuda/train_blt_d --corpus data/train.bin --steps 300000 \
+  --save-weights runs/x/model.fblt --save-optim runs/x/model.fbop
+
+# extend it by another 300k steps
+build-cuda/train_blt_d --corpus data/train.bin --steps 300000 \
+  --load-weights runs/x/model.fblt --load-optim runs/x/model.fbop \
+  --save-weights runs/x/model.fblt --save-optim runs/x/model.fbop
+```
+
+`--steps` is the number of steps to run in this invocation. The absolute step counter continues from
+the value stored in the optimizer snapshot, so all logs, `--save-every` filenames, and any
+step-indexed schedule (`--lr-decay-steps`, `--mask-late-step`) continue where they left off.
+Fraction-based schedules (`--lr-decay`, `--t-warmup-hi`) use `start_step + steps` as the planned end,
+so they behave as if the whole thing had been one continuous run. `--start-step N` overrides the
+stored counter if you need to.
+
+The optimizer snapshot is a separate file with its own header and per-tensor shapes, so it never
+changes the weight checkpoint format and existing checkpoints keep loading.
+
+With the window order from `--seed`, a resumed run is bit-identical to an equivalent single
+continuous run, and a run split across several resumes is bit-identical too.
 
 ### Diffusion Schedule
 

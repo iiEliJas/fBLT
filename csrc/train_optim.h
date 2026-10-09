@@ -38,6 +38,15 @@ void adamw_all(blt_model *m, blt_model_grad *g, adamw_state *s, const blt_adamw_
 // Compute ||update|| across all parameters (for gradient clipping diagnostics)
 float adamw_update_norm(blt_model *m, blt_model_grad *g, adamw_state *s, const blt_adamw_config *cfg);
 
+// Write exp_avg, exp_avg_sq and the bias-correction step counter, plus the
+// training step the snapshot was taken at. Fatal on any IO or shape mismatch.
+void adamw_state_save(const adamw_state *s, size_t global_step, const char *path);
+
+// Restore from adamw_state_save. Fatal if the pair count or any shape disagrees
+// with the target model, which is what a config mismatch looks like.
+// global_step_out may be NULL; when set it receives the stored training step.
+void adamw_state_load(adamw_state *s, size_t *global_step_out, const char *path);
+
 #ifdef __cplusplus
 }
 #endif

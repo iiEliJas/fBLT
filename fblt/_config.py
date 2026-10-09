@@ -105,8 +105,11 @@ class TrainConfig:
     eval_every: int = 0
 
     save_weights: typing.Optional[str] = None
+    save_optim: typing.Optional[str] = None
     save_every: int = 0
     load_weights: typing.Optional[str] = None
+    load_optim: typing.Optional[str] = None
+    start_step: typing.Optional[int] = None
     report_every: int = 25
     cuda_scratch_mb: int = 0
     model_mb: int = 0
