@@ -116,6 +116,15 @@ def main() -> None:
             ):
                 cfg.fixed_patches = True
                 updated = True
+            # The C binary refuses to guess the block size: cells past the
+            # trained B are a block L_mask never scored. Carry it over.
+            if (
+                "block_size" not in overridden_fields
+                and cfg.block_size == defaults["block_size"]
+                and "block_size" in resolved
+            ):
+                cfg.block_size = resolved["block_size"]
+                updated = True
             if updated:
                 print("note: auto-detected config from resolved_config.yaml", file=sys.stderr)
 
@@ -129,5 +138,9 @@ def main() -> None:
     # Resolve binary and run
     binary = resolve_binary("infer", cfg.backend)
     argv = cfg.to_argv()
+    # to_argv omits fields equal to their default, but the binary treats
+    # --block-size as mandatory for the block methods.
+    if cfg.method in ("blockdiff", "blockdv") and "--block-size" not in argv:
+        argv.extend(["--block-size", str(cfg.block_size)])
     rc = run_binary(binary, argv)
     sys.exit(rc)

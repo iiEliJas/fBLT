@@ -293,7 +293,7 @@ Used with `--method blockdiff` or `blockdv`.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--block-size B` | 8 | Diffusion block size |
+| `--block-size B` | 4 | Diffusion block size; required for `blockdiff` and `blockdv` |
 | `--unmask STRAT` | confidence | `confidence` or `eb` (entropy-bounded) |
 | `--threshold F` | 0.7/1.0 | Alpha (confidence) or gamma (eb) |
 | `--boundary-aligned` | off | Commit only at patch boundaries |
@@ -302,6 +302,15 @@ Used with `--method blockdiff` or `blockdv`.
 | `--b-max N` | 16 | Adaptive upper bound |
 | `--accept-target F` | 0.5 | Rolling acceptance target |
 | `--adapt-window N` | 8 | Rounds per rolling average |
+
+`--block-size` must equal the `block_size` the checkpoint was trained with, and `blockdiff` and
+`blockdv` refuse to start without it. Block cells past the trained `B` form a bidirectional block
+that L_mask never supervised, so each one attends partners the model was never trained to
+condition on. Acceptance collapses accordingly (measured on the 10M TinyStories BLT-D model:
+91% at `B=4`, 15% at `B=8`).
+
+The trained value is the `block_size` entry in the run's `resolved_config.yaml`, which
+`fblt-infer` reads automatically.
 
 ### Model Options
 
@@ -336,7 +345,7 @@ build/infer --checkpoint runs/my_model.fblt \
 # BLT-DV with entropy patching
 build/infer --checkpoint runs/my_model.fblt \
   --embed 192 --hidden 384 --enc-layers 2 --glob-layers 2 --dec-layers 2 \
-  --backend cpu --method blockdv --block-size 8 --threshold 0.7 \
+  --backend cpu --method blockdv --block-size 4 --threshold 0.7 \
   --entropy-lm runs/entlm.bin --prompt "def " --new-bytes 128
 
 # CUDA inference with output to file
