@@ -160,6 +160,7 @@ class InferConfig:
     patch_threshold_monotonic: float = 1.0
     max_patch_length: int = 16
     entropy_lm: typing.Optional[str] = None
+    allow_random_entropy_lm: bool = False
 
     output: typing.Optional[str] = None
 
