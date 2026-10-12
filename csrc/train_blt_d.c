@@ -340,8 +340,23 @@ int main(int argc, char **argv) {
     // 512-byte window these are exactly the old constants, so that path is
     // unchanged; a 2048 window needs roughly 4x the scratch and segmentation
     // staging because the byte and patch tensors all grow with it.
+    // Scratch grows faster than the window because diffusion scores every patch
+    // at once: the decoder sees S = window * (1 + block_size) rows, and the
+    // attention scores over S are quadratic in S. Measured on the TinyStories
+    // 10M shape: window 512 needs 512 MB, window 2048 needs 4096 MB, and that
+    // is ~96% of an 8 GB card. Scaling linearly under-provisioned it and
+    // overflowed two steps in, which is what this fixes.
     const size_t arena_scale = (a.window + 511) / 512;
-    blt_arena *scratch = blt_arena_create(512ULL * 1024 * 1024 * arena_scale, dev);
+    size_t scratch_mb = a.scratch_mb;
+    if (scratch_mb == 0) {
+        scratch_mb = 512 * arena_scale * arena_scale / 2;
+        if (scratch_mb < 512) scratch_mb = 512;
+    }
+    blt_arena *scratch = blt_arena_create(scratch_mb * 1024ULL * 1024, dev);
+    if (a.use_cuda) {
+        fprintf(stderr, "[TRAIN] scratch arena %zu MB (window %zu), cuda kernel scratch %d MB\n", scratch_mb, a.window,
+                a.cuda_scratch_mb);
+    }
     blt_arena *adamw_state_arena = NULL;
     // sized after the model is built, below
     // Host arena for the segmentation LM + patcher (host-only by design),

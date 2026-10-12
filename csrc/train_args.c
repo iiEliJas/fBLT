@@ -20,7 +20,9 @@ static void usage(void) {
                     "  --max-norm F            gradient clip threshold (default 5.0)\n"
                     "  --seed S                RNG seed (default 7)\n"
                     "  --backend cpu|cuda      backend (default cpu)\n"
-                    "  --cuda-scratch-mb N     CUDA scratch arena size in MB (default 512)\n"
+                    "  --cuda-scratch-mb N     CUDA kernel scratch pool size in MB\n"
+                    "  --scratch-mb N           trainer scratch arena size in MB; 0 derives it from --window\n"
+                    "                          (see docs/CLI_REFERENCE.md for the memory cost of long windows)\n"
                     "  --model-mb N           CUDA model arena size in MB (default 1024)\n"
                     "  --deterministic         bit-reproducible training (slower)\n"
                     "\n"
@@ -142,6 +144,7 @@ args_t parse_args(int argc, char **argv) {
                 .loss_log = NULL,
                 .deterministic = 0,
                 .cuda_scratch_mb = 0,
+                .scratch_mb = 0,
                 .model_mb = 0};
 
     for (int i = 1; i < argc; i++) {
@@ -231,6 +234,7 @@ args_t parse_args(int argc, char **argv) {
         else if (!strcmp(argv[i], "--activation-dump-log") && i + 1 < argc) a.activation_dump_log = argv[++i];
         else if (!strcmp(argv[i], "--batch-log") && i + 1 < argc) a.batch_log = argv[++i];
         else if (!strcmp(argv[i], "--loss-log") && i + 1 < argc) a.loss_log = argv[++i];
+        else if (!strcmp(argv[i], "--scratch-mb") && i + 1 < argc) a.scratch_mb = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--cuda-scratch-mb") && i + 1 < argc)
             a.cuda_scratch_mb = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--model-mb") && i + 1 < argc) a.model_mb = strtoull(argv[++i], NULL, 10);

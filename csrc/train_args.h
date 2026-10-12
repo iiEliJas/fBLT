@@ -72,6 +72,7 @@ typedef struct {
     const char *loss_log;
     int deterministic;
     size_t cuda_scratch_mb;
+    size_t scratch_mb;
     size_t model_mb;
 } args_t;
 

@@ -114,6 +114,7 @@ class TrainConfig:
     start_step: typing.Optional[int] = None
     report_every: int = 25
     cuda_scratch_mb: int = 0
+    scratch_mb: int = 0
     model_mb: int = 0
 
     grad_norm_log: typing.Optional[str] = None
