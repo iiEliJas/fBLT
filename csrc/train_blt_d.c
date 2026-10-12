@@ -390,6 +390,31 @@ int main(int argc, char **argv) {
         blt_model_load(model, a.load_path);
         printf("[CKPT] loaded weights from %s\n", a.load_path);
     }
+    // Create and validate the checkpoint destinations now. Waiting for the first
+    // periodic save meant a missing directory killed the run at step
+    // --save-every, discarding everything trained so far.
+    const char *save_paths[4];
+    save_paths[0] = a.save_path;
+    save_paths[1] = a.save_optim_path;
+    save_paths[2] = a.grad_norm_log;
+    save_paths[3] = a.update_norm_log;
+    for (size_t i = 0; i < 4; i++) {
+        if (save_paths[i]) {
+            BLT_REQUIRE(train_ensure_parent_dir(save_paths[i]) == 0, "train_blt_d: unusable output path %s",
+                        save_paths[i]);
+        }
+    }
+    const char *more_paths[4];
+    more_paths[0] = a.component_norm_log;
+    more_paths[1] = a.activation_dump_log;
+    more_paths[2] = a.load_path;
+    more_paths[3] = a.load_optim_path;
+    for (size_t i = 0; i < 4; i++) {
+        if (more_paths[i]) {
+            BLT_REQUIRE(train_ensure_parent_dir(more_paths[i]) == 0, "train_blt_d: unusable path %s", more_paths[i]);
+        }
+    }
+
     blt_model_grad *grad = blt_model_grad_create(model_arena, model);
     blt_entropy_lm *train_lm = a.entropy_patches ? blt_make_entropy_lm(host_lm_arena, MS, NULL, 11) : NULL;
     if (train_lm && a.entropy_lm) {
@@ -592,9 +617,15 @@ int main(int argc, char **argv) {
     FILE *adump_fp = NULL;
     if (a.activation_dump_log) adump_fp = fopen(a.activation_dump_log, "w");
     FILE *batch_fp = NULL;
-    if (a.batch_log) batch_fp = fopen(a.batch_log, "w");
+    if (a.batch_log) {
+        if (train_ensure_parent_dir(a.batch_log) == 0) batch_fp = fopen(a.batch_log, "w");
+        BLT_REQUIRE(batch_fp != NULL, "train_blt_d: cannot open --batch-log %s", a.batch_log);
+    }
     FILE *loss_fp = NULL;
-    if (a.loss_log) loss_fp = fopen(a.loss_log, "w");
+    if (a.loss_log) {
+        if (train_ensure_parent_dir(a.loss_log) == 0) loss_fp = fopen(a.loss_log, "w");
+        BLT_REQUIRE(loss_fp != NULL, "train_blt_d: cannot open --loss-log %s", a.loss_log);
+    }
 
     double t_fwd = 0.0, t_bwd = 0.0, t_opt = 0.0, t_step = 0.0;
     double ts0, tsA, tsB, tsC, tsD;

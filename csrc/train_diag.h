@@ -35,6 +35,12 @@ void log_batch_properties(FILE *fp, size_t step, size_t window_offset, const uin
 // Visitor callback: zero out RMSNorm weights. Stays as declaration for use in train_blt_d.c.
 void zero_norm_fn(float *p, const blt_param_info *info, void *ctx);
 
+// Create the parent directory of `path` (mkdir -p semantics) and verify it is
+// writable. A missing save directory used to surface as a fatal at the first
+// periodic checkpoint, which on a 10k-step run throws away all the work so far.
+// Returns 0 on success, -1 if the directory is missing and cannot be created.
+int train_ensure_parent_dir(const char *path);
+
 // Deterministic training-window order. Each epoch walks every window exactly
 // once, but in a different order, so resuming mid-run does not replay the same
 // byte sequence it already trained on.
