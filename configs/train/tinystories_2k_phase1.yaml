@@ -1,0 +1,60 @@
+# BLT-D on TinyStories, 2048-byte window.
+#
+# Phase 1 of 2. Trains from random init. Phase 2 is
+# configs/train/tinystories_2k_continue.yaml, which resumes this file's output.
+#
+# Same hyper-parameters as configs/train/tinystories.yaml except the window.
+# `--steps` here is the budget for THIS invocation; the phase 2 config adds its
+# own steps on top and continues the step counter from the optimizer snapshot.
+#
+# Window 2048 needs ~400 patches per window against ~98 at 512, so expect
+# roughly 4x the activation memory and slower steps than the 512 run. The
+# trainer scales its scratch arena with the window automatically.
+
+corpus: data/tinystories/train.bin
+eval-corpus: data/tinystories/heldout.bin
+
+embed: 256
+hidden: 512
+enc-layers: 2
+glob-layers: 6
+dec-layers: 2
+
+steps: 100000
+
+optimizer: adamw
+lr: 0.0001
+beta1: 0.9
+beta2: 0.999
+eps: 1.0e-8
+weight-decay: 0.01
+max-norm: 20000
+
+paper-loss: 1
+mask-scale: 1.0
+diffusion: 1
+block-size: 4
+
+# The long part: 2048 instead of 512.
+window: 2048
+
+t-min: 0.1
+cross-attn: all
+seed: 7
+report-every: 1000
+cuda-scratch-mb: 2048
+
+entropy-patches: true
+entropy-lm: runs/entropylm/entropy_lm.fblt
+
+monitor-every: 10000
+monitor-windows: 48
+eval-windows: 200
+eval-every: 10000
+
+save-weights: runs/tinystories_2k/phase1.fblt
+save-optim: runs/tinystories_2k/phase1.fbop
+save-every: 10000
+
+# Needed for phase 2. The directory is created by the wrapper, but the parent
+# has to exist for the periodic saves inside the run directory.

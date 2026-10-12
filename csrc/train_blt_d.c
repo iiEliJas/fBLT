@@ -98,10 +98,10 @@ static void monitor_novel_block(const blt_model *model, blt_arena *scratch, blt_
                                 const uint8_t *text, size_t P, size_t B, int use_entropy, blt_d0_mode d0m, size_t *hits,
                                 size_t *total) {
     if (P < 8) return;
-    blt_patch_info pp[128];
+    blt_patch_info pp[BLT_MAX_PATCHES];
     blt_arena_reset(seg_arena);
-    size_t Mp = use_entropy ? entropy_segment(seg_arena, lm, text, P, pp, 128) : fixed_stride(P, 4, pp);
-    if (Mp < 2 || Mp >= 128) return;
+    size_t Mp = use_entropy ? entropy_segment(seg_arena, lm, text, P, pp, BLT_MAX_PATCHES) : fixed_stride(P, 4, pp);
+    if (Mp < 2 || Mp >= BLT_MAX_PATCHES) return;
     // The caller only ever passes a P that lands on a patch start, so the
     // final prefix patch is closed and the last closed latent is Mp-1. (masked_acc
     // handles the mid-patch case too, where it falls back to Mp-2.)
@@ -176,10 +176,11 @@ static void blt_monitor(const blt_model *model, blt_arena *scratch, blt_arena *s
     for (size_t wi = 0; wi < wins; wi++) {
         const uint8_t *text = bytes + wi * a->window;
         const size_t N = a->window;
-        blt_patch_info patches[128];
+        blt_patch_info patches[BLT_MAX_PATCHES];
         blt_arena_reset(seg_arena);
-        size_t M = use_entropy ? entropy_segment(seg_arena, lm, text, N, patches, 128) : fixed_stride(N, 4, patches);
-        if (M < 2 || M >= 128) continue;
+        size_t M = use_entropy ? entropy_segment(seg_arena, lm, text, N, patches, BLT_MAX_PATCHES)
+                               : fixed_stride(N, 4, patches);
+        if (M < 2 || M >= BLT_MAX_PATCHES) continue;
         if (N + B * (M - 1) > model->config.decoder_config.max_seq_len) continue;
 
         blt_arena_reset(scratch);
@@ -302,9 +303,16 @@ int main(int argc, char **argv) {
     }
     fclose(fp);
 
-    size_t MS = 1024; // max_seq_len headroom for clean + blocks
-    if (a.window < 8 || a.window > 512) {
-        fprintf(stderr, "--window must be in [8, 512]\n");
+    // Diffusion scores every patch in the window at once, so the decoder sees
+    // S = window + num_patches * block_size rows, not just window + block_size.
+    // num_patches is bounded by the window (a patch is at least one byte), hence
+    // the (1 + block_size) factor. The old fixed 1024 happened to cover the
+    // 512-byte window; deriving it from the window extends that to longer runs.
+    const size_t BLT_WINDOW_MAX = 2048;
+    size_t MS = a.window * (1 + a.block_size) + 64;
+    if (MS < 1024) MS = 1024;
+    if (a.window < 8 || a.window > BLT_WINDOW_MAX) {
+        fprintf(stderr, "--window must be in [8, %zu]\n", BLT_WINDOW_MAX);
         return 1;
     }
 #if !defined(BLT_WITH_CUDA)
@@ -328,14 +336,19 @@ int main(int argc, char **argv) {
 #endif
 
     blt_arena *model_arena = blt_arena_create(a.use_cuda ? 1024ULL * 1024 * 1024 : 64 * 1024 * 1024, dev);
-    blt_arena *scratch = blt_arena_create(512 * 1024 * 1024, dev);
+    // Activation and segmentation arenas scale with the window. At the original
+    // 512-byte window these are exactly the old constants, so that path is
+    // unchanged; a 2048 window needs roughly 4x the scratch and segmentation
+    // staging because the byte and patch tensors all grow with it.
+    const size_t arena_scale = (a.window + 511) / 512;
+    blt_arena *scratch = blt_arena_create(512ULL * 1024 * 1024 * arena_scale, dev);
     blt_arena *adamw_state_arena = NULL;
     // sized after the model is built, below
     // Host arena for the segmentation LM + patcher (host-only by design),
     // valid in both backends. Segmentation buffers get their own resettable
     // arena so per-step calls never overwrite the LM weights.
     blt_arena *host_lm_arena = blt_arena_create(32 * 1024 * 1024, BLT_BACKEND_CPU);
-    blt_arena *host_seg_arena = blt_arena_create(16 * 1024 * 1024, BLT_BACKEND_CPU);
+    blt_arena *host_seg_arena = blt_arena_create(16ULL * 1024 * 1024 * arena_scale, BLT_BACKEND_CPU);
 
     // Model config (paper-ish defaults; ngram tables as in the repo baseline).
     // Per-submodule layer counts default to --layers; the decoder can be
@@ -587,13 +600,13 @@ int main(int argc, char **argv) {
         const uint8_t *text = corpus + w * a.window;
         const size_t N = a.window;
 
-        blt_patch_info patches[128];
+        blt_patch_info patches[BLT_MAX_PATCHES];
         const size_t M = train_lm ? (blt_arena_reset(host_seg_arena),
-                                     entropy_segment(host_seg_arena, train_lm, text, N, patches, 128))
+                                     entropy_segment(host_seg_arena, train_lm, text, N, patches, BLT_MAX_PATCHES))
                                   : fixed_stride(N, 4, patches);
         BLT_REQUIRE(M >= 2, "training window produced < 2 patches");
         if (M < 2) continue;
-        if (M >= 128) continue;
+        if (M >= BLT_MAX_PATCHES) continue;
 
         blt_block_batch batch;
         if (a.diffusion) {
@@ -880,7 +893,7 @@ int main(int argc, char **argv) {
                         size_t eM = 0;
                         if (train_lm) {
                             blt_arena_reset(host_seg_arena);
-                            eM = entropy_segment(host_seg_arena, train_lm, text, a.window, ep, 128);
+                            eM = entropy_segment(host_seg_arena, train_lm, text, a.window, ep, BLT_MAX_PATCHES);
                         } else {
                             eM = fixed_stride(a.window, 4, ep);
                         }
@@ -957,7 +970,7 @@ int main(int argc, char **argv) {
             size_t eM = 0;
             if (train_lm) {
                 blt_arena_reset(host_seg_arena);
-                eM = entropy_segment(host_seg_arena, train_lm, text, a.window, ep, 128);
+                eM = entropy_segment(host_seg_arena, train_lm, text, a.window, ep, BLT_MAX_PATCHES);
             } else {
                 eM = fixed_stride(a.window, 4, ep);
             }

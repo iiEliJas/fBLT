@@ -27,6 +27,14 @@ typedef struct {
     bool reset_on_newline;
 } blt_patcher_config;
 
+// Upper bound on the patch count any caller must be able to hold for one
+// sequence. Entropy patching averages ~5 bytes per patch on TinyStories, so a
+// 2048-byte window needs roughly 400 slots; 1024 leaves headroom for longer
+// patches without forcing callers to guess. Callers that used to hardcode 128
+// silently truncated or dropped any longer window, which is what capped
+// --window at 512.
+#define BLT_MAX_PATCHES 1024
+
 // Segments a byte sequence into patches using entropy thresholds.
 // `entropy`: 1D [seq_len], `patches_out`: caller-allocated array, returns patch count.
 size_t blt_segment_patches(const blt_tensor *entropy, const uint8_t *bytes, blt_patch_info *patches_out,
