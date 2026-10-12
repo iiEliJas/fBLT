@@ -111,8 +111,8 @@ If no `--prompt` or `--prompt-file`, reads from stdin. Auto-detects model dimens
 | `--window W` | 48 | Clean-sequence length per example (8 to 2048) |
 
 A window above 512 needs roughly 400 patches instead of 98, so expect several times the activation
-memory and slower steps. `configs/train/tinystories_2k_phase1.yaml` and
-`configs/train/tinystories_2k_continue.yaml` are working examples.
+memory and slower steps. `configs/train/tinystories_1k_phase1.yaml` and
+`configs/train/tinystories_1k_continue.yaml` are working examples at window 1024.
 
 ### Memory cost of long windows
 
@@ -123,10 +123,11 @@ once: the decoder sees `S = window * (1 + block_size)` rows, and attention over 
 | `--window` | derived scratch | peak GPU (RTX 4060, 8 GB) |
 |---:|---:|---|
 | 512 | 512 MB | ~1.5 GB |
-| 2048 | 4096 MB | **7851 MiB of 8188, about 96%** |
+| 1024 | 1 GB | 4867 MiB, about 59% |
+| 2048 | 4 GB | 7851 MiB of 8188, **about 96%** |
 
-Window 2048 fits on an 8 GB card with almost no headroom. Anything larger, a wider model, or a
-bigger `--cuda-scratch-mb` will not.
+Window 2048 fits on an 8 GB card with almost no headroom. Window 1024 is the largest size with
+real margin. Anything larger, a wider model, or a bigger `--cuda-scratch-mb` will not fit.
 
 | Flag | Default | Description |
 |------|---------|-------------|

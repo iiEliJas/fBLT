@@ -1,0 +1,57 @@
+# BLT-D on TinyStories, 1024-byte window.
+
+corpus: data/tinystories/train.bin
+eval-corpus: data/tinystories/heldout.bin
+
+embed: 256
+hidden: 512
+enc-layers: 2
+glob-layers: 6
+dec-layers: 2
+
+steps: 60000
+
+optimizer: adamw
+lr: 0.0001
+beta1: 0.9
+beta2: 0.999
+eps: 1.0e-8
+weight-decay: 0.01
+max-norm: 20000
+
+paper-loss: 1
+mask-scale: 1.0
+diffusion: 1
+block-size: 4
+
+window: 1024
+
+# Same memory profile as phase 1: 1 GB scratch, measured peak 4867 MiB (59% of
+# an 8 GB RTX 4060).
+scratch-mb: 1024
+cuda-scratch-mb: 2048
+
+t-min: 0.1
+cross-attn: all
+seed: 7
+report-every: 1000
+
+entropy-patches: true
+entropy-lm: runs/entropylm/entropy_lm.fblt
+
+monitor-every: 10000
+monitor-windows: 48
+eval-windows: 200
+eval-every: 10000
+
+load-weights: runs/tinystories_1k/phase1.fblt
+load-optim: runs/tinystories_1k/phase1.fbop
+
+save-weights: runs/tinystories_1k/phase2.fblt
+save-optim: runs/tinystories_1k/phase2.fbop
+save-every: 10000
+
+# NOTE on inference: save-weights here is a fixed path, while fblt-train writes
+# resolved_config.yaml into its own run directory, so fblt-infer will not
+# auto-detect shapes from this checkpoint. Pass them explicitly:
+#   --embed 256 --hidden 512 --enc-layers 2 --glob-layers 6 --dec-layers 2
