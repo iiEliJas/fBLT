@@ -889,7 +889,7 @@ int main(int argc, char **argv) {
                     for (size_t wi = 0; wi < eval_count; wi++) {
                         blt_arena_reset(scratch);
                         const uint8_t *text = base + wi * a.window;
-                        blt_patch_info ep[128];
+                        blt_patch_info ep[BLT_MAX_PATCHES];
                         size_t eM = 0;
                         if (train_lm) {
                             blt_arena_reset(host_seg_arena);
@@ -966,7 +966,7 @@ int main(int argc, char **argv) {
             blt_arena_reset(scratch);
             const uint8_t *text = base + wi * a.window;
 
-            blt_patch_info ep[128];
+            blt_patch_info ep[BLT_MAX_PATCHES];
             size_t eM = 0;
             if (train_lm) {
                 blt_arena_reset(host_seg_arena);
