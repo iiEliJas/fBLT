@@ -108,7 +108,16 @@ If no `--prompt` or `--prompt-file`, reads from stdin. Auto-detects model dimens
 | `--steps N` | 2000 | Optimizer steps |
 | `--lr F` | 0.05 | Learning rate |
 | `--block-size B` | 4 | Diffusion block size |
-| `--window W` | 48 | Clean-sequence length per example |
+| `--window W` | 48 | Clean-sequence length per example (8 to 2048) |
+
+A window above 512 needs roughly 400 patches instead of 98, so expect several times the activation
+memory and slower steps. The trainer sizes its scratch and segmentation arenas from the window
+automatically; `--cuda-scratch-mb` still overrides. `configs/train/tinystories_2k_phase1.yaml` and
+`configs/train/tinystories_2k_continue.yaml` are working examples.
+
+Inference has no window: it segments the prompt as it grows. A model trained with a long window
+works with a prompt of any length up to the sequence bound, which is derived from the prompt and
+`--new-bytes` and can be overridden with `--max-seq-len`.
 | `--embed E` | 64 | Model width |
 | `--hidden H` | 128 | FFN width |
 | `--layers L` | 2 | Layers per submodule (encoder/global/decoder) |
@@ -346,6 +355,7 @@ Only valid with `--method greedy`. Omit all of them for plain argmax decoding.
 | `--top-p F` | 0 | Nucleus mass in `(0,1]`; 0 disables nucleus truncation |
 | `--repeat-penalty F` | 1.0 | Divides the logits of already-emitted bytes; 1.0 disables |
 | `--no-repeat-ngram N` | 0 | Bans bytes that would repeat an N-gram already in the sequence; 0 disables |
+| `--max-seq-len N` | derived | Override the decoder sequence bound (default: prompt + `--new-bytes` + 256, min 512) |
 
 They apply in this order, which matters when several are combined:
 

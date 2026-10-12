@@ -64,6 +64,7 @@ typedef struct {
     float repeat_penalty;
     size_t no_repeat_ngram;
     int sampling_given;
+    size_t max_seq_len;
     float patch_threshold_global;
     float patch_threshold_monotonic;
     size_t max_patch_length;
@@ -258,6 +259,7 @@ int main(int argc, char **argv) {
     a.repeat_penalty = 1.0f;
     a.no_repeat_ngram = 0;
     a.sampling_given = 0;
+    a.max_seq_len = 0;
     a.unmask_eb = 0;
     a.threshold = 0.7f;
     a.boundary_aligned = 0;
@@ -347,6 +349,8 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--repeat-penalty") && i + 1 < argc) {
             a.repeat_penalty = (float)atof(argv[++i]);
             a.sampling_given = 1;
+        } else if (!strcmp(argv[i], "--max-seq-len") && i + 1 < argc) {
+            a.max_seq_len = strtoull(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "--no-repeat-ngram") && i + 1 < argc) {
             a.no_repeat_ngram = (size_t)atol(argv[++i]);
             a.sampling_given = 1;
@@ -462,28 +466,41 @@ int main(int argc, char **argv) {
     fprintf(stderr, "[infer] prompt: %zu bytes\n", prompt_len);
     fprintf(stderr, "[infer] generating: %zu new bytes\n", a.new_bytes);
 
+    // The sequence bound only limits how long a prompt may grow, so size it from
+    // the work actually requested. A hardcoded 512 made every model trained with
+    // a longer window unusable at inference. --max-seq-len overrides.
+    size_t ms_infer = a.max_seq_len;
+    if (ms_infer == 0) {
+        ms_infer = prompt_len + a.new_bytes + 256;
+        if (ms_infer < 512) ms_infer = 512;
+    }
+
     // Create arenas.
     const blt_backend dev = a.use_cuda ? BLT_BACKEND_CUDA : BLT_BACKEND_CPU;
-    blt_arena *arena = blt_arena_create(160 * 1024 * 1024, dev);
-    blt_arena *scratch = blt_arena_create(256 * 1024 * 1024, dev);
+    // Activation memory scales with the sequence bound. At the old 512 bound
+    // these are exactly the previous constants.
+    const size_t mem_scale = (ms_infer + 511) / 512;
+    blt_arena *arena = blt_arena_create(160ULL * 1024 * 1024 * mem_scale, dev);
+    blt_arena *scratch = blt_arena_create(256ULL * 1024 * 1024 * mem_scale, dev);
 
     // Build model config.
     blt_model_config cfg;
-    blt_model_config_defaults(&cfg, a.embed, a.hidden, a.enc_layers, a.glob_layers, a.dec_layers, 512, a.cross_last);
+    blt_model_config_defaults(&cfg, a.embed, a.hidden, a.enc_layers, a.glob_layers, a.dec_layers, ms_infer,
+                              a.cross_last);
 
     // Model loading.
     blt_model *model;
     blt_entropy_lm *lm;
     if (a.use_cuda) {
         // Host twin receives checkpoint; weights are uploaded to device.
-        blt_arena *host_arena = blt_arena_create(160 * 1024 * 1024, BLT_BACKEND_CPU);
+        blt_arena *host_arena = blt_arena_create(160ULL * 1024 * 1024 * mem_scale, BLT_BACKEND_CPU);
         blt_model *host_model = blt_model_create(host_arena, &cfg);
         blt_model_load(host_model, a.checkpoint);
 
         model = blt_model_create(arena, &cfg);
         upload_model_weights(model, host_model);
 
-        lm = blt_make_entropy_lm(host_arena, 512, a.entropy_lm, a.seed);
+        lm = blt_make_entropy_lm(host_arena, ms_infer, a.entropy_lm, a.seed);
         blt_entropy_lm *lm_d = blt_entropy_lm_create(arena, &lm->config);
         upload_entropy_lm_weights(lm_d, lm);
         lm = lm_d;
@@ -493,7 +510,7 @@ int main(int argc, char **argv) {
     } else {
         model = blt_model_create(arena, &cfg);
         blt_model_load(model, a.checkpoint);
-        lm = blt_make_entropy_lm(arena, 512, a.entropy_lm, a.seed);
+        lm = blt_make_entropy_lm(arena, ms_infer, a.entropy_lm, a.seed);
     }
 
     // Patcher config.

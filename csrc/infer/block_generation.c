@@ -6,6 +6,7 @@
 
 #include "core/backend.h"
 #include "infer/self_speculation.h"
+#include "models/patcher.h"
 
 // splitmix64 — deterministic PRNG for top-p sampling.
 static uint64_t rng_next(uint64_t *state) {
@@ -383,8 +384,8 @@ static void generate_common(const blt_model *model, const blt_entropy_lm *entrop
         rcfg.block_size = B;
 
         // Segment + encode prefix (Alg. 1 lines 3-4).
-        enum { MAX_PATCHES = 256 };
-        blt_patch_info patches[MAX_PATCHES];
+        const size_t MAX_PATCHES = BLT_MAX_PATCHES;
+        blt_patch_info patches[BLT_MAX_PATCHES];
         size_t num_patches = 0;
         float *ent = NULL;
         segment_prefix(scratch, entropy_model, patcher_config, output_bytes, l, patches, MAX_PATCHES, &num_patches,
