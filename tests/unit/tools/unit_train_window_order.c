@@ -7,11 +7,62 @@
 
 #include "train_diag.h"
 
+#include <stdio.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+static int dir_exists(const char *p) {
+    struct stat st;
+    return stat(p, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+// A missing checkpoint directory used to surface as a fatal at the first
+// periodic save, throwing away every step trained before it.
+static int test_ensure_parent_dir(void) {
+    char root[] = "/tmp/blt_ensure_XXXXXX";
+    TEST_ASSERT(mkdtemp(root) != NULL);
+
+    // Creates several levels at once.
+    char nested[512];
+    snprintf(nested, sizeof(nested), "%s/a/b/c/model.fblt", root);
+    TEST_ASSERT(!dir_exists(nested));
+    TEST_ASSERT(train_ensure_parent_dir(nested) == 0);
+    {
+        char dir[512];
+        snprintf(dir, sizeof(dir), "%s/a/b/c", root);
+        TEST_ASSERT(dir_exists(dir));
+    }
+
+    // Idempotent on an existing directory.
+    TEST_ASSERT(train_ensure_parent_dir(nested) == 0);
+
+    // A bare filename has no parent to make.
+    TEST_ASSERT(train_ensure_parent_dir("model.fblt") == 0);
+    TEST_ASSERT(!dir_exists("model.fblt"));
+
+    // NULL and empty are no-ops.
+    TEST_ASSERT(train_ensure_parent_dir(NULL) == 0);
+    TEST_ASSERT(train_ensure_parent_dir("") == 0);
+
+    // An unwritable destination must report failure rather than pass silently.
+    TEST_ASSERT(train_ensure_parent_dir("/proc/blt_should_not_exist/x.fblt") != 0);
+
+    char cleanup[512];
+    snprintf(cleanup, sizeof(cleanup), "rm -rf %s", root);
+    if (system(cleanup) != 0) { /* best effort */
+    }
+
+    printf("    ensure_parent_dir: nested creation, idempotence and unwritable path verified\n");
+    return 1;
+}
+
 // train_window_index replaces the old `step % num_windows`. Two properties
 // matter: every window is visited exactly once per epoch (so coverage is
 // unchanged), and the order is not sequential (so a second run starting at step
 // 0 does not replay the first run's byte stream).
 int run_train_window_order_tests(void) {
+    int ok = 1;
+    ok &= test_ensure_parent_dir();
     const size_t nw_cases[] = {1, 2, 3, 4, 7, 8, 64, 97, 1024, 4096};
     const size_t epochs = 3;
 

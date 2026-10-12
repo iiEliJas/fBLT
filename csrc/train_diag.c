@@ -334,3 +334,50 @@ size_t train_window_index(size_t step, size_t num_windows, uint64_t seed) {
 
     return (size_t)((((uint64_t)a * (uint64_t)j) + (uint64_t)b) % (uint64_t)num_windows);
 }
+
+#ifdef _WIN32
+#include <direct.h>
+#define blt_mkdir_one(p) _mkdir((p))
+#else
+#include <sys/stat.h>
+#include <unistd.h>
+#define blt_mkdir_one(p) mkdir((p), 0777)
+#endif
+
+static int train_dir_writable(const char *dir) {
+#ifdef _WIN32
+    return _access(dir, 0) == 0;
+#else
+    return access(dir, W_OK) == 0;
+#endif
+}
+
+int train_ensure_parent_dir(const char *path) {
+    if (!path || !*path) return 0;
+
+    char dir[4096];
+    if (snprintf(dir, sizeof(dir), "%s", path) >= (int)sizeof(dir)) {
+        fprintf(stderr, "train: path too long: %s\n", path);
+        return -1;
+    }
+
+    char *slash = strrchr(dir, '/');
+    if (!slash) return 0; // bare filename, the cwd already exists
+    *slash = '\0';
+    if (dir[0] == '\0') return 0; // "/file" -> root
+
+    // Create each component in turn, ignoring "already exists".
+    for (char *p = dir + 1; *p; p++) {
+        if (*p != '/') continue;
+        *p = '\0';
+        blt_mkdir_one(dir);
+        *p = '/';
+    }
+    blt_mkdir_one(dir);
+
+    if (!train_dir_writable(dir)) {
+        fprintf(stderr, "train: directory '%s' is not writable (needed to write %s)\n", dir, path);
+        return -1;
+    }
+    return 0;
+}
