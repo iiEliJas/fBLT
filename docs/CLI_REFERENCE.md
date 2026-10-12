@@ -111,9 +111,36 @@ If no `--prompt` or `--prompt-file`, reads from stdin. Auto-detects model dimens
 | `--window W` | 48 | Clean-sequence length per example (8 to 2048) |
 
 A window above 512 needs roughly 400 patches instead of 98, so expect several times the activation
-memory and slower steps. The trainer sizes its scratch and segmentation arenas from the window
-automatically; `--cuda-scratch-mb` still overrides. `configs/train/tinystories_2k_phase1.yaml` and
+memory and slower steps. `configs/train/tinystories_2k_phase1.yaml` and
 `configs/train/tinystories_2k_continue.yaml` are working examples.
+
+### Memory cost of long windows
+
+Scratch grows **faster than the window**, because diffusion scores every patch in the window at
+once: the decoder sees `S = window * (1 + block_size)` rows, and attention over `S` is quadratic in
+`S`. Measured on the 10M TinyStories shape (E=256, H=512, 2/6/2, `B=4`):
+
+| `--window` | derived scratch | peak GPU (RTX 4060, 8 GB) |
+|---:|---:|---|
+| 512 | 512 MB | ~1.5 GB |
+| 2048 | 4096 MB | **7851 MiB of 8188, about 96%** |
+
+Window 2048 fits on an 8 GB card with almost no headroom. Anything larger, a wider model, or a
+bigger `--cuda-scratch-mb` will not.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--scratch-mb N` | derived | Trainer scratch arena in MB; 0 derives `512 * (window/512)^2 / 2`, floor 512 |
+| `--cuda-scratch-mb N` | 0 | CUDA kernel scratch pool, separate from the arena above |
+
+The trainer prints its derived arena size at startup:
+
+```
+[TRAIN] scratch arena 4096 MB (window 2048), cuda kernel scratch 2048 MB
+```
+
+If a long-window run dies with `arena allocation exceeded capacity`, that is this. Raise
+`--scratch-mb` if there is GPU room, lower `--cuda-scratch-mb` to make room for it.
 
 Inference has no window: it segments the prompt as it grows. A model trained with a long window
 works with a prompt of any length up to the sequence bound, which is derived from the prompt and
