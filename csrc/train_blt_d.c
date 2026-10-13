@@ -354,7 +354,7 @@ int main(int argc, char **argv) {
     }
     blt_arena *scratch = blt_arena_create(scratch_mb * 1024ULL * 1024, dev);
     if (a.use_cuda) {
-        fprintf(stderr, "[TRAIN] scratch arena %zu MB (window %zu), cuda kernel scratch %d MB\n", scratch_mb, a.window,
+        fprintf(stderr, "[TRAIN] scratch arena %zu MB (window %zu), cuda kernel scratch %zu MB\n", scratch_mb, a.window,
                 a.cuda_scratch_mb);
     }
     blt_arena *adamw_state_arena = NULL;
@@ -632,8 +632,9 @@ int main(int argc, char **argv) {
     const int timing = (getenv("BLT_TRAIN_TIMING") != NULL);
 
     double train_start = blt_time_sec();
-    double last_t = train_start, ema_sps = 0.0, excl_s = 0.0;
-    size_t last_step = 0;
+    double last_t = train_start, excl_s = 0.0;
+    blt_eta_state eta;
+    blt_eta_init(&eta, a.start_step);
 
     for (size_t step = a.start_step; step < end_step; step++) {
         if (timing) ts0 = blt_time_sec();
@@ -886,13 +887,9 @@ int main(int argc, char **argv) {
         if ((step + 1) % a.report_every == 0 || step + 1 == end_step) {
             size_t epoch = step / num_windows;
             double now = blt_time_sec();
-            double sps = ((now - last_t) - excl_s) / (double)(step + 1 - last_step);
-            if (sps <= 0.0 || sps != sps) sps = 1e-9;
-            ema_sps = (ema_sps == 0.0) ? sps : 0.9 * ema_sps + 0.1 * sps;
+            const double remaining = blt_eta_update(&eta, step, end_step, now - last_t, excl_s);
             last_t = now;
-            last_step = step + 1;
             excl_s = 0.0;
-            double remaining = (double)(end_step - step - 1) * ema_sps;
             size_t rem_h = (size_t)remaining / 3600;
             size_t rem_m = ((size_t)remaining % 3600) / 60;
             printf("step %6zu/%zu  epoch %zu/%zu  avg_loss %.4f  ETA %zuh%02zum\n", step + 1, end_step, epoch,
