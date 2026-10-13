@@ -381,3 +381,23 @@ int train_ensure_parent_dir(const char *path) {
     }
     return 0;
 }
+
+void blt_eta_init(blt_eta_state *st, size_t start_step) {
+    st->ema_sec_per_step = 0.0;
+    st->last_step = start_step;
+}
+
+double blt_eta_update(blt_eta_state *st, size_t step, size_t end_step, double elapsed_s, double excluded_s) {
+    const size_t done = step + 1;
+    const size_t ran = (done > st->last_step) ? (done - st->last_step) : 0;
+
+    double sec_per_step = (ran > 0) ? ((elapsed_s - excluded_s) / (double)ran) : 0.0;
+    if (sec_per_step <= 0.0 || sec_per_step != sec_per_step) sec_per_step = 1e-9;
+
+    st->ema_sec_per_step =
+        (st->ema_sec_per_step == 0.0) ? sec_per_step : 0.9 * st->ema_sec_per_step + 0.1 * sec_per_step;
+    st->last_step = done;
+
+    if (end_step <= done) return 0.0;
+    return (double)(end_step - done) * st->ema_sec_per_step;
+}
