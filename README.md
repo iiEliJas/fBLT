@@ -11,8 +11,19 @@ Based on two papers from Meta FAIR (with Stanford and University of Washington c
 
 **Status**: research prototype
 
+## Example output
+
+A 7.8M-parameter BLT-D model trained on TinyStories for 300k steps, with entropy patching at block size 4 and a 512-byte window. Held-out causal bits per byte: **0.9978**. Greedy decoding, no sampling:
+
+```text
+Lily found a big box of cookies and started to play with it. She was happy to have
+a new friend to play with. She was happy to have her friends and they went back to
+playing together.
+```
+
 ## Table of contents
 
+- [Example output](#example-output)
 - [How it works](#how-it-works)
 - [Prerequisites](#prerequisites)
 - [Quickstart](#quickstart)
