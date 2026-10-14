@@ -106,7 +106,7 @@ If no `--prompt` or `--prompt-file`, reads from stdin. Auto-detects model dimens
 |------|---------|-------------|
 | `--corpus FILE` | *required* | Raw byte corpus |
 | `--steps N` | 2000 | Optimizer steps |
-| `--lr F` | 0.05 | Learning rate |
+| `--lr F` | 0.0001 | Learning rate |
 | `--block-size B` | 4 | Diffusion block size |
 | `--window W` | 48 | Clean-sequence length per example (8 to 2048) |
 
@@ -149,7 +149,7 @@ works with a prompt of any length up to the sequence bound, which is derived fro
 | `--embed E` | 64 | Model width |
 | `--hidden H` | 128 | FFN width |
 | `--layers L` | 2 | Layers per submodule (encoder/global/decoder) |
-| `--max-norm F` | 5.0 | Global gradient clip threshold |
+| `--max-norm F` | 20000 | Global gradient clip threshold |
 | `--d0-mode MODE` | learned | `zeros` \| `learned` for decoder d0 embed |
 | `--seed S` | 7 | RNG seed |
 | `--report-every K` | 25 | Print frequency |
@@ -172,7 +172,7 @@ order and the diffusion timestep sequence.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--optimizer sgd\|adamw` | sgd | Optimizer selection |
+| `--optimizer sgd\|adamw` | adamw | Optimizer selection |
 | `--beta1 F` | 0.9 | AdamW first moment decay |
 | `--beta2 F` | 0.999 | AdamW second moment decay |
 | `--eps F` | 1e-8 | AdamW numerical stability |
@@ -245,7 +245,7 @@ continuous run, and a run split across several resumes is bit-identical too.
 | `--mask-scale F` | 1.0 | Ceiling for L_mask weight |
 | `--mask-late-step N` + `--mask-late-scale F` | 0 | Late ramp from mask_scale to mask_late_scale |
 | `--t-warmup-hi F` + `--t-hi-start F` | 0 + 0.8 | High-t curriculum (fraction + start floor) |
-| `--paper-loss 0\|1` | 0 | 1 = paper-exact loss: `L_clean` a SUM (Eq. 5) and `L_mask` a SUM (Eq. 6), combined per Eq. 7. Implies `--mask-loss-norm 0` |
+| `--paper-loss 0\|1` | 1 | 1 = paper-exact loss: `L_clean` a SUM (Eq. 5) and `L_mask` a SUM (Eq. 6), combined per Eq. 7. Implies `--mask-loss-norm 0` |
 | `--mask-loss-norm 0\|1` | 0 | 1 = L_mask is a per-token mean over masked cells; 0 = sum over masked cells (paper Eq. 6 literally writes a sum) |
 | `--last-row-scale F` | 1.0 | Scale row N-1's L_clean (corrected window+1 targets only); ~511 evens its gradient with the interior rows (1.0 = off) |
 

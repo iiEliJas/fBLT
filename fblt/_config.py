@@ -56,14 +56,14 @@ class TrainConfig:
     corpus: str = ""
 
     steps: int = 2000
-    lr: float = 0.05
-    optimizer: str = "sgd"
+    lr: float = 0.0001
+    optimizer: str = "adamw"
     beta1: float = 0.9
     beta2: float = 0.999
     eps: float = 1e-08
     weight_decay: float = 0.01
-    max_norm: float = 5.0
-    paper_loss: int = 0
+    max_norm: float = 20000.0
+    paper_loss: int = 1
     mask_loss_norm: int = 0
     seed: int = 7
     backend: str = "cpu"

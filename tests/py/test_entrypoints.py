@@ -96,7 +96,7 @@ def test_override_precedence(tmp_path):
 
     # No YAML, no overrides -> pure defaults
     cfg2 = load_config(TrainConfig, None)
-    assert cfg2.lr == 0.05
+    assert cfg2.lr == 0.0001
     assert cfg2.embed == 64
 
     # YAML + overrides

@@ -11,13 +11,13 @@ static void usage(void) {
                     "\n"
                     "training:\n"
                     "  --steps N               optimizer steps (default 2000)\n"
-                    "  --lr F                  learning rate (default 0.05)\n"
-                    "  --optimizer sgd|adamw   optimizer (default sgd)\n"
+                    "  --lr F                  learning rate (default 0.0001)\n"
+                    "  --optimizer sgd|adamw   optimizer (default adamw)\n"
                     "  --beta1 F               AdamW first moment decay (default 0.9)\n"
                     "  --beta2 F               AdamW second moment decay (default 0.999)\n"
                     "  --eps F                 AdamW epsilon (default 1e-8)\n"
                     "  --weight-decay F        AdamW weight decay (default 0.01)\n"
-                    "  --max-norm F            gradient clip threshold (default 5.0)\n"
+                    "  --max-norm F            gradient clip threshold (default 20000)\n"
                     "  --seed S                RNG seed (default 7)\n"
                     "  --backend cpu|cuda      backend (default cpu)\n"
                     "  --cuda-scratch-mb N     CUDA kernel scratch pool size in MB\n"
@@ -90,7 +90,7 @@ static void usage(void) {
 args_t parse_args(int argc, char **argv) {
     args_t a = {.corpus_path = NULL,
                 .steps = 2000,
-                .lr = 0.05f,
+                .lr = 0.0001f,
                 .block_size = 4,
                 .window = 48,
                 .embed = 64,
@@ -116,7 +116,7 @@ args_t parse_args(int argc, char **argv) {
                 .mask_scale = 1.0f,
                 .last_row_scale = 1.0f,
                 .mask_loss_norm = 0,
-                .paper_loss = 0,
+                .paper_loss = 1,
                 .mask_late_step = 0,
                 .mask_late_scale = 1.0f,
                 .entropy_patches = 0,
@@ -129,12 +129,12 @@ args_t parse_args(int argc, char **argv) {
                 .cross_last = 0,
                 .t_warmup_frac = 0.0f,
                 .t_hi_start = 0.8f,
-                .optimizer = 0,
+                .optimizer = 1,
                 .beta1 = 0.9f,
                 .beta2 = 0.999f,
                 .eps = 1e-8f,
                 .weight_decay = 0.01f,
-                .max_norm = 5.0f,
+                .max_norm = 20000.0f,
                 .grad_norm_log = NULL,
                 .update_norm_log = NULL,
                 .component_norm_log = NULL,
