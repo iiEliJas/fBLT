@@ -9,7 +9,8 @@ Based on two papers from Meta FAIR (with Stanford and University of Washington c
 - [Byte Latent Transformer](https://arxiv.org/abs/2412.09871) - Byte modeling with entropy-based dynamic patching. Matches token-based LLM scaling, no vocabulary needed.
 - [Fast Byte Latent Transformer](https://arxiv.org/abs/2605.08044) - Faster inference with diffusion decoding and self-speculation.
 
-**Status**: research prototype
+**Status**: complete implementation, demonstrated at small scale (largest model
+7.8M parameters). Known issues are listed [below](#issues). 
 
 ## Example output
 
@@ -384,18 +385,14 @@ person from trying it too ;D
 
 ## Issues
 
-- Seed-dependent non-determinism from CUDA atomics.
-
 - [CLOSED] Acceptance-rate root cause at this scale. The previously reported 1.6-5.2% was measured with a
 random-init entropy LM in `infer_bench`, which put every byte in its own patch. With the trained LM
 the same checkpoint accepts 65.0% at B=4. `infer_bench` now refuses to run without `--entropy-lm`
 (see PR #33). See docs/BENCHMARKS.md.
 
-- [CLOSED] [last_row_gap.md](docs/experiments/last_row_gap.md) Last-row accuracy inside each training window sits far below interior-row accuracy (~40% vs ~98%). 
-Two Hypotheses are being considered. Either the last row gets far less supervision per window than interior rows.
-Or patches that get cut off at the window edge are harder for the model to represent. 
+- [CLOSED] [last_row_gap.md](docs/experiments/last_row_gap.md) 
 
-- [forced_boundary_patches.md](docs/experiments/forced_boundary_patches.md) Open issue on comparing forced-boundary patches to natural closed patches.
+- [CLOSED] [forced_boundary_patches.md](docs/experiments/forced_boundary_patches.md) Open issue on comparing forced-boundary patches to natural closed patches.
 
 - [patch_cap_limit.md](docs/experiments/patch_cap_limit.md) The 128-patch cap is another open issue. I added it because BLT-D did not support more patches at the time. Raising it and measuring the effect is an open experiment i have not yet done.
 
@@ -403,15 +400,12 @@ Or patches that get cut off at the window edge are harder for the model to repre
 - Inference improvements
 - Multi-GPU / larger-scale training runs
 - MacOS support
-- Test acceptance rates on models trained at larger B, since B=8 and above currently measure a
-  train/inference mismatch rather than a capability limit
 
 ## Docs
 
 - [BENCHMARKS.md](docs/BENCHMARKS.md) - Full benchmark report
 - [ABLATIONS.md](docs/ABLATIONS.md) - Ablation sweep results
 - [CLI_REFERENCE.md](docs/CLI_REFERENCE.md) - CLI commands for training and inference
-- [last_row_gap.md](docs/experiments/last_row_gap.md) - Closed investigation into the last-row accuracy gap
 
 ## Contributing
 
