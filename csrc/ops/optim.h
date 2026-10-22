@@ -19,7 +19,8 @@ typedef struct {
     float beta1;
     float beta2;
     float eps;
-    float weight_decay; // decoupled L2 applied as p -= lr * wd * p
+    float weight_decay;     // decoupled L2 applied as p -= lr * wd * p
+    int weight_decay_norms; // 1 = also decay norm weights (legacy); 0 = selective (default)
     size_t step;
 } blt_adamw_config;
 

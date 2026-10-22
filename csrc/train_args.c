@@ -134,6 +134,7 @@ args_t parse_args(int argc, char **argv) {
                 .beta2 = 0.999f,
                 .eps = 1e-8f,
                 .weight_decay = 0.01f,
+                .weight_decay_norms = 0,
                 .max_norm = 20000.0f,
                 .grad_norm_log = NULL,
                 .update_norm_log = NULL,
@@ -227,6 +228,7 @@ args_t parse_args(int argc, char **argv) {
         else if (!strcmp(argv[i], "--beta2") && i + 1 < argc) a.beta2 = atof(argv[++i]);
         else if (!strcmp(argv[i], "--eps") && i + 1 < argc) a.eps = atof(argv[++i]);
         else if (!strcmp(argv[i], "--weight-decay") && i + 1 < argc) a.weight_decay = atof(argv[++i]);
+        else if (!strcmp(argv[i], "--weight-decay-norms")) a.weight_decay_norms = 1;
         else if (!strcmp(argv[i], "--grad-norm-log") && i + 1 < argc) a.grad_norm_log = argv[++i];
         else if (!strcmp(argv[i], "--max-norm") && i + 1 < argc) a.max_norm = atof(argv[++i]);
         else if (!strcmp(argv[i], "--update-norm-log") && i + 1 < argc) a.update_norm_log = argv[++i];

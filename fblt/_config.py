@@ -62,6 +62,7 @@ class TrainConfig:
     beta2: float = 0.999
     eps: float = 1e-08
     weight_decay: float = 0.01
+    weight_decay_norms: bool = False
     max_norm: float = 20000.0
     paper_loss: int = 1
     mask_loss_norm: int = 0

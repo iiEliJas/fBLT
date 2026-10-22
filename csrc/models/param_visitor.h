@@ -27,6 +27,7 @@ typedef struct {
     int is_enc;          // belongs to encoder
     int is_glob;         // belongs to global transformer
     int is_dec;          // belongs to decoder
+    int decay;           // 1 = apply weight decay (matrices/embeddings), 0 = skip (norms)
     int layer_idx;       // layer index within submodel
     int param_in_layer;  // index within layer (0-6 self, 0-4 cross)
     int component_group; // BLT_GROUP_*

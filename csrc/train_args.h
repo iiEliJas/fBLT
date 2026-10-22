@@ -62,6 +62,7 @@ typedef struct {
     float beta2;
     float eps;
     float weight_decay;
+    int weight_decay_norms;
     float max_norm;
     const char *grad_norm_log;
     const char *update_norm_log;
