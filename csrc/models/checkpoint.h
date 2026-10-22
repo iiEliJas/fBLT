@@ -43,9 +43,18 @@ void blt_model_tensor_at(const blt_model *model, size_t index, const char **name
 // Write all tensors to path. Fatal on IO errors.
 void blt_model_save(const blt_model *model, const char *path);
 
+// Write all tensors to path with optional metadata JSON (may be NULL).
+void blt_model_save_ex(const blt_model *model, const char *path, const char *meta_json);
+
 // Read a checkpoint written by blt_model_save into model. Fatal on any
 // format/validation mismatch.
 void blt_model_load(blt_model *model, const char *path);
+
+// Read a checkpoint, optionally capturing metadata JSON into meta_out.
+void blt_model_load_ex(blt_model *model, const char *path, char *meta_out, size_t meta_cap);
+
+// Read only the metadata JSON from a checkpoint (no model needed).
+int blt_model_read_meta(const char *path, char *meta_out, size_t meta_cap);
 
 // Entropy-LM weight serialization (same FBLT container, tensor set:
 // embedding, per-layer self-attention weights, lm_head). Load validates

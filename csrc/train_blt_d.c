@@ -903,7 +903,17 @@ int main(int argc, char **argv) {
         if (a.save_path && a.save_every > 0 && (step + 1) % a.save_every == 0) {
             char path_buf[4096];
             blt_format_save_path(path_buf, sizeof(path_buf), a.save_path, step + 1);
-            blt_model_save(model, path_buf);
+            char meta_buf[4096];
+            snprintf(
+                meta_buf, sizeof(meta_buf),
+                "{\"format\":\"fblt-checkpoint\",\"format_version\":2,\"config\":{\"embed\":%zu,\"hidden\":%zu,"
+                "\"enc_layers\":%zu,\"glob_layers\":%zu,\"dec_layers\":%zu,\"cross_attn\":\"%s\",\"d0_mode\":\"%s\","
+                "\"diffusion\":%d,\"block_size\":%zu,\"window\":%zu},\"training\":{\"step\":%zu,\"optimizer\":\"%s\","
+                "\"seed\":%llu}}",
+                a.embed, a.hidden, a.enc_layers, a.glob_layers, a.dec_layers, a.cross_last ? "last" : "all",
+                a.d0_learned ? "learned" : "zeros", a.diffusion, a.block_size, a.window, step + 1,
+                a.optimizer ? "adamw" : "sgd", (unsigned long long)a.seed);
+            blt_model_save_ex(model, path_buf, meta_buf);
             if (a.save_optim_path && aw) {
                 char opath_buf[4096];
                 blt_format_save_path(opath_buf, sizeof(opath_buf), a.save_optim_path, step + 1);
@@ -964,7 +974,16 @@ int main(int argc, char **argv) {
     if (a.save_path) {
         char path_buf[4096];
         blt_format_save_path(path_buf, sizeof(path_buf), a.save_path, end_step);
-        blt_model_save(model, path_buf);
+        char meta_buf[4096];
+        snprintf(meta_buf, sizeof(meta_buf),
+                 "{\"format\":\"fblt-checkpoint\",\"format_version\":2,\"config\":{\"embed\":%zu,\"hidden\":%zu,"
+                 "\"enc_layers\":%zu,\"glob_layers\":%zu,\"dec_layers\":%zu,\"cross_attn\":\"%s\",\"d0_mode\":\"%s\","
+                 "\"diffusion\":%d,\"block_size\":%zu,\"window\":%zu},\"training\":{\"step\":%zu,\"optimizer\":\"%s\","
+                 "\"seed\":%llu}}",
+                 a.embed, a.hidden, a.enc_layers, a.glob_layers, a.dec_layers, a.cross_last ? "last" : "all",
+                 a.d0_learned ? "learned" : "zeros", a.diffusion, a.block_size, a.window, end_step,
+                 a.optimizer ? "adamw" : "sgd", (unsigned long long)a.seed);
+        blt_model_save_ex(model, path_buf, meta_buf);
         if (a.save_optim_path && aw) {
             char opath_buf[4096];
             blt_format_save_path(opath_buf, sizeof(opath_buf), a.save_optim_path, end_step);
