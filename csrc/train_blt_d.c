@@ -586,6 +586,8 @@ int main(int argc, char **argv) {
     BLT_REQUIRE(num_windows >= 1, "corpus smaller than one training window");
     BLT_REQUIRE(!(a.lr_schedule == 1 && (a.lr_decay || a.lr_decay_count > 0)),
                 "train_blt_d: --lr-schedule cosine cannot be combined with --lr-decay");
+    BLT_REQUIRE(a.save_best_path == NULL || a.eval_path != NULL, "train_blt_d: --save-best requires --eval-corpus");
+    BLT_REQUIRE(a.save_best_path == NULL || a.eval_every > 0, "train_blt_d: --save-best requires --eval-every > 0");
 
     size_t total_epochs = (a.start_step + a.steps + num_windows - 1) / num_windows;
     printf("train_blt_d: %zu windows (~%zu epochs)\n", num_windows, total_epochs);
@@ -610,6 +612,9 @@ int main(int argc, char **argv) {
 
     double running = 0.0f;
     size_t running_n = 0;
+
+    double best_metric_value = (a.best_metric == 0) ? INFINITY : -INFINITY;
+    size_t best_step = 0;
 
     FILE *gnorm_fp = NULL;
     if (a.grad_norm_log) gnorm_fp = fopen(a.grad_norm_log, "w");
@@ -960,9 +965,31 @@ int main(int argc, char **argv) {
                                              a.d0_learned ? BLT_D0_LEARNED : BLT_D0_ZEROS, ep, eM, &hits, &total);
                     }
                     double bpb = (ce_sum / (double)eval_count) / log(2.0);
-                    printf("EVAL step=%zu causal_bpb=%.4f masked_acc=%.3f\n", step + 1, bpb,
-                           total ? (double)hits / (double)total : 0.0);
+                    double masked_acc = total ? (double)hits / (double)total : 0.0;
+                    printf("EVAL step=%zu causal_bpb=%.4f masked_acc=%.3f\n", step + 1, bpb, masked_acc);
                     fflush(stdout);
+
+                    if (a.save_best_path) {
+                        const double metric = (a.best_metric == 0) ? bpb : masked_acc;
+                        const int valid = (a.best_metric == 0) ? isfinite(bpb) : (total > 0);
+                        const int improved = valid && ((a.best_metric == 0) ? (metric < best_metric_value)
+                                                                            : (metric > best_metric_value));
+                        if (improved) {
+                            best_metric_value = metric;
+                            best_step = step + 1;
+                            char path_buf[4096];
+                            blt_format_save_path(path_buf, sizeof(path_buf), a.save_best_path, step + 1);
+                            blt_model_save(model, path_buf);
+                            if (a.save_best_optim_path && aw) {
+                                char opath_buf[4096];
+                                blt_format_save_path(opath_buf, sizeof(opath_buf), a.save_best_optim_path, step + 1);
+                                adamw_state_save(aw, step + 1, opath_buf);
+                            }
+                            printf("[BEST] step=%zu %s=%.6f -> %s\n", step + 1,
+                                   a.best_metric == 0 ? "causal_bpb" : "masked_acc", metric, path_buf);
+                            fflush(stdout);
+                        }
+                    }
                 }
                 free(eval_bytes);
                 fclose(ef);
@@ -1047,6 +1074,28 @@ int main(int argc, char **argv) {
                                        a.d0_learned ? BLT_D0_LEARNED : BLT_D0_ZEROS, ep, eM, &hits, &total);
         }
         bpb = (ce_sum / (double)eval_count) / log(2.0);
+        double final_masked_acc = total ? (double)hits / (double)total : 0.0;
+        if (a.save_best_path) {
+            const double metric = (a.best_metric == 0) ? bpb : final_masked_acc;
+            const int valid = (a.best_metric == 0) ? isfinite(bpb) : (total > 0);
+            const int improved =
+                valid && ((a.best_metric == 0) ? (metric < best_metric_value) : (metric > best_metric_value));
+            if (improved) {
+                best_metric_value = metric;
+                best_step = end_step;
+                char path_buf[4096];
+                blt_format_save_path(path_buf, sizeof(path_buf), a.save_best_path, end_step);
+                blt_model_save(model, path_buf);
+                if (a.save_best_optim_path && aw) {
+                    char opath_buf[4096];
+                    blt_format_save_path(opath_buf, sizeof(opath_buf), a.save_best_optim_path, end_step);
+                    adamw_state_save(aw, end_step, opath_buf);
+                }
+                printf("[BEST] step=%zu %s=%.6f -> %s\n", end_step, a.best_metric == 0 ? "causal_bpb" : "masked_acc",
+                       metric, path_buf);
+                fflush(stdout);
+            }
+        }
         printf("RESULT mode=%s steps=%zu embed=%zu window=%zu B=%zu "
                "enc/glob/dec=%zu/%zu/%zu xattn=%s backend=%s "
                "eval_windows=%zu causal_bpb=%.4f masked_acc=%.3f (%zu/%zu)\n",
