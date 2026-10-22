@@ -813,6 +813,7 @@ int main(int argc, char **argv) {
                                          .beta2 = a.beta2,
                                          .eps = a.eps,
                                          .weight_decay = a.weight_decay,
+                                         .weight_decay_norms = a.weight_decay_norms,
                                          .step = 0};
                 u_norm = adamw_update_norm(model, grad, aw, &ucfg);
             } else {
@@ -822,8 +823,13 @@ int main(int argc, char **argv) {
                 fprintf(unorm_fp, "%zu %.6f %.6f\n", step + 1, post_clip, u_norm);
         }
         if (a.optimizer == 1) {
-            blt_adamw_config cfg = {
-                .lr = lr, .beta1 = a.beta1, .beta2 = a.beta2, .eps = a.eps, .weight_decay = a.weight_decay, .step = 0};
+            blt_adamw_config cfg = {.lr = lr,
+                                    .beta1 = a.beta1,
+                                    .beta2 = a.beta2,
+                                    .eps = a.eps,
+                                    .weight_decay = a.weight_decay,
+                                    .weight_decay_norms = a.weight_decay_norms,
+                                    .step = 0};
             adamw_all(model, grad, aw, &cfg);
         } else {
             sgd_all(model, grad, lr);

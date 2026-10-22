@@ -103,7 +103,7 @@ static void adamw_pair_fn(float *w, float *g, const blt_param_info *info, void *
     const float b1 = c->cfg.beta1;
     const float b2 = c->cfg.beta2;
     const float eps = c->cfg.eps;
-    const float wd = c->cfg.weight_decay;
+    const float wd = (c->cfg.weight_decay_norms || info->decay) ? c->cfg.weight_decay : 0.0f;
     const float bc1 = 1.0f - powf(b1, (float)c->cfg.step);
     const float bc2 = 1.0f - powf(b2, (float)c->cfg.step);
     if (info->backend == BLT_BACKEND_CUDA) {
@@ -134,6 +134,7 @@ void adamw_all(blt_model *m, blt_model_grad *g, adamw_state *s, const blt_adamw_
 struct adamw_unorm_ctx {
     adamw_state *s;
     float b1, b2, ep, wd;
+    int weight_decay_norms;
     size_t step;
     float sq;
 };
@@ -141,12 +142,13 @@ struct adamw_unorm_ctx {
 static void adamw_unorm_fn(float *w, float *g, const blt_param_info *info, void *ctx) {
     struct adamw_unorm_ctx *c = (struct adamw_unorm_ctx *)ctx;
     adamw_pair *p = &c->s->flat[info->idx];
+    const float wd = (c->weight_decay_norms || info->decay) ? c->wd : 0.0f;
     const float bc1 = 1.0f - powf(c->b1, (float)c->step);
     const float bc2 = 1.0f - powf(c->b2, (float)c->step);
     if (info->backend == BLT_BACKEND_CUDA) {
 #ifdef BLT_WITH_CUDA
         c->sq += blt_cuda_adamw_sqnorm((const float *)w, (const float *)g, (const float *)p->em.data,
-                                       (const float *)p->esq.data, c->b1, c->b2, c->ep, c->wd, bc1, bc2, info->numel);
+                                       (const float *)p->esq.data, c->b1, c->b2, c->ep, wd, bc1, bc2, info->numel);
 #endif
     } else {
         float *m = (float *)p->em.data;
@@ -156,7 +158,8 @@ static void adamw_unorm_fn(float *w, float *g, const blt_param_info *info, void 
             float v_new = c->b2 * v[i] + (1.0f - c->b2) * g[i] * g[i];
             float m_hat = m_new / bc1;
             float v_hat = v_new / bc2;
-            float u = m_hat / (sqrtf(v_hat) + c->ep) + c->wd * w[i];
+            float wd = (c->weight_decay_norms || info->decay) ? c->wd : 0.0f;
+            float u = m_hat / (sqrtf(v_hat) + c->ep) + wd * w[i];
             c->sq += u * u;
         }
     }
@@ -169,6 +172,7 @@ float adamw_update_norm(blt_model *m, blt_model_grad *g, adamw_state *s, const b
         .b2 = cfg->beta2,
         .ep = cfg->eps,
         .wd = cfg->weight_decay,
+        .weight_decay_norms = cfg->weight_decay_norms,
         .step = s->step + 1,
         .sq = 0.0f,
     };

@@ -57,6 +57,7 @@ static void fill_info(blt_param_info *info, float *ptr, int idx, int is_grad, in
     info->is_enc = (group == BLT_GROUP_EMBED || group == BLT_GROUP_ENC_SELF || group == BLT_GROUP_ENC_CROSS);
     info->is_glob = (group == BLT_GROUP_GLOB);
     info->is_dec = (group == BLT_GROUP_DEC_SELF || group == BLT_GROUP_DEC_CROSS || group == BLT_GROUP_HEAD);
+    info->decay = !norm;
     info->layer_idx = layer;
     info->param_in_layer = pin;
     info->component_group = group;
