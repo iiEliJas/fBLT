@@ -2049,11 +2049,11 @@ either, so it is not a parity item; it is a "1.x research ergonomics" item.
 These are not features, but they block a credible 1.0. They are listed here so the release
 checklist is in one place.
 
-- [ ] Bump `pyproject.toml` to `1.0.0` and fill `CHANGELOG.md`.
+- [x] Bump `pyproject.toml` to `1.0.0` and fill `CHANGELOG.md`.
 - [ ] Create a `v1.0.0` tag and a GitHub release.
-- [ ] Add PyPI metadata (`readme`, `license`, `authors`, `urls`, `classifiers`) or state
+- [x] Add PyPI metadata (`readme`, `license`, `authors`, `urls`, `classifiers`) or state
       explicitly that 1.0 is a source-only release.
-- [ ] Fix the stale docs paths:
+- [x] Fix the stale docs paths:
       - `README.md` layout says `run/`, but the code is in `csrc/`.
       - `docs/CLI_REFERENCE.md` references `tools/run_*.sh`; no `tools/` directory exists.
       - `configs/ablations/` is missing, and `fblt/scripts/gen_configs.py` expects
@@ -2067,10 +2067,10 @@ checklist is in one place.
 - [ ] Add a CUDA runtime CI runner or a documented manual validation matrix. CUDA CI is
       compile-only today.
 - [ ] Decide the multi-GPU scope: implement (item 11) or state that 1.0 is single-GPU.
-- [ ] Add a consolidated "Known limitations" section: 128-patch cap, 7.8M demonstrated
+- [x] Add a consolidated "Known limitations" section: 128-patch cap, 7.8M demonstrated
       scale, CUDA non-determinism, greedy-only sampling for non-greedy methods.
 - [ ] Publish the demo checkpoint (item 15).
-- [ ] Add a support matrix to the README (Linux CPU/CUDA, Windows CPU, macOS CPU, no macOS
+- [x] Add a support matrix to the README (Linux CPU/CUDA, Windows CPU, macOS CPU, no macOS
       CUDA).
 
 ---
