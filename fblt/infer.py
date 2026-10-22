@@ -109,6 +109,28 @@ def main() -> None:
                 overridden_fields.add(ov.split("=", 1)[0].replace("-", "_"))
     overridden_fields.update(explicit.keys())
 
+    # auto shape-matching from checkpoint metadata (v2) first
+    try:
+        from fblt._checkpoint import read_meta as _read_meta
+
+        _meta = _read_meta(args.checkpoint)
+    except Exception:
+        _meta = None
+    if isinstance(_meta, dict):
+        _mcfg = _meta.get("config", {}) if isinstance(_meta.get("config"), dict) else {}
+        defaults = {f.name: f.default for f in dataclasses.fields(cfg)}
+        for field_name, meta_key in (
+            ("embed", "embed"),
+            ("hidden", "hidden"),
+            ("enc_layers", "enc_layers"),
+            ("glob_layers", "glob_layers"),
+            ("dec_layers", "dec_layers"),
+        ):
+            if field_name in overridden_fields:
+                continue
+            if getattr(cfg, field_name) == defaults[field_name] and meta_key in _mcfg:
+                setattr(cfg, field_name, _mcfg[meta_key])
+
     # auto shape-matching from resolved_config.yaml — walk up from checkpoint
     resolved_path = _find_resolved_config(args.checkpoint)
     if resolved_path is not None and os.path.isfile(resolved_path):

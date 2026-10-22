@@ -8,6 +8,7 @@
 #include "core/allocator.h"
 #include "core/platform.h"
 #include "core/backend.h"
+#include "core/json.h"
 #include "models/model.h"
 #include "models/checkpoint.h"
 #include "core/decode_select.h"
@@ -373,6 +374,23 @@ int main(int argc, char **argv) {
             a.seed = strtoull(argv[++i], NULL, 10);
         } else {
             BLT_FATAL("infer: unknown argument '%s'", argv[i]);
+        }
+    }
+
+    // Resolve shape flags from checkpoint metadata when not given explicitly.
+    {
+        char meta[1 << 20];
+        meta[0] = '\0';
+        if (blt_model_read_meta(a.checkpoint, meta, sizeof(meta))) {
+            blt_arena *ma = blt_arena_create(1 << 20, BLT_BACKEND_CPU);
+            blt_json_value *root = blt_json_parse(ma, meta);
+            const blt_json_value *cfg = blt_json_get(root, "config");
+            if (a.embed == 0) a.embed = (size_t)blt_json_get_int(cfg, "embed", 0);
+            if (a.hidden == 0) a.hidden = (size_t)blt_json_get_int(cfg, "hidden", 0);
+            if (a.enc_layers == 0) a.enc_layers = (size_t)blt_json_get_int(cfg, "enc_layers", 0);
+            if (a.glob_layers == 0) a.glob_layers = (size_t)blt_json_get_int(cfg, "glob_layers", 0);
+            if (a.dec_layers == 0) a.dec_layers = (size_t)blt_json_get_int(cfg, "dec_layers", 0);
+            blt_arena_destroy(ma);
         }
     }
 

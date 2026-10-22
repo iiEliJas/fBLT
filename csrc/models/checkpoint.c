@@ -174,14 +174,19 @@ static void tensor_payload_read(blt_tensor *t, FILE *f, const char *name) {
     free(stage);
 }
 
-void blt_model_save(const blt_model *model, const char *path) {
+void blt_model_save(const blt_model *model, const char *path) { blt_model_save_ex(model, path, NULL); }
+
+void blt_model_save_ex(const blt_model *model, const char *path, const char *meta_json) {
     FILE *f = fopen(path, "wb");
     if (!f) BLT_FATAL("checkpoint save: cannot open '%s'", path);
 
-    const uint32_t version = 1;
+    const char *meta = meta_json ? meta_json : "{}";
+    const uint32_t meta_len = (uint32_t)strlen(meta);
+    const uint32_t version = 2;
     const uint32_t num = (uint32_t)blt_model_num_tensors(model);
 
     if (fwrite("FBLT", 1, 4, f) != 4 || fwrite(&version, sizeof(uint32_t), 1, f) != 1 ||
+        fwrite(&meta_len, sizeof(uint32_t), 1, f) != 1 || fwrite(meta, 1, meta_len, f) != meta_len ||
         fwrite(&num, sizeof(uint32_t), 1, f) != 1) {
         BLT_FATAL("checkpoint save: header write failed (%s)", path);
     }
@@ -305,17 +310,100 @@ void blt_entropy_lm_load(blt_entropy_lm *lm, const char *path) {
     fclose(f);
 }
 
-void blt_model_load(blt_model *model, const char *path) {
+void blt_model_load(blt_model *model, const char *path) { blt_model_load_ex(model, path, NULL, 0); }
+
+int blt_model_read_meta(const char *path, char *meta_out, size_t meta_cap) {
+    FILE *f = fopen(path, "rb");
+    if (!f) BLT_FATAL("checkpoint read_meta: cannot open '%s'", path);
+
+    char magic[4];
+    uint32_t version = 0, meta_len = 0;
+    if (fread(magic, 1, 4, f) != 4 || memcmp(magic, "FBLT", 4) != 0) {
+        fclose(f);
+        BLT_FATAL("checkpoint read_meta: bad magic in '%s'", path);
+    }
+    if (fread(&version, sizeof(uint32_t), 1, f) != 1) {
+        fclose(f);
+        BLT_FATAL("checkpoint read_meta: truncated version in '%s'", path);
+    }
+    if (version == 1) {
+        fclose(f);
+        if (meta_out && meta_cap > 0) meta_out[0] = '\\0';
+        return 0;
+    }
+    if (version != 2) {
+        fclose(f);
+        BLT_FATAL("checkpoint read_meta: unsupported version %u in '%s'", version, path);
+    }
+    if (fread(&meta_len, sizeof(uint32_t), 1, f) != 1) {
+        fclose(f);
+        BLT_FATAL("checkpoint read_meta: truncated meta_len in '%s'", path);
+    }
+    if (meta_len > 1024 * 1024) {
+        fclose(f);
+        BLT_FATAL("checkpoint read_meta: meta_len too large in '%s'", path);
+    }
+    char *buf = (char *)malloc(meta_len + 1);
+    BLT_REQUIRE(buf != NULL, "checkpoint read_meta: alloc failed");
+    if (meta_len > 0 && fread(buf, 1, meta_len, f) != meta_len) {
+        free(buf);
+        fclose(f);
+        BLT_FATAL("checkpoint read_meta: truncated meta in '%s'", path);
+    }
+    buf[meta_len] = '\\0';
+    if (meta_out && meta_cap > 0) {
+        if (meta_len + 1 > meta_cap) {
+            free(buf);
+            fclose(f);
+            BLT_FATAL("checkpoint read_meta: meta too large for buffer");
+        }
+        memcpy(meta_out, buf, meta_len + 1);
+    }
+    free(buf);
+    fclose(f);
+    return 1;
+}
+
+void blt_model_load_ex(blt_model *model, const char *path, char *meta_out, size_t meta_cap) {
     FILE *f = fopen(path, "rb");
     if (!f) BLT_FATAL("checkpoint load: cannot open '%s'", path);
 
     char magic[4];
-    uint32_t version = 0, num = 0;
+    uint32_t version = 0;
     if (fread(magic, 1, 4, f) != 4 || memcmp(magic, "FBLT", 4) != 0)
         BLT_FATAL("checkpoint load: bad magic in '%s'", path);
-    if (fread(&version, sizeof(uint32_t), 1, f) != 1 || version != 1)
+    if (fread(&version, sizeof(uint32_t), 1, f) != 1) BLT_FATAL("checkpoint load: truncated version in '%s'", path);
+
+    uint32_t num = 0;
+    if (version == 1) {
+        if (fread(&num, sizeof(uint32_t), 1, f) != 1) BLT_FATAL("checkpoint load: truncated count in '%s'", path);
+        if (meta_out && meta_cap > 0) meta_out[0] = '\0';
+    } else if (version == 2) {
+        uint32_t meta_len = 0;
+        if (fread(&meta_len, sizeof(uint32_t), 1, f) != 1)
+            BLT_FATAL("checkpoint load: truncated meta_len in '%s'", path);
+        if (meta_len > 1024 * 1024) BLT_FATAL("checkpoint load: meta_len too large in '%s'", path);
+        char *buf = (char *)malloc(meta_len + 1);
+        BLT_REQUIRE(buf != NULL, "checkpoint load: meta alloc failed");
+        if (meta_len > 0 && fread(buf, 1, meta_len, f) != meta_len) {
+            free(buf);
+            BLT_FATAL("checkpoint load: truncated meta in '%s'", path);
+        }
+        buf[meta_len] = '\0';
+        if (meta_out && meta_cap > 0) {
+            if (meta_len + 1 > meta_cap) {
+                free(buf);
+                BLT_FATAL("checkpoint load: meta too large for buffer");
+            }
+            memcpy(meta_out, buf, meta_len + 1);
+        }
+        free(buf);
+        if (fread(&num, sizeof(uint32_t), 1, f) != 1) BLT_FATAL("checkpoint load: truncated count in '%s'", path);
+    } else {
         BLT_FATAL("checkpoint load: unsupported version %u in '%s'", version, path);
-    if (fread(&num, sizeof(uint32_t), 1, f) != 1 || num != (uint32_t)blt_model_num_tensors(model))
+    }
+
+    if (num != (uint32_t)blt_model_num_tensors(model))
         BLT_FATAL("checkpoint load: tensor count %u != expected %zu ('%s')", num, blt_model_num_tensors(model), path);
 
     for (uint32_t i = 0; i < num; i++) {
@@ -339,9 +427,7 @@ void blt_model_load(blt_model *model, const char *path) {
             size_t dim = 0;
             if (fread(&dim, sizeof(size_t), 1, f) != 1) BLT_FATAL("checkpoint load: '%s' truncated dims", name);
             if (dim != t->shape[d])
-                BLT_FATAL("checkpoint load: '%s' dim[%u] %zu != %zu "
-                          "(config mismatch?)",
-                          name, d, dim, t->shape[d]);
+                BLT_FATAL("checkpoint load: '%s' dim[%u] %zu != %zu (config mismatch?)", name, d, dim, t->shape[d]);
         }
         tensor_payload_read(t, f, want_name);
     }
