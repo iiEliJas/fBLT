@@ -8,8 +8,9 @@
 //   2. apply the repeat penalty to already-seen tokens
 //   3. divide logits by the temperature
 //   4. softmax
-//   5. keep the smallest prefix whose mass reaches top_p
-//   6. draw from that prefix
+//   5. keep the top-k logits (if top_k > 0)
+//   6. keep the smallest prefix whose mass reaches top_p (if top_p in (0,1))
+//   7. draw from the remaining set
 //
 // Doing the bans before the penalty keeps the ban absolute: a token that is
 // banned cannot come back because penalising other tokens changed the softmax.
@@ -26,6 +27,7 @@ extern "C" {
 typedef struct {
     float temperature;      // <= 0 selects greedy argmax and skips steps 2-6
     float top_p;            // <= 0 disables nucleus truncation
+    size_t top_k;           // 0 disables; keep only the top-k logits
     float repeat_penalty;   // < 1.0 disables; applies to tokens already emitted
     size_t no_repeat_ngram; // 0 disables; byte-level n-gram order, must be >= 2
     uint64_t seed;          // seeds the sampling stream
@@ -36,6 +38,7 @@ typedef struct {
 static inline void blt_decode_options_defaults(blt_decode_options *o) {
     o->temperature = 0.0f;
     o->top_p = 0.0f;
+    o->top_k = 0;
     o->repeat_penalty = 1.0f;
     o->no_repeat_ngram = 0;
     o->seed = 11;
