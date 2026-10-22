@@ -31,6 +31,7 @@ typedef struct {
     // Generation
     size_t new_bytes;
     int method;
+    size_t num_samples;
 
     // Self-speculation (method = selfspec)
     size_t k;
@@ -61,6 +62,7 @@ typedef struct {
     int allow_random_entropy_lm;
     float temperature;
     float top_p;
+    size_t top_k;
     float repeat_penalty;
     size_t no_repeat_ngram;
     int sampling_given;
@@ -98,6 +100,7 @@ static void usage(void) {
                     "\n"
                     "generation:\n"
                     "  --new-bytes N               bytes to generate (default 64)\n"
+                    "  --num-samples N            draw N independent samples (greedy method only; default 1)\n"
                     "  --method greedy|selfspec|blockdiff|blockdv (default greedy)\n"
                     "  --seed N                    RNG seed for sampling and for a random-init entropy LM\n"
                     "                              (default 11)\n"
@@ -105,6 +108,7 @@ static void usage(void) {
                     "sampling (--method greedy only; omit all of these for plain argmax):\n"
                     "  --temperature F            sampling temperature; 0 = no rescaling (default 0)\n"
                     "  --top-p F                  nucleus mass in (0,1]; 0 disables truncation (default 0)\n"
+                    "  --top-k N                  keep only the top-N logits; 0 disables (default 0)\n"
                     "  --repeat-penalty F         divides logits of already-emitted bytes (default 1.0 = off)\n"
                     "  --no-repeat-ngram N        ban bytes that would repeat an N-gram already seen\n"
                     "                              (default 0 = off, must be >= 2)\n"
@@ -250,12 +254,14 @@ int main(int argc, char **argv) {
     memset(&a, 0, sizeof(a));
     a.new_bytes = 64;
     a.method = M_GREEDY;
+    a.num_samples = 1;
     a.k = 8;
     a.certify_positions = 0;
     a.block_size = 4;
     a.block_size_given = 0;
     a.temperature = 0.0f;
     a.top_p = 0.0f;
+    a.top_k = 0;
     a.repeat_penalty = 1.0f;
     a.no_repeat_ngram = 0;
     a.sampling_given = 0;
@@ -288,6 +294,8 @@ int main(int argc, char **argv) {
             a.prompt_file = argv[++i];
         } else if (!strcmp(argv[i], "--new-bytes") && i + 1 < argc) {
             a.new_bytes = strtoull(argv[++i], NULL, 10);
+        } else if (!strcmp(argv[i], "--num-samples") && i + 1 < argc) {
+            a.num_samples = strtoull(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "--method") && i + 1 < argc) {
             ++i;
             if (!strcmp(argv[i], "greedy")) a.method = M_GREEDY;
@@ -346,6 +354,9 @@ int main(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--top-p") && i + 1 < argc) {
             a.top_p = (float)atof(argv[++i]);
             a.sampling_given = 1;
+        } else if (!strcmp(argv[i], "--top-k") && i + 1 < argc) {
+            a.top_k = (size_t)atol(argv[++i]);
+            a.sampling_given = 1;
         } else if (!strcmp(argv[i], "--repeat-penalty") && i + 1 < argc) {
             a.repeat_penalty = (float)atof(argv[++i]);
             a.sampling_given = 1;
@@ -391,6 +402,7 @@ int main(int argc, char **argv) {
     blt_decode_options_defaults(&dopts);
     dopts.temperature = a.temperature;
     dopts.top_p = a.top_p;
+    dopts.top_k = a.top_k;
     dopts.repeat_penalty = a.repeat_penalty;
     dopts.no_repeat_ngram = a.no_repeat_ngram;
     dopts.seed = a.seed;
@@ -402,6 +414,9 @@ int main(int argc, char **argv) {
         BLT_REQUIRE(a.repeat_penalty > 0.0f, "infer: --repeat-penalty must be > 0");
         BLT_REQUIRE(a.no_repeat_ngram == 0 || a.no_repeat_ngram >= 2,
                     "infer: --no-repeat-ngram must be >= 2 (an order-1 ban would forbid the whole alphabet)");
+        BLT_REQUIRE(a.num_samples >= 1, "infer: --num-samples must be >= 1");
+        BLT_REQUIRE(a.num_samples == 1 || a.method == M_GREEDY,
+                    "infer: --num-samples > 1 is only supported with --method greedy");
         // The speculative methods verify each draft against greedy AR argmax, so
         // a sampled byte can never match that prediction. Acceptance would be
         // zero by construction rather than by model quality.
@@ -524,93 +539,114 @@ int main(int argc, char **argv) {
     BLT_REQUIRE(output != NULL, "infer: output buffer alloc failed");
 
     // Generation dispatch.
-    blt_infer_stats st;
-    memset(&st, 0, sizeof(st));
+    blt_infer_stats st_total;
+    memset(&st_total, 0, sizeof(st_total));
 
-    double t0 = blt_time_sec();
-
-    switch (a.method) {
-    case M_GREEDY:
-        if (blt_decode_is_sampling(&dopts)) {
-            fprintf(stderr, "[infer] sampling: T=%.3f top_p=%.3f repeat_penalty=%.3f no_repeat_ngram=%zu seed=%d\n",
-                    (double)dopts.temperature, (double)dopts.top_p, (double)dopts.repeat_penalty, dopts.no_repeat_ngram,
-                    a.seed);
-            blt_generate_sample(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, &dopts, scratch);
-        } else {
-            blt_generate_greedy(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, scratch);
-        }
-        st.nfe_encoder_global = a.new_bytes;
-        st.nfe_decoder = a.new_bytes;
-        break;
-    case M_SELFSPEC: {
-        blt_self_spec_config sc;
-        memset(&sc, 0, sizeof(sc));
-        sc.window_k = a.k;
-        sc.d0_mode = BLT_D0_LEARNED;
-        sc.certify_positions = a.certify_positions;
-        blt_generate_greedy_selfspec(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, &sc, &st,
-                                     scratch);
-        break;
-    }
-    case M_BLOCKDIFF: {
-        blt_block_gen_config gc;
-        memset(&gc, 0, sizeof(gc));
-        gc.block_size = a.block_size;
-        gc.d0_mode = BLT_D0_LEARNED;
-        gc.opts.strategy = a.unmask_eb ? BLT_UNMASK_EB : BLT_UNMASK_CONFIDENCE;
-        gc.opts.threshold = a.threshold;
-        gc.boundary_aligned = a.boundary_aligned;
-        if (a.adaptive) {
-            gc.B_min = a.b_min;
-            gc.B_max = a.b_max;
-            gc.accept_target = a.accept_target;
-            gc.adapt_window = a.adapt_window;
-        }
-        blt_generate_greedy_blockdiff(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, &gc, &st,
-                                      scratch);
-        break;
-    }
-    case M_BLOCKDV: {
-        blt_block_gen_config gc;
-        memset(&gc, 0, sizeof(gc));
-        gc.block_size = a.block_size;
-        gc.d0_mode = BLT_D0_LEARNED;
-        gc.opts.strategy = a.unmask_eb ? BLT_UNMASK_EB : BLT_UNMASK_CONFIDENCE;
-        gc.opts.threshold = a.threshold;
-        gc.boundary_aligned = a.boundary_aligned;
-        gc.verifier_model = NULL;
-        if (a.adaptive) {
-            gc.B_min = a.b_min;
-            gc.B_max = a.b_max;
-            gc.accept_target = a.accept_target;
-            gc.adapt_window = a.adapt_window;
-        }
-        blt_generate_greedy_blockdiff_verify(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, &gc, &st,
-                                             scratch);
-        break;
-    }
-    }
-
-    double elapsed_ms = (blt_time_sec() - t0) * 1000.0;
-
-    // Write generated bytes to output.
     FILE *outfp = stdout;
     if (a.output) {
         outfp = fopen(a.output, "wb");
         BLT_REQUIRE(outfp != NULL, "infer: cannot open output file '%s'", a.output);
     }
-    size_t nwritten = fwrite(output, 1, total_out, outfp);
-    if (nwritten != total_out) {
-        BLT_FATAL("infer: short write (%zu of %zu bytes)", nwritten, total_out);
+
+    double t0 = blt_time_sec();
+
+    for (size_t si = 0; si < a.num_samples; si++) {
+        if (a.num_samples > 1) {
+            dopts.seed = a.seed + si;
+            fprintf(stderr, "[infer] sample %zu/%zu seed=%llu\n", si + 1, a.num_samples,
+                    (unsigned long long)dopts.seed);
+        }
+        blt_arena_reset(scratch);
+        blt_infer_stats st;
+        memset(&st, 0, sizeof(st));
+
+        switch (a.method) {
+        case M_GREEDY:
+            if (blt_decode_is_sampling(&dopts)) {
+                fprintf(stderr, "[infer] sampling: T=%.3f top_p=%.3f repeat_penalty=%.3f no_repeat_ngram=%zu seed=%d\n",
+                        (double)dopts.temperature, (double)dopts.top_p, (double)dopts.repeat_penalty,
+                        dopts.no_repeat_ngram, a.seed);
+                blt_generate_sample(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, &dopts, scratch);
+            } else {
+                blt_generate_greedy(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, scratch);
+            }
+            st.nfe_encoder_global = a.new_bytes;
+            st.nfe_decoder = a.new_bytes;
+            break;
+        case M_SELFSPEC: {
+            blt_self_spec_config sc;
+            memset(&sc, 0, sizeof(sc));
+            sc.window_k = a.k;
+            sc.d0_mode = BLT_D0_LEARNED;
+            sc.certify_positions = a.certify_positions;
+            blt_generate_greedy_selfspec(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, &sc, &st,
+                                         scratch);
+            break;
+        }
+        case M_BLOCKDIFF: {
+            blt_block_gen_config gc;
+            memset(&gc, 0, sizeof(gc));
+            gc.block_size = a.block_size;
+            gc.d0_mode = BLT_D0_LEARNED;
+            gc.opts.strategy = a.unmask_eb ? BLT_UNMASK_EB : BLT_UNMASK_CONFIDENCE;
+            gc.opts.threshold = a.threshold;
+            gc.boundary_aligned = a.boundary_aligned;
+            if (a.adaptive) {
+                gc.B_min = a.b_min;
+                gc.B_max = a.b_max;
+                gc.accept_target = a.accept_target;
+                gc.adapt_window = a.adapt_window;
+            }
+            blt_generate_greedy_blockdiff(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, &gc, &st,
+                                          scratch);
+            break;
+        }
+        case M_BLOCKDV: {
+            blt_block_gen_config gc;
+            memset(&gc, 0, sizeof(gc));
+            gc.block_size = a.block_size;
+            gc.d0_mode = BLT_D0_LEARNED;
+            gc.opts.strategy = a.unmask_eb ? BLT_UNMASK_EB : BLT_UNMASK_CONFIDENCE;
+            gc.opts.threshold = a.threshold;
+            gc.boundary_aligned = a.boundary_aligned;
+            gc.verifier_model = NULL;
+            if (a.adaptive) {
+                gc.B_min = a.b_min;
+                gc.B_max = a.b_max;
+                gc.accept_target = a.accept_target;
+                gc.adapt_window = a.adapt_window;
+            }
+            blt_generate_greedy_blockdiff_verify(model, lm, &pcfg, prompt_bytes, prompt_len, a.new_bytes, output, &gc,
+                                                 &st, scratch);
+            break;
+        }
+        }
+
+        st_total.nfe_encoder_global += st.nfe_encoder_global;
+        st_total.nfe_decoder += st.nfe_decoder;
+        st_total.bytes_drafted += st.bytes_drafted;
+        st_total.bytes_ar += st.bytes_ar;
+        st_total.bytes_accepted += st.bytes_accepted;
+
+        size_t nwritten = fwrite(output, 1, total_out, outfp);
+        if (nwritten != total_out) {
+            BLT_FATAL("infer: short write (%zu of %zu bytes)", nwritten, total_out);
+        }
+        if (a.num_samples > 1 && !a.output) {
+            fprintf(outfp, "\n----- sample %zu -----\n", si + 1);
+        }
     }
+
+    double elapsed_ms = (blt_time_sec() - t0) * 1000.0;
+
     if (a.output) {
         fclose(outfp);
     }
 
     // Print stats to stderr
     fprintf(stderr, "[infer] nfe_enc_glob=%zu, nfe_dec=%zu, drafted=%zu, ar=%zu, accepted=%zu (%.1f%%)\n",
-            st.nfe_encoder_global, st.nfe_decoder, st.bytes_drafted, st.bytes_ar, st.bytes_accepted,
-            (double)(100.0f * blt_infer_stats_acceptance_rate(&st)));
+            st_total.nfe_encoder_global, st_total.nfe_decoder, st_total.bytes_drafted, st_total.bytes_ar,
+            st_total.bytes_accepted, (double)(100.0f * blt_infer_stats_acceptance_rate(&st_total)));
     fprintf(stderr, "[infer] wall_clock: %.3f ms\n", elapsed_ms);
 
     // Cleanup.

@@ -143,11 +143,13 @@ class InferConfig:
     prompt_file: typing.Optional[str] = None
 
     new_bytes: int = 64
+    num_samples: int = 1
     method: str = "greedy"
     seed: int = 11
 
     temperature: float = 0.0
     top_p: float = 0.0
+    top_k: int = 0
     repeat_penalty: float = 1.0
     no_repeat_ngram: int = 0
     max_seq_len: int = 0

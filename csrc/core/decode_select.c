@@ -102,12 +102,11 @@ uint8_t blt_decode_select(const blt_decode_options *o, const float *logits, size
     const float inv_sum = (sum > 0.0) ? (float)(1.0 / sum) : 0.0f;
     for (size_t v = 0; v < vocab_size; v++) work[v] *= inv_sum;
 
-    if (o->top_p > 0.0f && o->top_p < 1.0f) {
+    int need_filter = (o->top_k > 0 && o->top_k < vocab_size) || (o->top_p > 0.0f && o->top_p < 1.0f);
+    if (need_filter) {
         size_t *order = (size_t *)malloc(vocab_size * sizeof(size_t));
-        BLT_REQUIRE(order != NULL, "blt_decode_select: nucleus alloc failed");
+        BLT_REQUIRE(order != NULL, "blt_decode_select: filter alloc failed");
         for (size_t v = 0; v < vocab_size; v++) order[v] = v;
-        // Insertion sort on the probabilities keyed through order: vocab is 256,
-        // so this beats anything fancier and keeps ties in index order.
         for (size_t i = 1; i < vocab_size; i++) {
             const size_t key = order[i];
             const float pk = work[key];
@@ -118,27 +117,41 @@ uint8_t blt_decode_select(const blt_decode_options *o, const float *logits, size
             }
             order[j] = key;
         }
-        double cum = 0.0;
-        size_t nucleus = vocab_size - 1;
-        for (size_t i = 0; i < vocab_size; i++) {
-            cum += work[order[i]];
-            if (cum >= (double)o->top_p) {
-                nucleus = i;
-                break;
+        size_t keep = vocab_size;
+        if (o->top_k > 0 && o->top_k < keep) keep = o->top_k;
+        if (o->top_p > 0.0f && o->top_p < 1.0f) {
+            double cum = 0.0;
+            size_t nucleus = vocab_size - 1;
+            for (size_t i = 0; i < vocab_size; i++) {
+                cum += work[order[i]];
+                if (cum >= (double)o->top_p) {
+                    nucleus = i;
+                    break;
+                }
             }
+            if (nucleus + 1 < keep) keep = nucleus + 1;
         }
-        double r = uniform01(rng);
+        if (keep == 0) keep = 1;
+        if (keep == 1) {
+            const uint8_t pick = (uint8_t)order[0];
+            free(order);
+            free(work);
+            return pick;
+        }
+        double tot = 0.0;
+        for (size_t i = 0; i < keep; i++) tot += work[order[i]];
+        const double r = uniform01(rng);
         double acc = 0.0;
-        for (size_t i = 0; i <= nucleus; i++) {
-            acc += work[order[i]];
-            if ((float)r < (float)acc) {
+        for (size_t i = 0; i < keep; i++) {
+            acc += (tot > 0.0) ? (work[order[i]] / tot) : (1.0 / (double)keep);
+            if (r < acc) {
                 const uint8_t pick = (uint8_t)order[i];
                 free(order);
                 free(work);
                 return pick;
             }
         }
-        const uint8_t pick = (uint8_t)order[nucleus];
+        const uint8_t pick = (uint8_t)order[keep - 1];
         free(order);
         free(work);
         return pick;
