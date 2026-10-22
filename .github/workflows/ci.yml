@@ -92,18 +92,28 @@ jobs:
   # 2. macOS build + test — DISABLED
   # ====================================================================
   # The Makefile has no OpenMP detection (no -fopenmp in CFLAGS) and
-  # Apple Clang doesn't ship libomp.  Even with brew install libomp,
-  # the linker needs -L$(brew --prefix libomp)/lib and the preprocessor
-  # needs -Xpreprocessor -fopenmp -I$(brew --prefix libomp)/include.
-  # Re-enable once the Makefile supports macOS properly.
-  #
-  # macos-test:
-  #   runs-on: macos-latest
-  #   timeout-minutes: 15
-  #   steps:
-  #     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-  #     - run: brew install libomp
-  #     - run: make CC=clang LDLIBS="-lm -lomp" test
+  macos-test:
+    name: macOS CPU
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install dependencies
+        run: brew install cmake python
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - name: Install Python packages
+        run: pip install torch numpy pyyaml pytest ruff
+      - name: Generate parity data
+        run: python tests/py/parity_generate.py
+      - name: Configure
+        run: cmake -S . -B build
+      - name: Build and test
+        run: cmake --build build --target test
+      - name: Python tests
+        run: pip install -e '.[dev]' && pytest tests/
 
   # ====================================================================
   # 3. Sanitizer job (ASan + UBSan)
