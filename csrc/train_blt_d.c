@@ -46,6 +46,7 @@
 #include "train_diag.h"
 #include "train_eval.h"
 #include "train_schedule.h"
+#include "core/flops.h"
 
 // Substitutes the first %d in path with step when the path is a template;
 // otherwise copies path verbatim into buf.
@@ -572,12 +573,14 @@ int main(int argc, char **argv) {
 #undef RAND01
     }
 
+    const size_t n_params = blt_count_params(model);
     printf("train_blt_d: mode=%s corpus=%s (%ld bytes) steps=%zu lr=%.4g B=%zu W=%zu "
            "embed=%zu hidden=%zu enc/glob/dec layers=%zu/%zu/%zu xattn=%s backend=%s d0=%s"
-           " optimizer=%s\n",
+           " optimizer=%s params=%zu (%.3fM)\n",
            a.diffusion ? "BLT-D" : "PLAIN-BLT", a.corpus_path, fsize, a.steps, (double)a.lr, a.block_size, a.window,
            a.embed, a.hidden, a.enc_layers, a.glob_layers, a.dec_layers, a.cross_last ? "last" : "all",
-           a.use_cuda ? "cuda" : "cpu", a.d0_learned ? "learned" : "zeros", a.optimizer ? "adamw" : "sgd");
+           a.use_cuda ? "cuda" : "cpu", a.d0_learned ? "learned" : "zeros", a.optimizer ? "adamw" : "sgd", n_params,
+           (double)n_params / 1e6);
 
     // Training loop: non-overlapping windows over the corpus, fixed-stride
     // patches, freshly sampled corruption per visit.
@@ -615,6 +618,10 @@ int main(int argc, char **argv) {
 
     double best_metric_value = (a.best_metric == 0) ? INFINITY : -INFINITY;
     size_t best_step = 0;
+
+    double report_t0 = blt_time_sec();
+    size_t report_step0 = a.start_step;
+    size_t patch_sum = 0, patch_n = 0;
 
     FILE *gnorm_fp = NULL;
     if (a.grad_norm_log) gnorm_fp = fopen(a.grad_norm_log, "w");
@@ -753,6 +760,8 @@ int main(int argc, char **argv) {
             }
             running += lv;
             running_n++;
+            patch_sum += M;
+            patch_n++;
 
             blt_tensor grad_h = blt_tensor_create(scratch, h_shape, 2, BLT_DTYPE_FP32);
             blt_tensor grad_O = blt_tensor_create(scratch, p_shape2, 2, BLT_DTYPE_FP32);
@@ -788,6 +797,8 @@ int main(int argc, char **argv) {
                 fprintf(loss_fp, "%zu %.6f\n", step + 1, (double)lv);
             running += lv;
             running_n++;
+            patch_sum += M;
+            patch_n++;
 
             blt_model_backward(model, &bytes_in, &targets, patches, M, NULL, 0, grad, scratch);
 
@@ -897,11 +908,60 @@ int main(int argc, char **argv) {
             excl_s = 0.0;
             size_t rem_h = (size_t)remaining / 3600;
             size_t rem_m = ((size_t)remaining % 3600) / 60;
-            printf("step %6zu/%zu  epoch %zu/%zu  avg_loss %.4f  ETA %zuh%02zum\n", step + 1, end_step, epoch,
-                   total_epochs, running / running_n, rem_h, rem_m);
+            const double steps_done = (double)((step + 1) - report_step0);
+            const double dt = now - report_t0;
+            const double ms_per_step = (steps_done > 0) ? 1000.0 * dt / steps_done : 0.0;
+            const double bytes_per_s = (dt > 0) ? (double)(steps_done * a.window) / dt : 0.0;
+            const double avg_patch = patch_n ? (double)patch_sum / (double)patch_n : 4.0;
+            double tflops = 0.0;
+            int have_tflops = 0;
+            if (dt > 0 && steps_done > 0) {
+                blt_flops_config fc;
+                memset(&fc, 0, sizeof(fc));
+                fc.h_G = (int)cfg.global_config.embed_dim;
+                fc.l_G = (int)cfg.global_config.num_layers;
+                fc.n_ctx = a.window;
+                fc.global_heads = (int)cfg.global_config.num_heads;
+                fc.global_head_dim = fc.h_G / (fc.global_heads ? fc.global_heads : 1);
+                fc.d_ff_G = (int)(cfg.global_config.hidden_dim /
+                                  (cfg.global_config.embed_dim ? cfg.global_config.embed_dim : 1));
+                fc.h_E = (int)cfg.encoder_config.embed_dim;
+                fc.l_E = (int)cfg.encoder_config.num_layers;
+                fc.w_E = a.window;
+                fc.enc_heads = (int)cfg.encoder_config.num_heads;
+                fc.enc_head_dim = fc.h_E / (fc.enc_heads ? fc.enc_heads : 1);
+                fc.d_ff_E = (int)(cfg.encoder_config.hidden_dim /
+                                  (cfg.encoder_config.embed_dim ? cfg.encoder_config.embed_dim : 1));
+                fc.h_D = (int)cfg.decoder_config.embed_dim;
+                fc.l_D = (int)cfg.decoder_config.num_layers;
+                fc.w_D = a.window;
+                fc.dec_heads = (int)cfg.decoder_config.num_heads;
+                fc.dec_head_dim = fc.h_D / (fc.dec_heads ? fc.dec_heads : 1);
+                fc.d_ff_D = (int)(cfg.decoder_config.hidden_dim /
+                                  (cfg.decoder_config.embed_dim ? cfg.decoder_config.embed_dim : 1));
+                fc.n_p = (size_t)llround(avg_patch > 1 ? avg_patch : 1);
+                fc.k = 1;
+                fc.vocab_size = 256;
+                double fpb = blt_flops_per_byte(&fc);
+                if (isfinite(fpb) && fpb > 0) {
+                    const double flops_per_step = 3.0 * fpb * (double)a.window;
+                    tflops = flops_per_step / (dt / steps_done) / 1e12;
+                    have_tflops = isfinite(tflops);
+                }
+            }
+            printf("step %6zu/%zu  epoch %zu/%zu  avg_loss %.4f  lr %.3g  ms/step %.1f  B/s %.1f  ETA %zuh%02zum",
+                   step + 1, end_step, epoch, total_epochs, running / running_n, (double)lr, ms_per_step, bytes_per_s,
+                   rem_h, rem_m);
+            if (have_tflops) printf("  ~%.2f TFLOP/s", tflops);
+            if (a.peak_tflops > 0 && have_tflops) printf("  MFU %.1f%%", 100.0 * tflops / a.peak_tflops);
+            printf("\n");
             fflush(stdout);
             running = 0.0;
             running_n = 0;
+            report_t0 = blt_time_sec();
+            report_step0 = step + 1;
+            patch_sum = 0;
+            patch_n = 0;
         }
 
         const double post0 = blt_time_sec();
@@ -1098,10 +1158,10 @@ int main(int argc, char **argv) {
         }
         printf("RESULT mode=%s steps=%zu embed=%zu window=%zu B=%zu "
                "enc/glob/dec=%zu/%zu/%zu xattn=%s backend=%s "
-               "eval_windows=%zu causal_bpb=%.4f masked_acc=%.3f (%zu/%zu)\n",
+               "eval_windows=%zu causal_bpb=%.4f masked_acc=%.3f (%zu/%zu) params=%zu\n",
                a.diffusion ? "bltd" : "plain", a.steps, a.embed, a.window, a.block_size, a.enc_layers, a.glob_layers,
                a.dec_layers, a.cross_last ? "last" : "all", a.use_cuda ? "cuda" : "cpu", eval_count, bpb,
-               total ? (double)hits / (double)total : 0.0, hits, total);
+               total ? (double)hits / (double)total : 0.0, hits, total, n_params);
         free(eval_bytes);
     }
 
