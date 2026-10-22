@@ -1,0 +1,11 @@
+corpus: data/train.bin
+load-weights: runs/pretrain/checkpoint.fblt
+steps: 2000
+optimizer: adamw
+lr: 0.00001
+lr-decay: 0
+weight-decay: 0.01
+eval-corpus: data/heldout.bin
+eval-every: 100
+save-best: runs/finetune/best.fblt
+save-weights: runs/finetune/final.fblt
