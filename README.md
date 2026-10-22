@@ -240,7 +240,7 @@ configs/
 
 tests/                Test suite (C + Python)
 bench/                Benchmarks
-run/                  C entry points (train_blt_d.c, infer.c, etc.)
+csrc/                 C entry points (train_blt_d.c, infer.c, etc.)
 data/                 Training data (sample corpus, golden test tensors)
 
 build/                CMake build output (CPU)
@@ -442,3 +442,20 @@ If you build on this work, please consider citing the foundational Meta papers:
 ## License
 
 [Apache 2.0](LICENSE)
+
+## Known limitations (1.0)
+
+- Patch count is capped at 128 per window (`BLT_MAX_PATCHES`).
+- Demonstrated scale: 7.8M-parameter models; larger configs are untested.
+- CUDA runs are non-deterministic unless `--deterministic` is passed (uses atomic reductions).
+- Sampling (`--temperature`, `--top-p`, `--top-k`, `--repeat-penalty`, `--no-repeat-ngram`) is supported only with `--method greedy`; speculative/block-diffusion methods verify against greedy argmax.
+- Single-GPU / single-process only (no data parallelism).
+- BF16 mixed precision is not implemented (FP32 only).
+
+## Support matrix
+
+| OS | CPU | CUDA |
+|----|-----|------|
+| Linux | ✅ | ✅ |
+| Windows | ✅ | ❌ (not tested) |
+| macOS | ✅ | ❌ (no NVIDIA) |
