@@ -45,6 +45,7 @@
 #include "train_optim.h"
 #include "train_diag.h"
 #include "train_eval.h"
+#include "train_schedule.h"
 
 // Substitutes the first %d in path with step when the path is a template;
 // otherwise copies path verbatim into buf.
@@ -583,6 +584,8 @@ int main(int argc, char **argv) {
 
     size_t num_windows = (size_t)(fsize - a.window) / a.window;
     BLT_REQUIRE(num_windows >= 1, "corpus smaller than one training window");
+    BLT_REQUIRE(!(a.lr_schedule == 1 && (a.lr_decay || a.lr_decay_count > 0)),
+                "train_blt_d: --lr-schedule cosine cannot be combined with --lr-decay");
 
     size_t total_epochs = (a.start_step + a.steps + num_windows - 1) / num_windows;
     printf("train_blt_d: %zu windows (~%zu epochs)\n", num_windows, total_epochs);
@@ -787,16 +790,7 @@ int main(int argc, char **argv) {
                 log_gradient_activation_dump(adump_fp, step + 1, model, grad);
         }
 
-        float lr = a.lr;
-        if (a.lr_decay_count > 0) {
-            // custom decay: multiply by factor for each decay step passed
-            for (int d = 0; d < a.lr_decay_count; d++) {
-                if (step >= a.lr_decay_steps[d]) lr *= a.lr_decay_factor;
-            }
-        } else if (a.lr_decay) {
-            if (step >= (end_step * 85) / 100) lr *= 0.09f;
-            else if (step >= (end_step * 60) / 100) lr *= 0.3f;
-        }
+        float lr = train_lr_at_step(&a, step, end_step);
 
         if (timing) tsC = blt_time_sec();
         if (cnorm_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))

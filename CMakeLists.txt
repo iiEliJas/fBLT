@@ -84,6 +84,7 @@ set(BLT_CORE_SOURCES
   csrc/train_optim.c
   csrc/train_diag.c
   csrc/train_eval.c
+  csrc/train_schedule.c
   csrc/models/checkpoint.c
   csrc/models/param_visitor.c
   csrc/infer/stats.c

@@ -40,6 +40,10 @@ typedef struct {
     size_t lr_decay_steps[BLT_TRAIN_LR_DECAY_MAX];
     int lr_decay_count;
     float lr_decay_factor;
+    size_t warmup_steps;
+    int lr_schedule; // 0 = step decay, 1 = cosine
+    float min_lr;    // < 0 = default to lr * 0.1
+    int lr_schedule_given;
     size_t mask_warmup;
     float mask_scale;
     float last_row_scale;

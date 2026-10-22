@@ -1,4 +1,5 @@
 #include "train_args.h"
+#include "core/backend.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -112,6 +113,10 @@ args_t parse_args(int argc, char **argv) {
                 .lr_decay = 0,
                 .lr_decay_count = 0,
                 .lr_decay_factor = 0.3f,
+                .warmup_steps = 0,
+                .lr_schedule = 0,
+                .min_lr = -1.0f,
+                .lr_schedule_given = 0,
                 .mask_warmup = 0,
                 .mask_scale = 1.0f,
                 .last_row_scale = 1.0f,
@@ -185,7 +190,17 @@ args_t parse_args(int argc, char **argv) {
                 tok = strtok(NULL, ",");
             }
         } else if (!strcmp(argv[i], "--lr-decay-factor") && i + 1 < argc) a.lr_decay_factor = atof(argv[++i]);
-        else if (!strcmp(argv[i], "--mask-warmup") && i + 1 < argc) a.mask_warmup = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--warmup-steps") && i + 1 < argc) a.warmup_steps = (size_t)atol(argv[++i]);
+        else if (!strcmp(argv[i], "--lr-schedule") && i + 1 < argc) {
+            if (!strcmp(argv[i + 1], "cosine")) a.lr_schedule = 1;
+            else if (!strcmp(argv[i + 1], "step")) a.lr_schedule = 0;
+            else BLT_FATAL("train_blt_d: --lr-schedule must be step or cosine");
+            a.lr_schedule_given = 1;
+            i++;
+        } else if (!strcmp(argv[i], "--min-lr") && i + 1 < argc) {
+            a.min_lr = atof(argv[++i]);
+            a.min_lr = a.min_lr; // keep as given (>=0 means specified)
+        } else if (!strcmp(argv[i], "--mask-warmup") && i + 1 < argc) a.mask_warmup = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--mask-scale") && i + 1 < argc) a.mask_scale = atof(argv[++i]);
         else if (!strcmp(argv[i], "--mask-loss-norm") && i + 1 < argc) a.mask_loss_norm = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--paper-loss") && i + 1 < argc) a.paper_loss = atoi(argv[++i]);
