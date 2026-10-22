@@ -258,6 +258,9 @@ add_custom_target(test
 )
 
 # -- sandbox: build + run scratch playground ---------------------------------
+add_custom_target(profile-train
+  COMMAND ${CMAKE_COMMAND} -E echo "usage: scripts/profile_train.sh build-cuda --corpus ..."
+  COMMENT "Profiling wrapper")
 add_custom_target(sandbox_run
   COMMAND $<TARGET_FILE:sandbox>
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
