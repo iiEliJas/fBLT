@@ -105,6 +105,9 @@ args_t parse_args(int argc, char **argv) {
                 .eval_windows = 200,
                 .save_path = NULL,
                 .save_every = 0,
+                .save_best_path = NULL,
+                .best_metric = 0,
+                .save_best_optim_path = NULL,
                 .load_path = NULL,
                 .eval_skip = 0,
                 .monitor_every = 2000,
@@ -168,6 +171,13 @@ args_t parse_args(int argc, char **argv) {
         else if (!strcmp(argv[i], "--diffusion") && i + 1 < argc) a.diffusion = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--save-weights") && i + 1 < argc) a.save_path = argv[++i];
         else if (!strcmp(argv[i], "--save-every") && i + 1 < argc) a.save_every = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--save-best") && i + 1 < argc) a.save_best_path = argv[++i];
+        else if (!strcmp(argv[i], "--best-metric") && i + 1 < argc) {
+            if (!strcmp(argv[i + 1], "bpb")) a.best_metric = 0;
+            else if (!strcmp(argv[i + 1], "masked_acc")) a.best_metric = 1;
+            else BLT_FATAL("train_blt_d: --best-metric must be bpb or masked_acc");
+            i++;
+        } else if (!strcmp(argv[i], "--save-best-optim") && i + 1 < argc) a.save_best_optim_path = argv[++i];
         else if (!strcmp(argv[i], "--load-weights") && i + 1 < argc) a.load_path = argv[++i];
         else if (!strcmp(argv[i], "--save-optim") && i + 1 < argc) a.save_optim_path = argv[++i];
         else if (!strcmp(argv[i], "--load-optim") && i + 1 < argc) a.load_optim_path = argv[++i];

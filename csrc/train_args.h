@@ -27,6 +27,9 @@ typedef struct {
     size_t eval_windows;
     const char *save_path;
     size_t save_every;
+    const char *save_best_path;
+    int best_metric; // 0 = causal_bpb (min), 1 = masked_acc (max)
+    const char *save_best_optim_path;
     const char *load_path;
     const char *save_optim_path;
     const char *load_optim_path;

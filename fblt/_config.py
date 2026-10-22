@@ -113,6 +113,9 @@ class TrainConfig:
     save_weights: typing.Optional[str] = None
     save_optim: typing.Optional[str] = None
     save_every: int = 0
+    save_best: typing.Optional[str] = None
+    best_metric: str = "bpb"
+    save_best_optim: typing.Optional[str] = None
     load_weights: typing.Optional[str] = None
     load_optim: typing.Optional[str] = None
     start_step: typing.Optional[int] = None
