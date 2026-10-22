@@ -615,6 +615,7 @@ int main(int argc, char **argv) {
 
     double running = 0.0f;
     size_t running_n = 0;
+    double last_loss = 0.0;
 
     double best_metric_value = (a.best_metric == 0) ? INFINITY : -INFINITY;
     size_t best_step = 0;
@@ -640,6 +641,12 @@ int main(int argc, char **argv) {
     if (a.loss_log) {
         if (train_ensure_parent_dir(a.loss_log) == 0) loss_fp = fopen(a.loss_log, "w");
         BLT_REQUIRE(loss_fp != NULL, "train_blt_d: cannot open --loss-log %s", a.loss_log);
+    }
+    FILE *metrics_fp = NULL;
+    if (a.metrics_log) {
+        if (train_ensure_parent_dir(a.metrics_log) == 0) metrics_fp = fopen(a.metrics_log, "w");
+        BLT_REQUIRE(metrics_fp != NULL, "train_blt_d: cannot open --metrics-log %s", a.metrics_log);
+        setvbuf(metrics_fp, NULL, _IOLBF, 0);
     }
 
     double t_fwd = 0.0, t_bwd = 0.0, t_opt = 0.0, t_step = 0.0;
@@ -759,6 +766,7 @@ int main(int argc, char **argv) {
                 t_fwd += tsB - tsA;
             }
             running += lv;
+            last_loss = lv;
             running_n++;
             patch_sum += M;
             patch_n++;
@@ -796,6 +804,7 @@ int main(int argc, char **argv) {
             if (loss_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
                 fprintf(loss_fp, "%zu %.6f\n", step + 1, (double)lv);
             running += lv;
+            last_loss = lv;
             running_n++;
             patch_sum += M;
             patch_n++;
@@ -844,6 +853,11 @@ int main(int argc, char **argv) {
         } else {
             sgd_all(model, grad, lr);
         }
+        if (metrics_fp) {
+            fprintf(metrics_fp, "{\"event\":\"train\",\"step\":%zu,\"loss\":%.6f,\"lr\":%.6g,\"grad_norm\":%.6f}\n",
+                    step + 1, last_loss, (double)lr, (double)pre_clip_norm);
+            fflush(metrics_fp);
+        }
         if (timing) {
             tsD = blt_time_sec();
             t_opt += tsD - tsC;
@@ -875,6 +889,14 @@ int main(int argc, char **argv) {
                            step + 1, mr.l_clean, mr.clean_bits, mr.l_mask, mr.mask_bits, tacc, mr.train_total, nacc,
                            mr.novel_total, gap);
                     fflush(stdout);
+                    if (metrics_fp) {
+                        fprintf(
+                            metrics_fp,
+                            "{\"event\":\"monitor\",\"step\":%zu,\"l_clean\":%.6f,\"clean_bpb\":%.6f,\"mask_bpb\":%.6f,"
+                            "\"train_acc\":%.6f,\"novel_acc\":%.6f,\"gap\":%.6f}\n",
+                            step + 1, mr.l_clean, mr.clean_bits, mr.mask_bits, tacc, nacc, gap);
+                        fflush(metrics_fp);
+                    }
                     // Tripwires: a reintroduced clean-twin leak sends train_acc to
                     // ~1.0; a train/novel split after 5k steps means the layouts
                     // disagree, which the leak-free mask should prevent.
@@ -1028,7 +1050,6 @@ int main(int argc, char **argv) {
                     double masked_acc = total ? (double)hits / (double)total : 0.0;
                     printf("EVAL step=%zu causal_bpb=%.4f masked_acc=%.3f\n", step + 1, bpb, masked_acc);
                     fflush(stdout);
-
                     if (a.save_best_path) {
                         const double metric = (a.best_metric == 0) ? bpb : masked_acc;
                         const int valid = (a.best_metric == 0) ? isfinite(bpb) : (total > 0);
@@ -1039,7 +1060,7 @@ int main(int argc, char **argv) {
                             best_step = step + 1;
                             char path_buf[4096];
                             blt_format_save_path(path_buf, sizeof(path_buf), a.save_best_path, step + 1);
-                            blt_model_save(model, path_buf);
+                            blt_model_save_ex(model, path_buf, NULL);
                             if (a.save_best_optim_path && aw) {
                                 char opath_buf[4096];
                                 blt_format_save_path(opath_buf, sizeof(opath_buf), a.save_best_optim_path, step + 1);
@@ -1049,6 +1070,12 @@ int main(int argc, char **argv) {
                                    a.best_metric == 0 ? "causal_bpb" : "masked_acc", metric, path_buf);
                             fflush(stdout);
                         }
+                    }
+                    if (metrics_fp) {
+                        fprintf(metrics_fp,
+                                "{\"event\":\"eval\",\"step\":%zu,\"causal_bpb\":%.6f,\"masked_acc\":%.6f}\n", step + 1,
+                                bpb, total ? (double)hits / (double)total : 0.0);
+                        fflush(metrics_fp);
                     }
                 }
                 free(eval_bytes);
@@ -1083,6 +1110,7 @@ int main(int argc, char **argv) {
     // Same windowing/patches as training
 
     double bpb = -1.0;
+    double final_masked_acc = 0.0;
     if (a.eval_path != NULL) {
         FILE *ef = fopen(a.eval_path, "rb");
         if (!ef) {
@@ -1145,7 +1173,7 @@ int main(int argc, char **argv) {
                 best_step = end_step;
                 char path_buf[4096];
                 blt_format_save_path(path_buf, sizeof(path_buf), a.save_best_path, end_step);
-                blt_model_save(model, path_buf);
+                blt_model_save_ex(model, path_buf, NULL);
                 if (a.save_best_optim_path && aw) {
                     char opath_buf[4096];
                     blt_format_save_path(opath_buf, sizeof(opath_buf), a.save_best_optim_path, end_step);
@@ -1163,6 +1191,15 @@ int main(int argc, char **argv) {
                a.dec_layers, a.cross_last ? "last" : "all", a.use_cuda ? "cuda" : "cpu", eval_count, bpb,
                total ? (double)hits / (double)total : 0.0, hits, total, n_params);
         free(eval_bytes);
+    }
+
+    if (metrics_fp) {
+        const size_t n_params = blt_count_params(model);
+        fprintf(metrics_fp,
+                "{\"event\":\"result\",\"steps\":%zu,\"causal_bpb\":%.6f,\"masked_acc\":%.6f,\"params\":%zu}\n",
+                end_step, bpb, final_masked_acc, n_params);
+        fflush(metrics_fp);
+        fclose(metrics_fp);
     }
 
     blt_arena_destroy(host_lm_arena);
