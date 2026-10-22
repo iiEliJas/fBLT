@@ -1,6 +1,7 @@
 import argparse
 import dataclasses
 import os
+import subprocess
 import sys
 import time
 import typing
@@ -34,6 +35,7 @@ def _parse_args() -> typing.Tuple[argparse.Namespace, typing.Dict[str, typing.An
         help="key=value override (repeatable)",
     )
     parser.add_argument("--run-name", type=str, default=None, help="Run name")
+    parser.add_argument("--profile", action="store_true", help="Run under nsys profile (CUDA only)")
 
     # Every remaining TrainConfig field becomes a real flag, so the C binary's
     # full option surface is reachable without --override.
@@ -109,6 +111,28 @@ def main() -> None:
     # Resolve binary and run
     binary = resolve_binary("train_blt_d", cfg.backend)
     argv = cfg.to_argv()
+
+    if args.profile:
+        if cfg.backend != "cuda":
+            raise SystemExit("--profile requires --backend cuda")
+        import shutil
+
+        nsys = shutil.which("nsys")
+        if nsys is None:
+            raise SystemExit("nsys not found; install Nsight Systems or run the binary directly")
+        cmd = [
+            nsys,
+            "profile",
+            "--trace=cuda,nvtx,osrt",
+            "--sample=none",
+            "--cpuctxsw=none",
+            "-o",
+            os.path.join(run_dir, "profile"),
+            binary,
+        ] + argv
+        rc = subprocess.call(cmd)
+        sys.exit(rc)
+
     rc = run_binary(binary, argv)
     sys.exit(rc)
 
