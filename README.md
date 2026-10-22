@@ -396,10 +396,26 @@ the same checkpoint accepts 65.0% at B=4. `infer_bench` now refuses to run witho
 
 - [patch_cap_limit.md](docs/experiments/patch_cap_limit.md) The 128-patch cap is another open issue. I added it because BLT-D did not support more patches at the time. Raising it and measuring the effect is an open experiment i have not yet done.
 
+## Known limitations (1.0)
+
+- Patch count is capped at 128 per window (`BLT_MAX_PATCHES`).
+- Demonstrated scale: 7.8M-parameter models; larger configs are untested.
+- CUDA runs are non-deterministic unless `--deterministic` is passed (uses atomic reductions).
+- Sampling (`--temperature`, `--top-p`, `--top-k`, `--repeat-penalty`, `--no-repeat-ngram`) is supported only with `--method greedy`; speculative/block-diffusion methods verify against greedy argmax.
+- Single-GPU / single-process only (no data parallelism).
+- BF16 mixed precision is not implemented (FP32 only).
+
+## Support
+
+| OS | CPU | CUDA |
+|----|-----|------|
+| Linux | ✅ | ✅ |
+| Windows | ✅ | ❌ (not tested) |
+| macOS | ✅ | ❌ (no NVIDIA) |
+
 ## TODO
 - Inference improvements
 - Multi-GPU / larger-scale training runs
-- MacOS support
 
 ## Docs
 
@@ -442,20 +458,3 @@ If you build on this work, please consider citing the foundational Meta papers:
 ## License
 
 [Apache 2.0](LICENSE)
-
-## Known limitations (1.0)
-
-- Patch count is capped at 128 per window (`BLT_MAX_PATCHES`).
-- Demonstrated scale: 7.8M-parameter models; larger configs are untested.
-- CUDA runs are non-deterministic unless `--deterministic` is passed (uses atomic reductions).
-- Sampling (`--temperature`, `--top-p`, `--top-k`, `--repeat-penalty`, `--no-repeat-ngram`) is supported only with `--method greedy`; speculative/block-diffusion methods verify against greedy argmax.
-- Single-GPU / single-process only (no data parallelism).
-- BF16 mixed precision is not implemented (FP32 only).
-
-## Support matrix
-
-| OS | CPU | CUDA |
-|----|-----|------|
-| Linux | ✅ | ✅ |
-| Windows | ✅ | ❌ (not tested) |
-| macOS | ✅ | ❌ (no NVIDIA) |
