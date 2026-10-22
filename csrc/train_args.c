@@ -151,6 +151,7 @@ args_t parse_args(int argc, char **argv) {
                 .batch_log = NULL,
                 .eval_every = 0,
                 .loss_log = NULL,
+                .metrics_log = NULL,
                 .deterministic = 0,
                 .cuda_scratch_mb = 0,
                 .scratch_mb = 0,
@@ -262,6 +263,7 @@ args_t parse_args(int argc, char **argv) {
         else if (!strcmp(argv[i], "--activation-dump-log") && i + 1 < argc) a.activation_dump_log = argv[++i];
         else if (!strcmp(argv[i], "--batch-log") && i + 1 < argc) a.batch_log = argv[++i];
         else if (!strcmp(argv[i], "--loss-log") && i + 1 < argc) a.loss_log = argv[++i];
+        else if (!strcmp(argv[i], "--metrics-log") && i + 1 < argc) a.metrics_log = argv[++i];
         else if (!strcmp(argv[i], "--scratch-mb") && i + 1 < argc) a.scratch_mb = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--cuda-scratch-mb") && i + 1 < argc)
             a.cuda_scratch_mb = strtoull(argv[++i], NULL, 10);

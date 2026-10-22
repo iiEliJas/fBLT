@@ -131,6 +131,7 @@ class TrainConfig:
     activation_dump_log: typing.Optional[str] = None
     batch_log: typing.Optional[str] = None
     loss_log: typing.Optional[str] = None
+    metrics_log: typing.Optional[str] = None
 
     def to_argv(self) -> typing.List[str]:
         return _to_argv(self)

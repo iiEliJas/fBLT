@@ -78,6 +78,7 @@ typedef struct {
     const char *batch_log;
     size_t eval_every;
     const char *loss_log;
+    const char *metrics_log;
     int deterministic;
     size_t cuda_scratch_mb;
     size_t scratch_mb;

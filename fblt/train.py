@@ -3,6 +3,7 @@ import dataclasses
 import os
 import subprocess
 import sys
+import threading
 import time
 import typing
 
@@ -36,6 +37,10 @@ def _parse_args() -> typing.Tuple[argparse.Namespace, typing.Dict[str, typing.An
     )
     parser.add_argument("--run-name", type=str, default=None, help="Run name")
     parser.add_argument("--profile", action="store_true", help="Run under nsys profile (CUDA only)")
+    parser.add_argument("--wandb", action="store_true", help="Stream metrics to W&B")
+    parser.add_argument("--wandb-project", type=str, default="fblt", help="W&B project")
+    parser.add_argument("--wandb-run-name", type=str, default=None, help="W&B run name")
+    parser.add_argument("--wandb-entity", type=str, default=None, help="W&B entity")
 
     # Every remaining TrainConfig field becomes a real flag, so the C binary's
     # full option surface is reachable without --override.
@@ -72,6 +77,7 @@ _DEFAULT_OUTPUTS: typing.Dict[str, str] = {
     "activation_dump_log": "activation_dump.log",
     "batch_log": "batch.log",
     "loss_log": "loss.log",
+    "metrics_log": "metrics.jsonl",
 }
 
 
@@ -131,6 +137,61 @@ def main() -> None:
             binary,
         ] + argv
         rc = subprocess.call(cmd)
+        sys.exit(rc)
+
+    metrics_path = getattr(cfg, "metrics_log", None)
+    if getattr(args, "wandb", False):
+        try:
+            import wandb
+        except ImportError:
+            raise SystemExit("wandb not installed; pip install 'fblt[tracking]'")
+        run = wandb.init(
+            project=args.wandb_project,
+            name=args.wandb_run_name or run_name,
+            entity=args.wandb_entity,
+            config=dataclasses.asdict(cfg),
+        )
+        stop = threading.Event()
+
+        def on_event(ev):
+            evt = ev.get("event")
+            if evt == "train":
+                run.log(
+                    {
+                        "train/loss": ev.get("loss"),
+                        "train/lr": ev.get("lr"),
+                        "train/grad_norm": ev.get("grad_norm"),
+                    },
+                    step=ev.get("step"),
+                )
+            elif evt == "eval":
+                run.log(
+                    {
+                        "eval/causal_bpb": ev.get("causal_bpb"),
+                        "eval/masked_acc": ev.get("masked_acc"),
+                    },
+                    step=ev.get("step"),
+                )
+            elif evt == "monitor":
+                run.log(
+                    {"monitor/l_clean": ev.get("l_clean"), "monitor/gap": ev.get("gap")},
+                    step=ev.get("step"),
+                )
+            elif evt == "result":
+                run.log(
+                    {"result/causal_bpb": ev.get("causal_bpb"), "result/params": ev.get("params")}
+                )
+
+        from fblt._runner import tail_jsonl
+
+        t = threading.Thread(target=tail_jsonl, args=(metrics_path, on_event, stop), daemon=True)
+        t.start()
+        try:
+            rc = run_binary(binary, argv)
+        finally:
+            stop.set()
+            t.join(timeout=5)
+            run.finish()
         sys.exit(rc)
 
     rc = run_binary(binary, argv)
