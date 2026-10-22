@@ -82,6 +82,7 @@ int run_bf16_cast_tests(void);
 int run_deterministic_regression_test(void);
 int run_topk_from_logits_tests(void);
 int run_train_window_order_tests(void);
+int run_lr_schedule_tests(void);
 int run_decode_select_tests(void);
 int run_patch_capacity_consistency_tests(void);
 #endif // BLT_TEST_SUITE_H

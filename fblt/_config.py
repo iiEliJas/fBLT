@@ -57,6 +57,9 @@ class TrainConfig:
 
     steps: int = 2000
     lr: float = 0.0001
+    warmup_steps: int = 0
+    lr_schedule: str = "step"
+    min_lr: float = -1.0
     optimizer: str = "adamw"
     beta1: float = 0.9
     beta2: float = 0.999
