@@ -294,8 +294,13 @@ That makes comparing runs, plotting curves, and resuming analysis harder than it
 
    ```python
    import wandb
-   run = wandb.init(project=args.wandb_project, name=args.wandb_run_name,
-                    entity=args.wandb_entity, config=resolved_config)
+
+   run = wandb.init(
+       project=args.wandb_project,
+       name=args.wandb_run_name,
+       entity=args.wandb_entity,
+       config=resolved_config,
+   )
    stop = threading.Event()
    t = threading.Thread(target=tail_jsonl, args=(metrics_path, run.log, stop))
    t.start()
@@ -860,8 +865,16 @@ not exist. A one-command nsys wrapper makes performance work repeatable.
        nsys = shutil.which("nsys")
        if nsys is None:
            raise SystemExit("nsys not found; install Nsight Systems or run the binary directly")
-       cmd = [nsys, "profile", "--trace=cuda,nvtx,osrt", "--sample=none",
-              "--cpuctxsw=none", "-o", os.path.join(run_dir, "profile"), binary] + argv
+       cmd = [
+           nsys,
+           "profile",
+           "--trace=cuda,nvtx,osrt",
+           "--sample=none",
+           "--cpuctxsw=none",
+           "-o",
+           os.path.join(run_dir, "profile"),
+           binary,
+       ] + argv
        return subprocess.call(cmd)
    ```
 
