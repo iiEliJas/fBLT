@@ -1,0 +1,33 @@
+{
+  "tag": "patch_strided4",
+  "phase": "5.5_patch",
+  "model": {
+    "encoder": {
+      "num_layers": 2,
+      "ngram": {
+        "enabled": true,
+        "sizes": [
+          3,
+          4,
+          5
+        ],
+        "vocab_size": 50000
+      }
+    },
+    "decoder": {
+      "num_layers": 2
+    }
+  },
+  "cross_attention": {
+    "placement": "all",
+    "pooling_init": true
+  },
+  "patcher": {
+    "rule": "fixed:4",
+    "threshold_global": 5.01,
+    "max_patch_length": 32
+  },
+  "train": {
+    "ent_warmup_steps": 800
+  }
+}

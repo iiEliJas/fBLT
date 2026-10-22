@@ -1,0 +1,36 @@
+{
+  "tag": "ngram_all_v50k",
+  "phase": "5.1_ngram",
+  "model": {
+    "encoder": {
+      "num_layers": 2,
+      "ngram": {
+        "enabled": true,
+        "sizes": [
+          3,
+          4,
+          5,
+          6,
+          7,
+          8
+        ],
+        "vocab_size": 50000
+      }
+    },
+    "decoder": {
+      "num_layers": 2
+    }
+  },
+  "cross_attention": {
+    "placement": "all",
+    "pooling_init": true
+  },
+  "patcher": {
+    "rule": "global",
+    "threshold_global": 5.01,
+    "max_patch_length": 32
+  },
+  "train": {
+    "ent_warmup_steps": 800
+  }
+}

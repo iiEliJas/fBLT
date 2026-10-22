@@ -1,0 +1,33 @@
+{
+  "tag": "depth_enc9_dec1",
+  "phase": "5.3_depth",
+  "model": {
+    "encoder": {
+      "num_layers": 9,
+      "ngram": {
+        "enabled": true,
+        "sizes": [
+          3,
+          4,
+          5
+        ],
+        "vocab_size": 50000
+      }
+    },
+    "decoder": {
+      "num_layers": 1
+    }
+  },
+  "cross_attention": {
+    "placement": "all",
+    "pooling_init": true
+  },
+  "patcher": {
+    "rule": "global",
+    "threshold_global": 5.01,
+    "max_patch_length": 32
+  },
+  "train": {
+    "ent_warmup_steps": 800
+  }
+}
