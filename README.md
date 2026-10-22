@@ -374,6 +374,10 @@ fBLT is small and I have more ideas than time to test them. If you change
 something and see what happens, tell me about it. It does not matter if it
 worked or not.
 
+The public roadmap is in [todo.md](todo.md). It lists scoped work items with
+implementation notes and acceptance criteria. If you want to pick one up, open
+an issue or comment on an existing one first so we do not duplicate work.
+
 Try a different hyperparameter, run it on another corpus, push it to a
 bigger scale, or look into the CUDA non-determinism from Known issues. You
 do not need a plan. Just curiosity and a GPU, or a patient CPU.
@@ -417,8 +421,9 @@ the same checkpoint accepts 65.0% at B=4. `infer_bench` now refuses to run witho
 | macOS | ✅ | ❌ (no NVIDIA) |
 
 ## TODO
-- Inference improvements
-- Multi-GPU / larger-scale training runs
+
+The public roadmap is in [todo.md](todo.md). It covers training scale, data,
+evaluation, inference, post-training, and tooling.
 
 ## Docs
 
