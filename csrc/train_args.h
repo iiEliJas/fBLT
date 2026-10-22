@@ -82,6 +82,7 @@ typedef struct {
     size_t cuda_scratch_mb;
     size_t scratch_mb;
     size_t model_mb;
+    float peak_tflops;
 } args_t;
 
 // Parse command-line arguments into args_t with default values.
