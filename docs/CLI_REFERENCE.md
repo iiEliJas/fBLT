@@ -790,11 +790,23 @@ eval_isolate_redirect --checkpoint runs/tinystories_p7/tinystories_p7.fblt --cor
 
 ## Sweep Scripts
 
-| Script | Description |
-|--------|-------------|
-| `tools/run_at_scale_sweep.sh [--backend cpu\|cuda]` | 9-arm at-scale sweep (27 runs, ~12h on CUDA) |
-| `tools/run_ablation_sweep.sh [--backend cpu\|cuda]` | Ablation sweep |
-| `tools/run_sweep.sh [--backend cpu\|cuda]` | General sweep runner |
+Sweep scripts are not shipped in the repository; ablation sweeps run via the `train_sweep`
+CMake target (`cmake --build build --target train_sweep`). See `docs/ABLATIONS.md`.
+
+## Built tools
+
+The following tools are built by CMake (`cmake --build build --target <name>`):
+
+| Tool | Description |
+|------|-------------|
+| `selfspec_audit` | Self-speculation audit |
+| `greedy_tf_acc` | Greedy TF accuracy |
+| `ownlatent_value` | Own-latent value analysis |
+| `leak_probe` | Mask-leak probe |
+| `prefix_invariance` | Prefix invariance check |
+| `eval_isolate_redirect` | Eval isolate redirect |
+| `bench-harness` | Benchmark harness self-test |
+| `e2e-dv` | End-to-end DV driver |
 
 ---
 
@@ -833,5 +845,5 @@ build-cuda/infer_bench --plain runs/plain_40k.fblt --bltd runs/bltd_l03_40k.fblt
 
 ### At-scale sweep (27 runs)
 ```bash
-tools/run_at_scale_sweep.sh --backend cuda
+cmake --build build-cuda --target train_sweep
 ```
