@@ -177,6 +177,7 @@ order and the diffusion timestep sequence.
 | `--beta2 F` | 0.999 | AdamW second moment decay |
 | `--eps F` | 1e-8 | AdamW numerical stability |
 | `--weight-decay F` | 0.01 | AdamW decoupled L2 weight decay |
+| `--weight-decay-norms` | off | Also apply weight decay to RMSNorm weights (legacy; default is selective) |
 
 SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the standard PyTorch-compatible algorithm (bias-corrected m/v).
 
@@ -185,6 +186,20 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--diffusion 0\|1` | 1 | 0 = plain causal BLT, 1 = BLT-D (masked diffusion) |
+
+### Learning rate schedule
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--warmup-steps N` | 0 | Linear warmup steps |
+| `--lr-schedule step\|cosine` | step | Schedule after warmup |
+| `--min-lr F` | lr*0.1 | Cosine floor (negative means lr*0.1) |
+
+### Telemetry
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--peak-tflops F` | 0 | Peak TFLOP/s for MFU reporting (0 disables) |
 
 ### Checkpointing
 
@@ -202,6 +217,10 @@ SGD uses vanilla gradient descent with global-norm clip at 5.0. AdamW uses the s
 | `--eval-every N` | Run causal BPB eval every N steps (default 0, disabled) |
 | `--monitor-every N` | Leak-monitor interval in steps (default 2000, 0 = disabled) |
 | `--monitor-windows N` | Held-out windows per monitor check (default 24) |
+| `--save-best PATH` | Write weights when the eval metric improves (requires `--eval-corpus` and `--eval-every > 0`) |
+| `--best-metric bpb\|masked_acc` | bpb | Metric to optimize for `--save-best` |
+| `--save-best-optim PATH` | Write AdamW state alongside the best weights |
+| `--metrics-log FILE` | (none) | Write a machine-readable JSONL event stream (train/eval/monitor/result) |
 
 ### Resuming
 
@@ -370,6 +389,7 @@ Exactly one required.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--new-bytes N` | 64 | Number of bytes to generate |
+| `--num-samples N` | 1 | Draw N independent samples (greedy method only) |
 | `--method MODE` | greedy | `greedy`, `selfspec`, `blockdiff`, `blockdv` |
 | `--seed N` | 11 | RNG seed for the sampling stream and for a random-init entropy LM |
 
@@ -381,6 +401,7 @@ Only valid with `--method greedy`. Omit all of them for plain argmax decoding.
 |------|---------|-------------|
 | `--temperature F` | 0 | Sampling temperature; 0 means no rescaling |
 | `--top-p F` | 0 | Nucleus mass in `(0,1]`; 0 disables nucleus truncation |
+| `--top-k N` | 0 | Keep only the top-N logits; 0 disables |
 | `--repeat-penalty F` | 1.0 | Divides the logits of already-emitted bytes; 1.0 disables |
 | `--no-repeat-ngram N` | 0 | Bans bytes that would repeat an N-gram already in the sequence; 0 disables |
 | `--max-seq-len N` | derived | Override the decoder sequence bound (default: prompt + `--new-bytes` + 256, min 512) |
@@ -391,8 +412,9 @@ They apply in this order, which matters when several are combined:
 2. `--repeat-penalty` on already-emitted bytes
 3. divide by `--temperature`
 4. softmax
-5. keep the smallest prefix whose mass reaches `--top-p`
-6. draw
+5. keep the top-`--top-k` logits (if `--top-k > 0`)
+6. keep the smallest prefix whose mass reaches `--top-p`
+7. draw
 
 Bans come before the penalty so a banned byte stays banned regardless of how the
 softmax shifts. If the history is short enough that the ban would cover the whole
