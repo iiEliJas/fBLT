@@ -2108,25 +2108,25 @@ checklist is in one place.
 
 ## Before 1.0
 
-- [ ] 1. Best-checkpoint saving
-- [ ] 2. Metrics JSONL + optional W&B
-- [ ] 3. LR warmup + cosine/min-lr
-- [ ] 4. Training telemetry (params, throughput, MFU)
-- [ ] 5. `--num-samples` and `--top-k`
-- [ ] 6. Profiling target + docs
+- [x] 1. Best-checkpoint saving
+- [x] 2. Metrics JSONL + optional W&B
+- [x] 3. LR warmup + cosine/min-lr
+- [x] 4. Training telemetry (params, throughput, MFU)
+- [x] 5. `--num-samples` and `--top-k`
+- [x] 6. Profiling target + docs
 
 ## 1.x
 
 - [ ] 7. Gradient accumulation / batch > 1
 - [ ] 8. BF16 mixed-precision training
-- [ ] 9. Selective weight decay
-- [ ] 10. Checkpoint metadata v2
+- [x] 9. Selective weight decay
+- [x] 10. Checkpoint metadata v2
 - [ ] 11. Multi-GPU data parallel
-- [ ] 12. macOS support
+- [x] 12. macOS support
 
 ## Optional
 
-- [ ] 13. Finetune recipe
-- [ ] 14. Packaging extras
+- [x] 13. Finetune recipe
+- [x] 14. Packaging extras
 - [ ] 15. Demo checkpoint
 - [ ] 16. Standard eval harness
