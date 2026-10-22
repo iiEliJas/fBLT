@@ -123,6 +123,7 @@ class TrainConfig:
     cuda_scratch_mb: int = 0
     scratch_mb: int = 0
     model_mb: int = 0
+    peak_tflops: float = 0.0
 
     grad_norm_log: typing.Optional[str] = None
     update_norm_log: typing.Optional[str] = None
