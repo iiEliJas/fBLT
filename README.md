@@ -330,7 +330,10 @@ python3 fblt/scripts/bench_plots.py --results bench/results_tinystories_10m.json
 numbers describe nothing. `--block-size` must match training. Both tools abort rather than measure a
 mismatch.
 
-Three inference modes, benchmarked on the 7.8M-param TinyStories BLT-D checkpoint (600k steps,
+The 7.8M-param TinyStories BLT-D checkpoint (600k steps) and trained entropy LM are available as
+release assets: https://github.com/iiEliJas/fBLT/releases/tag/v1.0.0
+
+Three inference modes, benchmarked on that checkpoint (600k steps,
 trained at `B=4` with entropy patching):
 
 - **BLT-S**: draft k bytes with decoder-only passes, verify with one full forward. Byte-identical output, fewer encoder passes.
