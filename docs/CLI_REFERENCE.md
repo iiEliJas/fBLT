@@ -313,7 +313,7 @@ sum over masked cells are already paper-exact, so this only changes `L_clean`.
 gradient but deviates from Eq. 6. `--paper-loss` takes precedence over it.
 
 Both change the loss scale substantially; re-derive `--lr` and `--max-norm` after
-enabling either. Measurements and rationale: `docs/experiments/loss_normalization.md`.
+enabling either. Measurements and rationale: `docs/experiments/E002_loss_normalization.md`.
 
 ### Patching
 
@@ -691,7 +691,7 @@ build/pos_accuracy --checkpoint runs/my_model.fblt \
 
 ### `patch_trunc_split` — Patch truncation split diagnostic
 
-Splits interior-row top-1 accuracy by how the containing patch closed: naturally (entropy trigger) vs forced (max_patch_length or buffer boundary). Used to test Hypothesis B from `docs/experiments/last_row_gap.md` — whether arbitrarily-truncated patches have a representational weakness that more training alone won't fix.
+Splits interior-row top-1 accuracy by how the containing patch closed: naturally (entropy trigger) vs forced (max_patch_length or buffer boundary). Used to test Hypothesis B from `docs/experiments/E001_last_row_gap.md` — whether arbitrarily-truncated patches have a representational weakness that more training alone won't fix.
 
 ```
 build/patch_trunc_split --checkpoint MODEL --corpus FILE [options]

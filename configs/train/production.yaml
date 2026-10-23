@@ -5,7 +5,7 @@
 # Paper-exact loss (Fast-BLT Eq. 5 + 6 + 7). paper-loss makes L_clean a sum
 # rather than a mean, scaling the gradient by ~clean_rows, so lr, max-norm and
 # mask-scale move with it rather than being changed alone. Values follow the
-# 30k-step probe recipe; see docs/experiments/paper_loss_probe.md.
+# 30k-step probe recipe; see docs/experiments/E003_paper_loss_probe.md.
 corpus: data/corpus.bin
 embed: 192
 hidden: 384

@@ -54,6 +54,14 @@ Performance PRs should include:
 - The benchmark command and raw output
 - At least 3 runs with median throughput
 
+## Research and experimental findings
+
+If your contribution includes an experiment or benchmark result, follow
+[docs/RESEARCH_GUIDE.md](docs/RESEARCH_GUIDE.md) and add or update an entry in
+[docs/EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md) when appropriate. Include commands,
+configuration paths, hardware, seeds, and references to raw results. Negative and
+inconclusive results are welcome.
+
 ## What to include in a PR
 
 - Focused change (one concern per PR)

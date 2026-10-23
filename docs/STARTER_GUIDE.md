@@ -535,12 +535,27 @@ The C suite has 80 tests. Suite selection is hardcoded in `tests/test_main.c` as
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md). Open an issue before starting scoped work; create a feature branch; do not commit directly to `main`. Include tests and docs for user-facing changes.
 
-## 17. Documentation map
+## 17. Research and experiments
+
+Significant experiments are indexed in [EXPERIMENT_LOG.md](EXPERIMENT_LOG.md). The process for
+formulating, running, and reporting experiments is described in
+[RESEARCH_GUIDE.md](RESEARCH_GUIDE.md). New reports should start from
+[experiments/TEMPLATE.md](experiments/TEMPLATE.md).
+
+To reproduce a documented result, use the report's commands, configuration paths, checkpoint
+names, and environment notes. Keep training and evaluation data disjoint, and record the Git
+commit, seeds, hardware, and measurement conditions. Negative and inconclusive results are
+worth reporting.
+
+## 18. Documentation map
 
 - [README.md](../README.md) - project landing page.
 - [CLI_REFERENCE.md](CLI_REFERENCE.md) - all flags.
 - [BENCHMARKS.md](BENCHMARKS.md) - performance results.
 - [ABLATIONS.md](ABLATIONS.md) - ablation results.
+- [RESEARCH_GUIDE.md](RESEARCH_GUIDE.md) - research workflow.
+- [EXPERIMENT_LOG.md](EXPERIMENT_LOG.md) - experiment index.
+- [experiments/](experiments/) - investigation notes and report template.
 - [PROFILING.md](PROFILING.md) - profiling recipes.
 - [todo.md](../todo.md) - roadmap.
-- [experiments/](experiments/) - investigation notes.
+- [fast_bltPAPER.md](fast_bltPAPER.md), [bltransformerPAPER.md](bltransformerPAPER.md) - papers and notes.

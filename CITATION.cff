@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "fBLT: Fast Byte Latent Transformer"
+type: software
+authors:
+  - name: "iiEliJas"
+repository-code: "https://github.com/iiEliJas/fBLT"
+url: "https://github.com/iiEliJas/fBLT"
+version: "1.0.0"
+date-released: "2026-10-22"
+license: Apache-2.0
