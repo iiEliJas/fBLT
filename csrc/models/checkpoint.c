@@ -350,7 +350,7 @@ int blt_model_read_meta(const char *path, char *meta_out, size_t meta_cap) {
         fclose(f);
         BLT_FATAL("checkpoint read_meta: truncated meta in '%s'", path);
     }
-    buf[meta_len] = '\\0';
+    buf[meta_len] = '\0';
     if (meta_out && meta_cap > 0) {
         if (meta_len + 1 > meta_cap) {
             free(buf);
