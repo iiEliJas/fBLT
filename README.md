@@ -24,6 +24,8 @@ a new friend to play with. She was happy to have her friends and they went back 
 playing together.
 ```
 
+![Held-out causal BPB vs training steps](graphs/quality_vs_steps.png)
+
 ## Quickstart
 
 The fastest path from a fresh checkout to generated text on CPU:
