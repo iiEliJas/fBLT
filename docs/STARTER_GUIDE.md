@@ -552,8 +552,6 @@ worth reporting.
 - [README.md](../README.md) - project landing page.
 - [CLI_REFERENCE.md](CLI_REFERENCE.md) - all flags.
 - [BENCHMARKS.md](BENCHMARKS.md) - performance results.
-- [RESULTS.md](RESULTS.md) - measured results and graphs.
-- [COMPARISON_WITH_BLT.md](COMPARISON_WITH_BLT.md) - comparison with facebookresearch/blt.
 - [ABLATIONS.md](ABLATIONS.md) - ablation results.
 - [RESEARCH_GUIDE.md](RESEARCH_GUIDE.md) - research workflow.
 - [EXPERIMENT_LOG.md](EXPERIMENT_LOG.md) - experiment index.

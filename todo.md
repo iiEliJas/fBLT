@@ -49,6 +49,11 @@ full workflow, see [docs/RESEARCH_GUIDE.md](docs/RESEARCH_GUIDE.md).
 | 18 | Experiment log and negative results | Docs | Done |
 | 19 | Test coverage for new subsystems | Testing | Open |
 | 20 | Architecture experiments | Research | Exploratory |
+| 21 | Hugging Face checkpoint and model integration | Integration | Open |
+| 22 | FineWeb/DCLM corpus pipeline | Data | Open |
+| 23 | Tokenizer/BPE hybrid patching modes | Data | Open |
+| 24 | Official-scale configuration and scaling matrix | Training | Open |
+| 25 | Tensor parallelism and multi-node training | Training | Open |
 
 ---
 
@@ -1774,6 +1779,172 @@ These appeared in the nanochat experiment log but are not good first candidates 
 - Small-scale results may not transfer to larger models.
 - Architecture changes can interact with patching and diffusion in non-obvious ways.
 - Multiple simultaneous changes make attribution impossible. Test one axis at a time.
+---
+
+## 21. Hugging Face checkpoint and model integration
+
+**Status:** Open
+**Area:** Integration
+
+### Why
+
+The official BLT repository distributes 1B and 7B checkpoints through Hugging Face and provides
+loading helpers for `LMTransformer` and `ByteLatentTransformer`. fBLT currently uses its own
+`.fblt`/`.fbop` formats and metadata.
+
+### Current state
+
+- Checkpoint v2 stores architecture config, training step, and best metric.
+- `fblt-infer` auto-detects dimensions from metadata or `resolved_config.yaml`.
+- There is no Hugging Face loader, model card, or `transformers` integration.
+
+### Implementation
+
+1. Define a stable export/import mapping between fBLT tensors and a Hugging Face-compatible
+   layout.
+2. Add `fblt export-hf` and `fblt import-hf` commands or Python helpers.
+3. Document required metadata: architecture, patching, entropy LM, block size, and training
+   config.
+4. Add tests that round-trip a tiny checkpoint through the new format.
+
+### Acceptance
+
+- A tiny fBLT checkpoint can be exported and reloaded with identical outputs.
+- The exported metadata is sufficient to reconstruct inference settings.
+- The workflow is documented in `docs/CHECKPOINTS.md` or `docs/STARTER_GUIDE.md`.
+
+### Risks
+
+- Hugging Face APIs and model formats change over time.
+- Exporting large artifacts should not require committing them to the repository.
+
+---
+
+## 22. FineWeb/DCLM corpus pipeline
+
+**Status:** Open
+**Area:** Data
+
+### Why
+
+The official BLT stack trains on FineWeb and DCLM-style corpora. fBLT currently supports flat
+byte corpora and the TinyStories/source-code sample pipeline.
+
+### Current state
+
+- `fblt/scripts/prep_stack_smol.py` and `prep_tinystories.py` prepare specific corpora.
+- `data/manifest.json` records per-file offsets and lengths.
+- There is no FineWeb/DCLM downloader, shuffler, or document-aware preprocessor.
+
+### Implementation
+
+1. Add a documented pipeline for downloading and preparing FineWeb/DCLM bytes.
+2. Reuse the manifest and boundary-aware window logic from item 7.
+3. Record dataset version, license, preprocessing, and split in the manifest.
+4. Add a small smoke corpus for tests.
+
+### Acceptance
+
+- A documented command prepares a held-out byte corpus from a named source.
+- The manifest records provenance and checksums.
+- Training and evaluation can use the resulting corpus without manual edits.
+
+---
+
+## 23. Tokenizer/BPE hybrid patching modes
+
+**Status:** Open
+**Area:** Data
+
+### Why
+
+The official BLT patcher supports multiple patching modes, including entropy, BPE, BPE
+patcher, space, static, and byte modes. fBLT currently supports byte, fixed-stride, and
+entropy patching.
+
+### Current state
+
+- `fblt/scripts/build_sample_corpus.py` builds a byte corpus.
+- Training supports `--entropy-patches`.
+- Inference selects fixed-stride-4 or entropy patching from `resolved_config.yaml`.
+
+### Implementation
+
+1. Survey which hybrid modes are meaningful for fBLT's byte-level objective.
+2. Implement one well-documented mode at a time, starting with space or static patching.
+3. Keep patcher and inference segmentation consistent.
+4. Add unit tests for patch boundaries and attention masks.
+
+### Acceptance
+
+- At least one additional patching mode trains and infers correctly.
+- The mode is selectable through config and documented.
+- Boundary behavior is tested.
+
+---
+
+## 24. Official-scale configuration and scaling matrix
+
+**Status:** Open
+**Area:** Training
+
+### Why
+
+The official BLT stack includes configurations and scaling experiments across model sizes and
+training budgets. fBLT has a scaling dial proposal but no matrix of larger configurations.
+
+### Current state
+
+- `fblt/scripts/gen_configs.py` generates ablation configs.
+- `train_sweep.c` runs config-driven sweeps.
+- Item 6 proposes a compute-optimal scaling dial.
+
+### Implementation
+
+1. Add documented configs for several larger model sizes.
+2. Record parameter counts, token budgets, and hardware assumptions.
+3. Reuse the scaling dial rather than hand-writing each config.
+4. Add a small CPU smoke config for CI.
+
+### Acceptance
+
+- Generated configs are runnable without manual edits.
+- Parameter counts and budgets are recorded in manifests.
+- The matrix is linked from `docs/BENCHMARKS.md` or `docs/ABLATIONS.md`.
+
+---
+
+## 25. Tensor parallelism and multi-node training
+
+**Status:** Open
+**Area:** Training
+
+### Why
+
+The official BLT stack uses distributed training with FSDP and tensor parallelism. fBLT's
+multi-GPU item currently covers data parallelism only.
+
+### Current state
+
+- `MULTI_GPU.md` documents a data-parallel design.
+- Item 3 covers NCCL data parallelism.
+- There is no tensor-parallel or multi-node implementation.
+
+### Implementation
+
+1. Complete basic data parallelism first.
+2. Profile communication bottlenecks at larger model sizes.
+3. Add tensor parallelism only if profiling shows it is necessary.
+4. Document launcher and shared-filesystem requirements.
+
+### Acceptance
+
+- A single-node multi-GPU run is validated before multi-node work.
+- Tensor parallelism is justified by measurements.
+- Launch instructions are tested on at least one cluster.
+
+---
+
 
 ---
 
