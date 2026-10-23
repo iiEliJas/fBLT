@@ -7,8 +7,8 @@ Fast Byte Latent Transformer: a byte-level language model implemented in C and C
 
 The project implements ideas from two Meta FAIR papers:
 
-- [Byte Latent Transformer](https://arxiv.org/abs/2412.09871) — byte modeling with entropy-based dynamic patching.
-- [Fast Byte Latent Transformer](https://arxiv.org/abs/2605.08044) — faster inference with diffusion decoding and self-speculation.
+- [Byte Latent Transformer](https://arxiv.org/abs/2412.09871) - byte modeling with entropy-based dynamic patching.
+- [Fast Byte Latent Transformer](https://arxiv.org/abs/2605.08044) - faster inference with diffusion decoding and self-speculation.
 
 ## Status
 
@@ -93,13 +93,16 @@ CUDA builds default to architecture `89`; use `-DCMAKE_CUDA_ARCHITECTURES=...` f
 
 ## Documentation
 
-- [Starter Guide](docs/STARTER_GUIDE.md) — installation, first run, training, inference, checkpoints, evaluation, and troubleshooting.
-- [CLI Reference](docs/CLI_REFERENCE.md) — every training, inference, benchmark, and diagnostic flag.
-- [Benchmarks](docs/BENCHMARKS.md) — inference and CUDA performance results.
-- [Ablations](docs/ABLATIONS.md) — architecture and schedule ablation results.
-- [Profiling](docs/PROFILING.md) — CPU and CUDA profiling recipes.
-- [todo.md](todo.md) — public roadmap.
-- [CONTRIBUTING.md](CONTRIBUTING.md) — branch policy, style, and PR guidelines.
+- [Starter Guide](docs/STARTER_GUIDE.md) - installation, first run, training, inference, checkpoints, evaluation, and troubleshooting.
+- [CLI Reference](docs/CLI_REFERENCE.md) - every training, inference, benchmark, and diagnostic flag.
+- [Benchmarks](docs/BENCHMARKS.md) - inference and CUDA performance results.
+- [Ablations](docs/ABLATIONS.md) - architecture and schedule ablation results.
+- [Research Guide](docs/RESEARCH_GUIDE.md) - how to formulate, run, and report experiments.
+- [Experiment Log](docs/EXPERIMENT_LOG.md) - index of significant research activity.
+- [Experiments](docs/experiments/) - investigation notes and report template.
+- [Profiling](docs/PROFILING.md) - CPU and CUDA profiling recipes.
+- [todo.md](todo.md) - public roadmap.
+- [CONTRIBUTING.md](CONTRIBUTING.md) - branch policy, style, and PR guidelines.
 
 ## Research results
 

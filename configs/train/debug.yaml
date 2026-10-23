@@ -4,7 +4,7 @@
 # rather than a mean, which scales the gradient by ~clean_rows, so lr,
 # max-norm and mask-scale move with it rather than being changed alone.
 # Values match the 30k-step probe recipe that was validated;
-# see docs/experiments/paper_loss_probe.md.
+# see docs/experiments/E003_paper_loss_probe.md.
 corpus: data/train.bin
 embed: 32
 hidden: 64

@@ -21,8 +21,9 @@ If you want to contribute:
 5. Include the command, hardware, and `resolved_config.yaml` with any benchmark or
    training result.
 
-Negative results are useful. If an idea does not work, add it to
-`docs/EXPERIMENT_LOG.md` once that file exists, or mention it in the issue.
+Negative results are useful. If an idea does not work, record it in
+[docs/EXPERIMENT_LOG.md](docs/EXPERIMENT_LOG.md) or mention it in the issue. For the
+full workflow, see [docs/RESEARCH_GUIDE.md](docs/RESEARCH_GUIDE.md).
 
 ## Status
 
@@ -45,7 +46,7 @@ Negative results are useful. If an idea does not work, add it to
 | 15 | Reproducible speedrun and leaderboard | Tooling | Open |
 | 16 | Peak FLOPS/BW table and MBU | Tooling | Open |
 | 17 | Interactive chat CLI | Inference | Open |
-| 18 | Experiment log and negative results | Docs | Open |
+| 18 | Experiment log and negative results | Docs | Done |
 | 19 | Test coverage for new subsystems | Testing | Open |
 | 20 | Architecture experiments | Research | Exploratory |
 
@@ -1589,7 +1590,7 @@ sampling controls.
 
 ## 18. Experiment log and negative results
 
-- **Status:** Open
+- **Status:** Done
 - **Area:** Docs
 - **Depends on:** nothing
 
