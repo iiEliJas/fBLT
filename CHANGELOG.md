@@ -7,6 +7,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+## [1.0.1] - 2026-10-25
+
+### Added
+- Lightweight research workflow docs, experiment log, and experiment report template
+- Public roadmap (`todo.md`) and nanochat-inspired follow-up ideas
+- Stack-smol code experiment and training config (`configs/train/stack_smol_c.yaml`)
+- Results page and comparison notes with `facebookresearch/blt`
+
+### Changed
+- README and starter guide restructure; documentation map and links
+- Starter guide entropy-LM example now uses a learnable SGD learning rate (`--lr 0.1`)
+
+### Fixed
+- Standalone entropy-LM training used the main model AdamW learning rate (`1e-4`) for plain SGD, so it never learned; now uses `0.1`
+- Checkpoint metadata null termination in `read_meta`
+- Relative Markdown links and diff checks for docs changes
+
 ## [1.0.0] - 2026-10-22
 
 ### Added
