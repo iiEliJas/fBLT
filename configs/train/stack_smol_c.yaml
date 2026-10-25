@@ -1,0 +1,78 @@
+# BLT-D on the-stack-smol C code, ~3M parameters, 100k steps.
+#
+# Research question: how well do BLT models work on source code rather than
+# natural-language text? This run uses the paper-exact loss and a cosine
+# learning-rate schedule. Entropy patching is enabled; train the code entropy
+# LM first (see the prerequisite command below).
+#
+# Prerequisite (train the code entropy LM used for patching):
+#   fblt-train --backend cuda \
+#     --corpus data/the-stack-smol/train.bin --window 1024 --steps 5000 --lr 0.1 \
+#     --train-entropy-lm runs/stack-smol-c/entropy_lm.fblt
+# (Do not pass this config here: the standalone trainer would try to load the
+#  entropy LM that it is about to create.)
+#
+# Main training:
+#   fblt-train --config configs/train/stack_smol_c.yaml --backend cuda
+
+corpus: data/the-stack-smol/train.bin
+eval-corpus: data/the-stack-smol/heldout.bin
+
+# ~2.97M-parameter BLT-D shape (matches configs/train/production.yaml).
+embed: 192
+hidden: 384
+layers: 2
+
+steps: 100000
+
+optimizer: adamw
+lr: 0.0001
+beta1: 0.9
+beta2: 0.999
+eps: 1.0e-8
+weight-decay: 0.01
+max-norm: 20000
+
+# Paper-exact loss (Fast-BLT Eq. 5 + 6 + 7).
+paper-loss: 1
+mask-scale: 1.0
+diffusion: 1
+block-size: 4
+
+# Long context requested for code.
+window: 1024
+
+# Cosine learning-rate schedule.
+lr-schedule: cosine
+warmup-steps: 2000
+min-lr: 0.00001
+lr-decay: 0
+
+# Diffusion stabilization.
+t-min: 0.1
+t-warmup-hi: 0.25
+t-hi-start: 0.8
+cross-attn: all
+
+seed: 7
+report-every: 10
+
+# Memory for a 1024-byte window on an 8 GB card.
+scratch-mb: 2048
+cuda-scratch-mb: 1024
+
+# Entropy patching is enabled. Train the code entropy LM first (see above).
+entropy-patches: true
+entropy-lm: runs/stack-smol-c/entropy_lm.fblt
+
+# Evaluation and telemetry.
+monitor-every: 10000
+monitor-windows: 48
+eval-windows: 200
+eval-every: 10000
+
+# Checkpointing.
+save-weights: runs/stack-smol-c/stack_smol_c_100k.fblt
+save-optim: runs/stack-smol-c/stack_smol_c_100k.fbop
+save-every: 10000
+metrics-log: runs/stack-smol-c/metrics.jsonl

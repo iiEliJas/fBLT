@@ -192,7 +192,7 @@ An entropy LM can be trained separately:
 
 ```bash
 fblt-train --config configs/train/debug.yaml --backend cpu \
-  --train-entropy-lm runs/entropylm/entropy_lm.fblt --steps 1000
+  --train-entropy-lm runs/entropylm/entropy_lm.fblt --steps 1000 --lr 0.1
 ```
 
 ### Resuming
