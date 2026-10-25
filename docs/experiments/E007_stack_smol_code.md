@@ -36,11 +36,13 @@ stably and produces plausible code completions.
 
 ## 4. Reproduction instructions
 
+Train the main model:
+
 Train the code entropy LM first:
 
 ```bash
 fblt-train --backend cuda \
-  --corpus data/the-stack-smol/train.bin --window 1024 --steps 5000 \
+  --corpus data/the-stack-smol/train.bin --window 1024 --steps 5000 --lr 0.1 \
   --train-entropy-lm runs/stack-smol-c/entropy_lm.fblt
 ```
 

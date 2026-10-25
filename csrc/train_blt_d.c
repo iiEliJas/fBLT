@@ -489,7 +489,7 @@ int main(int argc, char **argv) {
                 const float scl = 5.0f / nrm;
                 for (size_t ti = 0; ti < 9; ti++) blt_scale(lm_gs[ti], scl);
             }
-            for (size_t ti = 0; ti < 9; ti++) blt_sgd_step(lm_ts[ti], lm_gs[ti], a.lr);
+            for (size_t ti = 0; ti < 9; ti++) blt_sgd_step(lm_ts[ti], lm_gs[ti], 0.1f);
             if (a.report_every && step % a.report_every == 0)
                 printf("[ENTLM] step %zu/%zu loss %.4f\n", step, a.steps, ((const float *)loss.data)[0]);
         }

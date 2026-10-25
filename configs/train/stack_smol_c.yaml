@@ -7,7 +7,7 @@
 #
 # Prerequisite (train the code entropy LM used for patching):
 #   fblt-train --backend cuda \
-#     --corpus data/the-stack-smol/train.bin --window 1024 --steps 5000 \
+#     --corpus data/the-stack-smol/train.bin --window 1024 --steps 5000 --lr 0.1 \
 #     --train-entropy-lm runs/stack-smol-c/entropy_lm.fblt
 # (Do not pass this config here: the standalone trainer would try to load the
 #  entropy LM that it is about to create.)
@@ -40,7 +40,7 @@ diffusion: 1
 block-size: 4
 
 # Long context requested for code.
-window: 512
+window: 1024
 
 # Cosine learning-rate schedule.
 lr-schedule: cosine
@@ -61,7 +61,7 @@ report-every: 10
 scratch-mb: 2048
 cuda-scratch-mb: 1024
 
-# Code entropy patching.
+# Entropy patching is enabled. Train the code entropy LM first (see above).
 entropy-patches: true
 entropy-lm: runs/stack-smol-c/entropy_lm.fblt
 
