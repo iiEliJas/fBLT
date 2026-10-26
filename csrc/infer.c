@@ -135,7 +135,7 @@ static void usage(void) {
                     "\n"
                     "patcher:\n"
                     "  --fixed-patches             fixed-stride-4 patching (matches training)\n"
-                    "  --patch-threshold-global F  global entropy threshold (default 2.5)\n"
+                    "  --patch-threshold-global F  global entropy threshold (default 3.0)\n"
                     "  --patch-threshold-monotonic F monotonic threshold (default 1.0)\n"
                     "  --max-patch-length N        max patch size (default 16)\n"
                     "  --entropy-lm FILE           trained entropy-LM weights (required unless --fixed-patches)\n"
@@ -278,7 +278,7 @@ int main(int argc, char **argv) {
     a.cross_last = 0;
     a.fixed_patches = 0;
     a.allow_random_entropy_lm = 0;
-    a.patch_threshold_global = 2.5f;
+    a.patch_threshold_global = 3.0f;
     a.patch_threshold_monotonic = 1.0f;
     a.max_patch_length = 16;
     a.use_cuda = -1;

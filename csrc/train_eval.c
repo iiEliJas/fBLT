@@ -154,7 +154,7 @@ size_t entropy_segment(blt_arena *arena, blt_entropy_lm *lm, const uint8_t *byte
     blt_compute_entropy(&probs, &vals, &ecfg);
 
     blt_patcher_config pcfg;
-    blt_make_patcher_cfg(&pcfg, 0, 2.5f, 1.0f, 16);
+    blt_make_patcher_cfg(&pcfg, 0, 3.0f, 1.0f, 16);
 
     if (vals.backend == BLT_BACKEND_CPU) {
         return blt_segment_patches(&vals, bytes, out, max_patches, &pcfg);

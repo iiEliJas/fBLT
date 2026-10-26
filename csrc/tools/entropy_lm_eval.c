@@ -41,7 +41,7 @@ int main(int argc, char **argv) {
     size_t window = 512;
     size_t n_windows = 100;
     size_t skip = 0;
-    float threshold = 2.5f;
+    float threshold = 3.0f;
     size_t max_patch_len = 16;
 
     for (int i = 1; i < argc; i++) {

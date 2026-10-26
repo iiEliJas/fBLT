@@ -179,7 +179,7 @@ class InferConfig:
     cross_attn: str = "all"
 
     fixed_patches: bool = False
-    patch_threshold_global: float = 2.5
+    patch_threshold_global: float = 3.0
     patch_threshold_monotonic: float = 1.0
     max_patch_length: int = 16
     entropy_lm: typing.Optional[str] = None
