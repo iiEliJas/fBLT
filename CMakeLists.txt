@@ -206,6 +206,9 @@ target_link_libraries(leak_probe PRIVATE blt_core m)
 add_executable(prefix_invariance csrc/tools/prefix_invariance.c)
 target_link_libraries(prefix_invariance PRIVATE blt_core m)
 
+add_executable(entropy_lm_eval csrc/tools/entropy_lm_eval.c)
+target_link_libraries(entropy_lm_eval PRIVATE blt_core m)
+
 # -- Benchmarks --------------------------------------------------------------
 add_executable(bench_patcher tests/bench/bench_patcher.c)
 target_include_directories(bench_patcher PRIVATE bench)
