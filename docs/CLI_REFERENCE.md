@@ -485,7 +485,7 @@ patch-closing byte whenever a block is appended at a patch start.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--fixed-patches` | off | Fixed-stride-4 patching (matches training) |
-| `--patch-threshold-global F` | 2.5 | Global entropy threshold |
+| `--patch-threshold-global F` | 3.0 | Global entropy threshold |
 | `--patch-threshold-monotonic F` | 1.0 | Monotonic threshold |
 | `--max-patch-length N` | 16 | Maximum patch size |
 | `--entropy-lm FILE` | (none) | Trained entropy-LM weights; required unless `--fixed-patches` |
@@ -632,6 +632,31 @@ deltas. `aligned` is the headline number.
 `--guard` fails (exit 1) when train-layout accuracy at `t=1.0` reaches 0.99 or
 above (clean-twin leak) or differs from `aligned` by 0.10 or more (mask leak).
 It requires `--layout novel`, and a `--t 1.0` sweep point.
+
+---
+
+### `entropy_lm_eval` — Entropy-LM quality and patch statistics
+
+Build: `cmake --build build --target entropy_lm_eval`
+
+Loads a trained entropy LM, runs it on a byte corpus, and reports its
+next-byte cross-entropy plus the patch counts produced by the entropy patcher.
+Useful for deciding whether an entropy LM is good enough for entropy patching.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--entropy-lm FILE` | *required* | Trained entropy-LM weights (`.fblt`) |
+| `--corpus FILE` | *required* | Byte corpus to evaluate on |
+| `--window N` | 512 | Bytes per evaluation window |
+| `--windows N` | 100 | Number of windows to evaluate |
+| `--skip N` | 0 | Bytes to skip before the first window |
+| `--threshold F` | 3.0 | Global entropy threshold for patching |
+| `--max-patch-len N` | 16 | Maximum patch length |
+
+Output includes average cross-entropy in nats and bits, patch count
+statistics, average bytes per patch, and patch-cap hit rate.
+
+---
 
 ---
 
