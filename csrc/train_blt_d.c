@@ -490,11 +490,15 @@ int main(int argc, char **argv) {
                 for (size_t ti = 0; ti < 9; ti++) blt_scale(lm_gs[ti], scl);
             }
             for (size_t ti = 0; ti < 9; ti++) blt_sgd_step(lm_ts[ti], lm_gs[ti], 0.1f);
-            if (a.report_every && step % a.report_every == 0)
+            if (a.report_every && step % a.report_every == 0) {
                 printf("[ENTLM] step %zu/%zu loss %.4f\n", step, a.steps, ((const float *)loss.data)[0]);
+                fflush(stdout);
+            }
         }
+        train_ensure_parent_dir(a.train_entlm);
         blt_entropy_lm_save(lm0, a.train_entlm);
         printf("[ENTLM] saved %s\n", a.train_entlm);
+        fflush(stdout);
         return 0;
     }
 
