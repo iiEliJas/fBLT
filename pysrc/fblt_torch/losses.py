@@ -7,10 +7,12 @@ def l_clean(logits, targets, clean_sum=False, last_row_scale=1.0, has_window_plu
     if has_window_plus_one:
         clean_rows = logits.shape[0]
         tgt = targets[1 : 1 + clean_rows]
+        logits_used = logits
     else:
-        clean_rows = logits.shape[0]
+        clean_rows = logits.shape[0] - 1
         tgt = targets[1 : 1 + clean_rows]
-    ce = F.cross_entropy(logits, tgt.long(), reduction="mean")
+        logits_used = logits[:clean_rows]
+    ce = F.cross_entropy(logits_used, tgt.long(), reduction="mean")
     loss = ce
     if clean_sum:
         loss = loss * clean_rows
