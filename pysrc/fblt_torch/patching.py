@@ -20,8 +20,7 @@ def decoder_latent_at(patches, pos):
         if start > pos:
             break
         if pos < start + plen:
-            is_final = (pos + 1 == start + plen) and (j + 1 < len(patches))
-            if is_final:
+            if pos + 1 == start + plen:
                 return j
             return 0 if j == 0 else j - 1
     return len(patches) - 1

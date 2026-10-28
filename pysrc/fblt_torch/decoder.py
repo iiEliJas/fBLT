@@ -93,7 +93,7 @@ class LocalDecoder(nn.Module):
             scores = (Q @ Kmat.transpose(-2, -1)) / (self.head_dim**0.5)
             # mask shape (N,M) -> (1,N? need broadcast to (heads,N,M))
             scores = scores + mask.unsqueeze(0).unsqueeze(0) if False else scores
-            scores = scores + mask[None, None, :, :]
+            scores = scores + mask.unsqueeze(0)
             probs = torch.softmax(scores, dim=-1)
             out = (probs @ Vmat).transpose(0, 1).reshape(x.shape[0], -1)
             x = x + self.cross_projs[li](out)
