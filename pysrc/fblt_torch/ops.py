@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 def rmsnorm(x, weight, eps=1e-6):
     # x: (..., D)
-    rms = torch.sqrt(x.pow(2).mean(-1, keepdim=True) + eps)
+    rms = torch.sqrt(x.pow(2).mean(-1, keepdim=True) + 1e-6)
     return x / rms * weight
 
 

@@ -16,8 +16,10 @@ class SelfAttention(nn.Module):
 
     def forward(self, x, window=0):
         S, D = x.shape
-        qkv = self.qkv(x).view(S, 3, self.num_heads, self.head_dim)
-        q, k, v = qkv[:, 0], qkv[:, 1], qkv[:, 2]
+        qkv = self.qkv(x).view(S, 3, self.num_heads * self.head_dim)
+        q = qkv[:, 0].view(S, self.num_heads, self.head_dim)
+        k = qkv[:, 1].view(S, self.num_heads, self.head_dim)
+        v = qkv[:, 2].view(S, self.num_heads, self.head_dim)
         q = apply_rope(q, self.rope_cos[:S], self.rope_sin[:S])
         k = apply_rope(k, self.rope_cos[:S], self.rope_sin[:S])
         # causal mask
@@ -27,7 +29,7 @@ class SelfAttention(nn.Module):
         if window and window > 0:
             mask = mask & ((i - j) < window)
         scores = (q.transpose(0, 1) @ k.transpose(0, 1).transpose(-2, -1)) / (self.head_dim**0.5)
-        scores = scores.masked_fill(~mask[None, None, :, :], float("-inf"))
+        scores = scores.masked_fill(~mask.unsqueeze(0), float("-inf"))
         probs = torch.softmax(scores, dim=-1)
         out = (probs @ v.transpose(0, 1)).transpose(0, 1).reshape(S, D)
         return self.proj(out)

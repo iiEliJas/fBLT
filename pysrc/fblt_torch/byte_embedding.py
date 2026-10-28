@@ -11,4 +11,4 @@ class ByteEmbedding(nn.Module):
 
     def forward(self, byte_ids: torch.Tensor) -> torch.Tensor:
         # byte_ids: (...,) -> (..., embed_dim)
-        return self.weight[byte_ids]
+        return self.weight[byte_ids.long()]

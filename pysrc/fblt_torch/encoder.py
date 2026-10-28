@@ -21,6 +21,8 @@ class LocalEncoder(nn.Module):
     ):
         super().__init__()
         self.embed_dim = embed_dim
+        self.cross_heads = cross_heads
+        self.head_dim = embed_dim // cross_heads
         self.byte_emb = ByteEmbedding(256, embed_dim)
         self.ngram = ngram
         self.layers = nn.ModuleList(
@@ -29,46 +31,66 @@ class LocalEncoder(nn.Module):
                 for _ in range(num_layers)
             ]
         )
-        self.cross_norm = nn.Parameter(torch.ones(embed_dim))
-        self.cross_q = nn.Linear(embed_dim, embed_dim, bias=False)
-        self.cross_k = nn.Linear(embed_dim, embed_dim, bias=False)
-        self.cross_v = nn.Linear(embed_dim, embed_dim, bias=False)
-        self.cross_proj = nn.Linear(embed_dim, embed_dim, bias=False)
+        self.cross_norms = nn.ParameterList(
+            [nn.Parameter(torch.ones(embed_dim)) for _ in range(num_layers)]
+        )
+        self.cross_qs = nn.ModuleList(
+            [nn.Linear(embed_dim, embed_dim, bias=False) for _ in range(num_layers)]
+        )
+        self.cross_ks = nn.ModuleList(
+            [nn.Linear(embed_dim, embed_dim, bias=False) for _ in range(num_layers)]
+        )
+        self.cross_vs = nn.ModuleList(
+            [nn.Linear(embed_dim, embed_dim, bias=False) for _ in range(num_layers)]
+        )
+        self.cross_projs = nn.ModuleList(
+            [nn.Linear(embed_dim, embed_dim, bias=False) for _ in range(num_layers)]
+        )
         self.local_window = local_window
 
     def _pool(self, e, patches):
-        # patches: list of (start,length); return (num_patches, E)
         out = []
         for s, plen in patches:
             out.append(e[s : s + plen].mean(0))
         return torch.stack(out, 0)
 
     def forward(self, byte_ids, patches):
-        e = self.byte_emb(byte_ids) + self.ngram(byte_ids)
-        # byte hidden via causal transformer
-        h = e
-        for layer in self.layers:
-            h = layer(h, window=self.local_window)
-        patch_tokens = self._pool(e, patches)  # base P0 from e_0? C uses P_0 = pool(e_0)
-        # P starts as pool(e_0); cross-attn added below
-        # We'll approximate: update P per layer
+        e = self.byte_emb(byte_ids).clone()
+        K = len(self.ngram.ngram_sizes)
+        for ti, n in enumerate(self.ngram.ngram_sizes):
+            hashes = self.ngram._hash(byte_ids, n)
+            for i, h in hashes:
+                e[i] = e[i] + self.ngram.tables[ti][h]
+        if self.ngram.normalize:
+            e = e / (K + 1)
+        h = e.clone()
+        patch_tokens = self._pool(e, patches)
         P = patch_tokens.clone()
-        for layer in self.layers:
-            pass
-        # cross-attn using final h
-        Pn = rmsnorm(P, self.cross_norm)
-        # block-diagonal: patch i attends bytes in its span
-        # Build Q,K,V
-        Q = self.cross_q(Pn)  # (M,E)
-        K = self.cross_k(h)  # (N,E)
-        V = self.cross_v(h)
-        M = Q.shape[0]
-        out = torch.zeros(M, self.embed_dim, device=Q.device, dtype=Q.dtype)
-        for i, (s, plen) in enumerate(patches):
-            ks = K[s : s + plen]
-            vs = V[s : s + plen]
-            scores = (Q[i] @ ks.T) / (self.embed_dim**0.5)
-            w = torch.softmax(scores, dim=-1)
-            out[i] = w @ vs
-        P = P + self.cross_proj(out)
+        for li, layer in enumerate(self.layers):
+            h = layer(h, window=self.local_window)
+            Pn = rmsnorm(P, self.cross_norms[li])
+            # multi-head cross attention, block-diagonal by patch spans
+            Q = (
+                (Pn @ self.cross_qs[li].weight.T)
+                .view(P.shape[0], self.cross_heads, self.head_dim)
+                .transpose(0, 1)
+            )
+            Kmat = (
+                (h @ self.cross_ks[li].weight.T)
+                .view(h.shape[0], self.cross_heads, self.head_dim)
+                .transpose(0, 1)
+            )
+            Vmat = (
+                (h @ self.cross_vs[li].weight.T)
+                .view(h.shape[0], self.cross_heads, self.head_dim)
+                .transpose(0, 1)
+            )
+            mask = torch.full((P.shape[0], h.shape[0]), float("-inf"))
+            for j, (s, plen) in enumerate(patches):
+                mask[j, s : s + plen] = 0.0
+            scores = (Q @ Kmat.transpose(-2, -1)) / (self.head_dim**0.5)
+            scores = scores + mask.unsqueeze(0)
+            probs = torch.softmax(scores, dim=-1)
+            out = (probs @ Vmat).transpose(0, 1).reshape(P.shape[0], -1)
+            P = P + self.cross_projs[li](out)
         return P, h
