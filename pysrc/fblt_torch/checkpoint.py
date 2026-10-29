@@ -43,7 +43,7 @@ def write_checkpoint(path, version, meta, tensors):
         fh.write(b"FBLT")
         fh.write(struct.pack("<I", version))
         if version == 2:
-            meta_bytes = json.dumps(meta).encode("utf-8")
+            meta_bytes = json.dumps(meta, separators=(",", ":")).encode("utf-8")
             fh.write(struct.pack("<I", len(meta_bytes)))
             fh.write(meta_bytes)
         fh.write(struct.pack("<I", len(tensors)))

@@ -60,7 +60,7 @@ Numerical parity: fp32 eager reference vs C within 1e-4 logits / 1e-5 loss; opti
 
 ## Config and shared-test design
 
-Config: YAML both sides. C parses YAML (add parser or convert). Existing `fblt/_config.py` uses YAML; align keys with C flags and defaults (`model_builder.c`).
+Config: YAML/TOML both sides. C parses documented subset. Existing `fblt/_config.py` uses YAML; align keys with C flags and defaults (`model_builder.c`).
 
 Shared tests: reuse `tests/py/golden.py` writer and `data/*.bin` format. Add goldens for patcher, encoder, global, decoder clean/corrupt, mask, L_clean/L_mask, inference modes. RNG injection for parity.
 
@@ -70,7 +70,7 @@ Weight interop: implement `FBLT` v2 reader/writer. Header magic/version/meta/num
 
 Monorepo under `pysrc/`:
 ```
-pysrc/fblt/...
+pysrc/fblt_torch/...
 ```
 Keep existing `fblt/` CLI wrapper; add native backend selection. Entry points `fblt-train`, `fblt-infer` dispatch C or Python. Logging same JSONL schema as C.
 
@@ -101,60 +101,48 @@ Keep existing `fblt/` CLI wrapper; add native backend selection. Entry points `f
 
 ## Decisions (final)
 
-## Approved style conventions (final)
-
-Approved as proposed:
-- Functional core with thin modules; composition only (BLT and BLTD share a backbone of encoder + global model by composition, as separate classes); frozen nested dataclass configs; PatchLayout built outside forward; explicit inference state objects; plain explicit training loop; paper/C names; type hints and shape comments; `*_ref` colocated with identical signatures and equivalence tests; FlexAttention BlockMask as production default; uv, ruff, pyright (standard mode), pytest; keep existing `fblt/` wrapper untouched until parity milestone passes, then add backend selection last; `pysrc/` layout.
+Approved conventions:
+- Functional core with thin modules; composition only (BLT and BLTD share encoder+global by composition, separate classes); frozen nested dataclass configs; PatchLayout built outside forward; explicit inference state objects; plain explicit training loop; paper/C names; type hints and shape comments; `*_ref` colocated with identical signatures and equivalence tests; FlexAttention BlockMask as production default; uv, ruff, pyright (standard mode), pytest; keep existing `fblt/` wrapper untouched until parity milestone passes, then add backend selection last; `pysrc/` layout.
 
 Approved changes:
-1. Module name `global.py` is a Python keyword: use `models/global_model.py`. Add `models/entropy_lm.py` (Python must run and train the entropy LM and read/write the C `.fblt` format).
-2. Package name is `fblt_torch` (`pysrc/fblt_torch/`), not `fblt`, to avoid colliding with the existing wrapper.
-3. Everything is batched: tensors are `(bsz, ...)`. Never use bare `B`; use `block_size` for the diffusion block and `bsz` for batch. Window length N is fixed per run. Patch dimension is padded to a small set of bucket sizes (compile-friendly, static shapes), with validity masks. Before fixing the bucket scheme, measure the histogram of patch counts M on the corpus and justify the cap against padded-vs-packed alternatives with a benchmark.
-4. `forward` returns logits only (a small dataclass with clean-row and block-row logits). Losses are separate pure functions (`l_clean`, `l_mask`, with the C code's normalization options). A `training_step` function composes model + losses and is what gets compiled.
+1. Module name `global.py` is a keyword: use `models/global_model.py`. Add `models/entropy_lm.py`.
+2. Package name is `fblt_torch` (`pysrc/fblt_torch/`).
+3. Everything batched: tensors `(bsz, ...)`. Never bare `B`; use `block_size` for diffusion block and `bsz` for batch. Window length N fixed per run. Patch dimension padded to bucket sizes with validity masks.
+4. `forward` returns logits only (small dataclass with clean-row and block-row logits). Losses are separate pure functions (`l_clean`, `l_mask`). A `training_step` function composes model + losses and is what gets compiled.
 5. bf16 autocast, fp32 master weights and optimizer state, fused AdamW, no GradScaler. Grad accumulation yes. TF32 off and eager mode in all parity tests.
-6. Unmasking functions take a `still_masked` mask, operate on device without Python control flow, implement the "always unmask at least one position" rule, and support top-p sampling with an injectable Generator for EB sampling. Design the decode loop to minimize host syncs (benchmark fixed-iteration vs early-exit). Track NFEs (decoder, encoder/global), acceptance rate, and the paper's memory-bandwidth formula (Eq. 8) on device as first-class outputs, matching the C code.
-7. Licensing: write original code from the papers and the C code. No verbatim copying, no vendoring, no line-by-line translation of `~/projects/blt/`. Use that repo only to resolve ambiguities and as an optional test oracle for non-diffusion components (tests import it from `~/projects/blt/` if present and skip otherwise). Quote both license statements found in that repo verbatim in the plan and state this repo's license. Provenance notes go in `python_blt.md` and module docstrings.
-8. Parity tests inject the exact masks and t dumped by the C implementation. Do not port the C RNG. Separately test the random sampling path statistically (mask rate approximately t).
-9. Docstrings cite file and function names of the C code or the paper equation/section. File:line references live only in `python_blt.md`.
-10. Enforceable speed rules, as tests: the training step runs with `torch.cuda.set_sync_debug_mode("error")` (no hidden host-device syncs), compiles with `fullgraph=True` (no graph breaks), and has a benchmark with a recorded number before any optimization is merged.
+6. Unmasking functions take a `still_masked` mask, operate on device without Python control flow, implement "always unmask at least one position", support top-p sampling with injectable Generator. Track NFEs, acceptance rate, memory-bandwidth formula (Eq. 8).
+7. Licensing: write original code from papers and C code. No verbatim copying, no vendoring, no line-by-line translation of `~/projects/blt/`. Use that repo only to resolve ambiguities and as optional test oracle. Quote both license statements verbatim in plan and state repo license. Provenance notes in `python_blt.md` and module docstrings.
+8. Parity tests inject exact masks and t dumped by C. Do not port C RNG. Separately test random sampling path statistically.
+9. Docstrings cite file and function names of C code or paper equation/section. File:line references live only in `python_blt.md`.
+10. Enforceable speed rules, as tests: training step runs with `torch.cuda.set_sync_debug_mode("error")`, compiles with `fullgraph=True`, benchmark with recorded number before optimization merged.
 
-## Defaults (final)
-
-- Config: TOML (`tomllib`, Python >= 3.11). C parses a documented minimal subset (tables, ints, floats, strings, bools) with a small hand-written parser; existing C CLI flags keep working and override config values. Config keys match the C flag names. Implement every C loss and schedule option (paper-loss, mask_loss_norm, t_min, t-curriculum, mask warmup/late scale, last_row_scale, d0 mode, cross-attn mode, lr schedules) or list unsupported ones with reasons.
-- Layout: monorepo. `configs/` at top level; `tests/shared/` holds cross-implementation fixtures (raw little-endian tensors + JSON manifest with shapes and dtypes), generated by a small C tool (`tools/dump_fixtures.c`) and tiny enough to commit; larger fixtures regenerated by script. Python-only tests in `pysrc/tests/`. Parity runs in both directions (C golden checked by Python; Python-exported checkpoint and outputs checked by C).
-- Checkpoints: read/write the C fblt format for interchange; use a separate torch checkpoint (weights, optimizer, scheduler, RNG) for resume.
+Defaults:
+- Config: TOML (`tomllib`, Python >= 3.11). C parses documented minimal subset. Config keys match C flag names. Implement every C loss/schedule option or list unsupported with reasons.
+- Layout: monorepo. `configs/` at top level; `tests/shared/` holds cross-implementation fixtures (raw little-endian tensors + JSON manifest). Python-only tests in `pysrc/tests/`. Parity runs both directions.
+- Checkpoints: read/write C fblt format for interchange; separate torch checkpoint (weights, optimizer, scheduler, RNG) for resume.
 - Compile policy: default mode first, `dynamic=False` with bucketed shapes; CUDA graphs and max-autotune only as separately benchmarked options; compile can always be switched off in config.
-- Data: memory-mapped corpus; entropy patch boundaries precomputed once on the GPU in large batches and stored as a memmapped array keyed by a hash of (corpus, entropy LM, window, patcher config). Provide a function reproducing C's `train_window_index` for tests.
-- Logging: JSONL metrics with the same event schema as the C metrics log, plus one stdout line every `report_every` steps. Log raw loss as in C and also per-byte bits (bits/byte). No external logging backend for now.
+- Data: memory-mapped corpus; entropy patch boundaries precomputed once on GPU in large batches and stored as memmapped array keyed by hash of (corpus, entropy LM, window, patcher config). Provide function reproducing C's `train_window_index` for tests.
+- Logging: JSONL metrics with same event schema as C metrics log, plus one stdout line every `report_every` steps. Log raw loss as in C and per-byte bits (bits/byte). No external logging backend for now.
 - Multi-GPU: single GPU first. Keep DDP-ready (no global state, rank-aware logging and seeding), FSDP out of scope.
 - Type checking: comments for shapes, no jaxtyping runtime checks. Shape asserts only in `*_ref` functions and tests.
 
-## Licensing (quoted)
-
-Official repo `~/projects/blt`:
-- `LICENSE`: Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0).
-- `bytelatent/model/blt.py`: `license="other"`, `license_name="fair-noncommercial-research-license"`, `license_link="https://huggingface.co/facebook/blt/blob/main/LICENSE"`.
-
-This repo: Apache-2.0 (see `pyproject.toml`). New Python code is original work (papers + C reference) and licensed Apache-2.0. No verbatim copying, vendoring, or line-by-line translation of `~/projects/blt/`. Use it only to resolve ambiguities and as an optional test oracle (tests skip if absent). Provenance notes in module docstrings and `THIRD_PARTY.md` (licensing part done at end).
-
-## Style proposals (conventions to confirm)
+## Style proposals (conventions)
 
 ### Architecture
-- Functional core, thin modules: patching, layout/mask construction, block corruption, losses, unmasking, verification are pure functions over tensors. nn.Modules only hold parameters and call those functions.
-- Composition, no inheritance deeper than one level. BLT and BLT-D share encoder and global model; decoder/loss differs via explicit config, not subclassing.
-- Frozen dataclass configs, nested per submodule, loaded from shared config and validated once. No raw dicts/argparse namespaces in model code.
-- A PatchLayout built outside forward (data pipeline / GPU preprocessing). Forward has no Python loops over patches/bytes, no .item(), no host-device syncs, no data-dependent Python control flow breaking torch.compile.
-- Randomness (t, masks) drawn on-device with injectable torch.Generator for parity.
-- Inference uses explicit state objects (prefix cache, latents, KV cache). BLT-D, BLT-S, BLT-DV separate classes sharing one verify() function.
-- Training is plain explicit loop with small utilities. No Lightning/HF Trainer.
+- Functional core, thin modules; composition only.
+- Frozen dataclass configs, nested per submodule.
+- PatchLayout built outside forward.
+- On-device RNG with injectable `torch.Generator`.
+- Inference uses explicit state objects.
+- Plain explicit training loop.
 
 ### Naming and documentation
-- Use paper/C names (L_clean, L_mask, t_min, d0_mode, cross_attn, block_size). Checkpoint tensor names mirror C format.
-- Docstrings cite paper equation/section or C function (file:line). No comments restating code.
-- Type hints everywhere; shape comments on every tensor, e.g. `# (B, S, D)`.
+- Paper/C names; checkpoint tensor names mirror C format.
+- Docstrings cite paper equation/section or C function.
+- Type hints everywhere; shape comments.
 
 ### Speed and testing
-- Every optimized op has simple `*_ref` with same signature and equivalence test. Fast path chosen via config.
+- Every optimized op has `*_ref` with identical signature and equivalence test.
 - No optimization merged without benchmark number and parity test.
 - Tooling: uv, ruff, pyright, pytest.
 
@@ -187,6 +175,7 @@ pysrc/
       block_dv.py
       kv_cache.py
       state.py
+      generate.py
     data/
       dataset.py
       collate.py
@@ -197,14 +186,14 @@ pysrc/
 ```
 
 ### Main signatures (prose stubs)
-- `build_patch_layout(bytes, patch_starts, B, t, generator) -> PatchLayout`
-- `figure5_mask(layout, N, R) -> Tensor[S,S]` or BlockMask
-- `l_clean(logits: (S,V), targets: (S,), layout) -> scalar`
-- `l_mask(logits: (S,V), targets: (R,), layout, t) -> scalar`
-- `unmask_confidence(logits_block: (B,V), threshold) -> (B,) bool`
-- `unmask_eb(entropies: (B,), gamma) -> (B,) bool`
-- `verify_candidate(model, prefix_bytes, draft_bytes, ...) -> (accepted_len, corrected_bytes)`
-- Top-level: `BLT.forward(bytes, patch_starts) -> logits`; `BLTD.forward(bytes, patch_starts, layout) -> (logits, loss)`.
+- `build_patch_layout(...) -> PatchLayout`
+- `figure5_mask(...) -> Tensor[S,S]` or BlockMask
+- `l_clean(...) -> scalar`
+- `l_mask(...) -> scalar`
+- `unmask_confidence(...) -> (B,) bool`
+- `unmask_eb(...) -> (B,) bool`
+- `verify_candidate(...) -> (accepted_len, corrected_bytes)`
+- Top-level: `BLT.forward(...)`, `BLTD.forward(...)`.
 
 ### Points needing your decision
 - PatchLayout: dataclass vs NamedTuple (recommend dataclass).
@@ -221,15 +210,62 @@ pysrc/
 - Re-implementing ideas/algorithms is allowed; attribute paper + repo.
 - Practical: treat official repo as reference only; write original code; document provenance; keep NC-only snippets in a separate, clearly marked module if used.
 
-## M1 status (2026-10-28)
+## M11+ plan: complete 1:1 fast BLT in Python
 
-Implemented in `pysrc/fblt_torch/`: byte embedding, hash n-gram (exact rolling hash), encoder, global transformer, decoder (clean), patching helpers.
+### Current status (2026-10-29)
+- M1–M7, M9, M10: validated against C goldens (within tolerance).
+- M8: functional (infer decoder + block draft + generation smoke), not parity-validated.
+- Entry points: not wired to native Python.
+- Export conversion: not implemented (torch `[out,in]` ↔ C `[in,out]`).
+- BLT-S / BLT-DV: not implemented.
+- Performance: CPU benchmark only.
 
-Per-stage max abs error (fp32, eager, TF32 off):
-- encoder byte_hidden_out: 2.24e-8
-- decoder logits: 0.0
-- global transformer: pending final validation (mask shape fix applied)
+### Remaining work
 
-Weight layout mapping: C stores `[in,out]`; torch uses `[out,in]`. Conversion transposes at checkpoint boundary. Encoder/decoder cross-attention and self-attention masks fixed to use `unsqueeze(0)` (not 4D masks).
+#### 1. Entry-point wiring (`fblt/train.py`, `fblt/infer.py`)
+- Add `--backend torch` to both CLIs (currently only `cpu|cuda`).
+- If backend is torch, dispatch to native Python instead of resolving a C binary.
+- Native training entry point: `pysrc/fblt_torch/cli.py` (train/infer subcommands) reading the same YAML config.
+- Keep C path unchanged; default backend remains cpu for compatibility.
 
-Open discrepancy: C's `blt_patch_decoder_latent_at` returns `j-1` for the final byte of the last patch (because `j+1 < num_patches` is false), while the Python reference golden uses `j`. Golden files follow the Python reference; C passes within tolerance. Python implementation follows the Python reference for parity with goldens.
+#### 2. Native training loop (BLT-D)
+- Implement full training step: data loading (memory-mapped corpus), patching (fixed/entropy), encoder+global+decoder, BLT-D loss, backward, AdamW, grad clip, schedules, checkpointing, metrics JSONL.
+- Reuse `fblt_torch` modules and `losses.py`.
+- Support all C options: paper-loss, mask_loss_norm, t_min, t-curriculum, mask warmup/late scale, last_row_scale, d0 mode, cross-attn mode, entropy patches, eval corpus, monitor.
+
+#### 3. Model export conversion (torch ↔ C)
+- Implement `export_c_checkpoint(model, path)` that transposes every linear weight to C layout `[in,out]`.
+- Implement `load_c_checkpoint(path, model)` inverse.
+- Byte-identical round-trip test on a trained model.
+
+#### 4. Inference parity (M8)
+- Port exact infer mask and group rules (already extracted in `patching.py`).
+- Implement verification (`verify_candidate`) shared by BLT-DV and BLT-S.
+- BLT-D: fixed/entropy patching, block drafting, unmasking.
+- BLT-S: self-speculation with two-tier KV cache.
+- BLT-DV: diffusion + verification with adaptive B.
+- Compare greedy output to C on tiny prompts (temp=0).
+
+#### 5. Entropy LM
+- Train and run entropy LM in Python; read/write `.fblt` format.
+- Precompute patch boundaries on GPU and cache.
+
+#### 6. Performance
+- bf16 autocast, fp32 master weights, fused AdamW.
+- `torch.compile` on training step (fullgraph=True in tests).
+- FlexAttention BlockMask production; SDPA fallback.
+- Batched multi-window steps, pinned memory, bucketed shapes.
+- CUDA graphs for static shapes.
+- Benchmark and record numbers.
+
+#### 7. Config completeness
+- Implement every C loss/schedule option or list unsupported with reasons.
+- TOML config parsed by both sides.
+
+#### 8. Testing
+- Unit, equivalence (`*_ref`), cross-implementation parity.
+- `torch.cuda.set_sync_debug_mode("error")` in training step tests.
+- No tolerance loosening.
+
+### Decisions (final, unchanged)
+All prior decisions stand: monorepo `pysrc/`, YAML/TOML config, uv/ruff/pyright, Pythonic names with C aliases, re-implementation with attribution, Apache-2.0, single GPU first, JSONL + wandb, no GitHub pushes until licensing complete.
