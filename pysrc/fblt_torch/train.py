@@ -77,22 +77,27 @@ def run_training(cfg):
     window = _cfg(cfg, "window", 48)
     num_windows = max(1, (len(corpus) - window) // window)
     seed = _cfg(cfg, "seed", 7)
-    model = _init_model(cfg)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = _init_model(cfg).to(device)
     if _cfg(cfg, "load_weights", None):
         load_c_checkpoint(_cfg(cfg, "load_weights"), model)
     # entropy lm
     entropy_lm = None
     if _cfg(cfg, "train_entropy_lm", None):
         entropy_lm = train_entropy_lm(cfg, corpus, _cfg(cfg, "train_entropy_lm"))
+        if entropy_lm is not None:
+            entropy_lm = entropy_lm.to(device)
     elif _cfg(cfg, "entropy_lm", None):
         # best effort load state dict
         entropy_lm = EntropyLM(max_seq_len=max(512, window + 64))
+        entropy_lm = entropy_lm.to(device)
         try:
             entropy_lm.load_state_dict(torch.load(_cfg(cfg, "entropy_lm"), map_location="cpu"))
         except Exception:
             pass
     elif _cfg(cfg, "entropy_patches", False):
         entropy_lm = EntropyLM(max_seq_len=max(512, window + 64))
+        entropy_lm = entropy_lm.to(device)
 
     lr = _cfg(cfg, "lr", 0.0001)
     if _cfg(cfg, "optimizer", "adamw") == "adamw":
@@ -187,6 +192,9 @@ def run_training(cfg):
                 t_draw = thr
         t_draw = max(t_draw, t_min)
         batch = build_block_batch(text, patches, block_size, seed + step, t_in=t_draw)
+        for _k in ("tokens", "positions", "targets", "cell_valid", "cell_masked", "groups"):
+            if _k in batch and torch.is_tensor(batch[_k]):
+                batch[_k] = batch[_k].to(device)
         batch["loss_scale"] = 1.0
         batch["clean_sum"] = bool(_cfg(cfg, "paper_loss", 1))
         batch["mask_norm"] = bool(_cfg(cfg, "mask_loss_norm", 0))
@@ -203,7 +211,7 @@ def run_training(cfg):
         batch["loss_scale"] = mask_scale
         batch["get"] = lambda k, d=None: batch.get(k, d)
 
-        byte_ids = torch.tensor(text, dtype=torch.uint8)
+        byte_ids = torch.tensor(text, dtype=torch.uint8, device=device)
         patch_in, byte_hidden = model.encode(byte_ids, patches)
         global_out = model.global_model(patch_in)
         # diffusion
@@ -219,7 +227,8 @@ def run_training(cfg):
         opt.zero_grad()
         loss.backward()
         # grad clip
-        torch.nn.utils.clip_grad_norm_(model.parameters(), _cfg(cfg, "max_norm", 20000.0))
+        max_norm = _cfg(cfg, "max_norm", 20000.0)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm)
         # set lr
         for pg in opt.param_groups:
             pg["lr"] = lr_at(step)
@@ -232,7 +241,7 @@ def run_training(cfg):
                         "step": step,
                         "loss": float(loss.item()),
                         "lr": float(opt.param_groups[0]["lr"]),
-                        "grad_norm": 0.0,
+                        "grad_norm": float(grad_norm),
                     }
                 )
                 + "\n"

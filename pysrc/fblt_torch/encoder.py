@@ -85,7 +85,7 @@ class LocalEncoder(nn.Module):
                 .view(h.shape[0], self.cross_heads, self.head_dim)
                 .transpose(0, 1)
             )
-            mask = torch.full((P.shape[0], h.shape[0]), float("-inf"))
+            mask = torch.full((P.shape[0], h.shape[0]), float("-inf"), device=h.device)
             for j, (s, plen) in enumerate(patches):
                 mask[j, s : s + plen] = 0.0
             scores = (Q @ Kmat.transpose(-2, -1)) / (self.head_dim**0.5)

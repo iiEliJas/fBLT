@@ -87,7 +87,7 @@ class LocalDecoder(nn.Module):
                 .transpose(0, 1)
             )
             # build mask: byte i attends latent paper_decoder_latent_at(patches,i)
-            mask = torch.full((x.shape[0], M), float("-inf"))
+            mask = torch.full((x.shape[0], M), float("-inf"), device=x.device)
             for i in range(x.shape[0]):
                 gi = paper_decoder_latent_at(patches, i)
                 if trailing_closed and i == x.shape[0] - 1:
@@ -146,7 +146,7 @@ class DiffusionLayer(nn.Module):
         Q = (xn @ self.cross_q.weight.T).view(S, cross_heads, head_dim).transpose(0, 1)
         K = (patch_in @ self.cross_k.weight.T).view(M, cross_heads, head_dim).transpose(0, 1)
         V = (patch_in @ self.cross_v.weight.T).view(M, cross_heads, head_dim).transpose(0, 1)
-        cmask = cross_group_mask(q_groups, kv_groups).unsqueeze(0)
+        cmask = cross_group_mask(q_groups, kv_groups).unsqueeze(0).to(x.device)
         scores = (Q @ K.transpose(-2, -1)) / (head_dim**0.5) + cmask
         probs = torch.softmax(scores, dim=-1)
         out = (probs @ V).transpose(0, 1).reshape(S, -1)
@@ -195,8 +195,8 @@ class DiffusionDecoder(nn.Module):
         self.num_layers = num_layers
         self.cross_heads = cross_heads
         self.head_dim = embed_dim // cross_heads
-        self.rope_cos = rope_cos
-        self.rope_sin = rope_sin
+        self.register_buffer("rope_cos", rope_cos)
+        self.register_buffer("rope_sin", rope_sin)
         self.max_seq_len = max_seq_len
         self.d0_mode = d0_mode
         self.layers = nn.ModuleList(
@@ -266,7 +266,7 @@ class DiffusionDecoder(nn.Module):
         ]
         block_size = batch["block_size"] if isinstance(batch, dict) else batch.block_size
         num_blocks = batch["num_blocks"] if isinstance(batch, dict) else batch.num_blocks
-        self_mask = figure5_mask(N, R, block_size, block_starts, num_blocks)
+        self_mask = figure5_mask(N, R, block_size, block_starts, num_blocks).to(x.device)
         kv_groups = []
         for pi in range(M):
             kv_groups.extend([pi])

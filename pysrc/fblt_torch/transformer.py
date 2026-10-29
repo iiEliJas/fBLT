@@ -11,8 +11,8 @@ class SelfAttention(nn.Module):
         self.head_dim = embed_dim // num_heads
         self.qkv = nn.Linear(embed_dim, 3 * embed_dim, bias=False)
         self.proj = nn.Linear(embed_dim, embed_dim, bias=False)
-        self.rope_cos = rope_cos
-        self.rope_sin = rope_sin
+        self.register_buffer("rope_cos", rope_cos)
+        self.register_buffer("rope_sin", rope_sin)
 
     def forward(self, x, window=0):
         S, D = x.shape
