@@ -22,7 +22,7 @@ def _parse_args() -> typing.Tuple[argparse.Namespace, typing.Dict[str, typing.An
     parser.add_argument("--config", type=str, default=None, help="YAML config path")
     parser.add_argument(
         "--backend",
-        choices=["cpu", "cuda"],
+        choices=["cpu", "cuda", "torch"],
         required=True,
         help="Compute backend",
     )
@@ -193,10 +193,32 @@ def main() -> None:
 
     # CLI overrides — these always win
     cfg.backend = args.backend
+    if cfg.backend == "torch":
+        _venv = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "pysrc",
+            ".venv",
+            "bin",
+            "python",
+        )
+        _same = os.path.abspath(sys.executable) == os.path.abspath(_venv)
+        _reexec = os.environ.get("FBLT_TORCH_REEXEC")
+        if os.path.exists(_venv) and (not _same) and (not _reexec):
+            os.environ["FBLT_TORCH_REEXEC"] = "1"
+            _mod = "train" if "train.py" in __file__ else "infer"
+            os.execv(_venv, [_venv, "-m", "fblt." + _mod] + sys.argv[1:])
     cfg.checkpoint = args.checkpoint
     cfg.prompt = args.prompt
     cfg.prompt_file = args.prompt_file
     cfg.output = args.output
+
+    if cfg.backend == "torch":
+        _p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pysrc")
+        sys.path.insert(0, _p)
+        from fblt_torch.cli import run_infer
+
+        rc = run_infer(cfg)
+        sys.exit(rc)
 
     # Resolve binary and run
     binary = resolve_binary("infer", cfg.backend)

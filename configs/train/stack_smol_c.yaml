@@ -7,7 +7,7 @@
 #
 # Prerequisite (train the code entropy LM used for patching):
 #   fblt-train --backend cuda \
-#     --corpus data/the-stack-smol/train.bin --window 1024 --steps 50000 --lr 0.1 \
+#     --corpus data/the-stack-smol/train.bin --window 512--steps 50000 --lr 0.1 \
 #     --train-entropy-lm runs/stack-smol-c/entropy_lm.fblt
 # (Do not pass this config here: the standalone trainer would try to load the
 #  entropy LM that it is about to create.)
@@ -18,12 +18,12 @@
 corpus: data/the-stack-smol/train.bin
 eval-corpus: data/the-stack-smol/heldout.bin
 
-# ~2.97M-parameter BLT-D shape (matches configs/train/production.yaml).
+# ~5.77M-parameter BLT-D shape (matches configs/train/production.yaml).
 embed: 192
 hidden: 384
-layers: 2
+layers: 4
 
-steps: 100000
+steps: 70000
 
 optimizer: adamw
 lr: 0.0001
@@ -40,7 +40,7 @@ diffusion: 1
 block-size: 4
 
 # Long context requested for code.
-window: 1024
+window: 512
 
 # Cosine learning-rate schedule.
 lr-schedule: cosine
@@ -54,11 +54,11 @@ t-warmup-hi: 0.25
 t-hi-start: 0.8
 cross-attn: all
 
-seed: 7
-report-every: 10
+seed: 3
+report-every: 200
 
-# Memory for a 1024-byte window on an 8 GB card.
-scratch-mb: 2048
+# Memory for a 512-byte window on an 8 GB card.
+scratch-mb: 4096
 cuda-scratch-mb: 1024
 
 # Entropy patching is enabled. Train the code entropy LM first (see above).
@@ -66,13 +66,14 @@ entropy-patches: true
 entropy-lm: runs/stack-smol-c/entropy_lm.fblt
 
 # Evaluation and telemetry.
-monitor-every: 10000
+monitor-every: 5000
 monitor-windows: 48
-eval-windows: 200
-eval-every: 10000
+eval-windows: 100
+eval-every: 5000
 
 # Checkpointing.
-save-weights: runs/stack-smol-c/stack_smol_c_100k.fblt
-save-optim: runs/stack-smol-c/stack_smol_c_100k.fbop
-save-every: 10000
-metrics-log: runs/stack-smol-c/metrics.jsonl
+save-weights: runs/stack-smol-c/stack_smol_c_70k.fblt
+save-optim: runs/stack-smol-c/stack_smol_c_70k.fbop
+load-weights: runs/stack-smol-c/stack_smol_c_30k.fblt
+load-optim: runs/stack-smol-c/stack_smol_c_30k.fbop
+save-every: 5000

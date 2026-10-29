@@ -1,37 +1,44 @@
 import torch
 
-from ..unmask import confidence_unmask
+from ..patching import compute_entropy_vals, segment_patches
 
 
-def generate_blockdiff(encoder, global_model, infer_decoder, prompt_bytes, new_bytes, block_size=4):
+def generate_greedy(model, entropy_lm, patcher_config, prompt_bytes, new_bytes):
     out = list(prompt_bytes)
-    while len(out) < len(prompt_bytes) + new_bytes:
-        N = len(out)
-        patch_starts = list(range(0, N, 4))
-        patches = [(s, min(4, N - s)) for s in patch_starts if s < N]
-        byte_ids = torch.tensor(out, dtype=torch.uint8)
-        P, h = encoder(byte_ids, patches)
-        g = global_model(P)
-        # draft one block
-        still = torch.ones(block_size, dtype=torch.bool)
-        block_tokens = torch.full((block_size,), 256, dtype=torch.long)
-        positions = torch.tensor([N + i for i in range(block_size)], dtype=torch.long)
-        pass
-        for _ in range(block_size):
-            logits = infer_decoder(h, g, block_tokens, positions, patches)
-            block_logits = logits[N:]
-            probs = torch.softmax(block_logits, dim=-1)
-            p_max, preds = probs.max(dim=-1)
-            pass
-            unmask = confidence_unmask(p_max, 0.7, still)
-            for i in range(block_size):
-                if unmask[i] and still[i]:
-                    block_tokens[i] = preds[i].item()
-                    still[i] = False
-            if not still.any():
+    target = len(prompt_bytes) + new_bytes
+    while len(out) < target:
+        patches = segment_patches(compute_entropy_vals(entropy_lm, out), out, 1024, patcher_config)
+        ids = torch.tensor(out, dtype=torch.uint8)
+        P, h = model.encode(ids, patches)
+        g = model.global_model(P)
+        logits = model.decoder(h, g, patches)
+        nxt = int(logits[-1].argmax().item())
+        out.append(nxt)
+    return out[len(prompt_bytes) :]
+
+
+def generate_blockdiff(
+    model, entropy_lm, patcher_config, prompt_bytes, new_bytes, block_size=4, config=None
+):
+    from ..blocks import build_block_batch
+
+    if config is None:
+        config = {}
+    out = list(prompt_bytes)
+    target = len(prompt_bytes) + new_bytes
+    while len(out) < target:
+        patches = segment_patches(compute_entropy_vals(entropy_lm, out), out, 1024, patcher_config)
+        B = min(block_size, target - len(out))
+        ids = torch.tensor(out, dtype=torch.uint8)
+        P, h = model.encode(ids, patches)
+        g = model.global_model(P)
+        batch = build_block_batch(out, patches, B, 1, t_in=0.5)
+        batch["get"] = lambda k, d=None: batch.get(k, d)
+        logits, _ = model.forward_diffusion(h, g, patches, batch, out, None, trailing_closed=True)
+        block_logits = logits[len(out) :]
+        block_tokens = block_logits.argmax(dim=-1).tolist()
+        for tok in block_tokens:
+            if len(out) >= target:
                 break
-        for t in block_tokens.tolist():
-            if len(out) >= len(prompt_bytes) + new_bytes:
-                break
-            out.append(int(t) if int(t) < 256 else 0)
+            out.append(int(tok))
     return out[len(prompt_bytes) :]
