@@ -6,7 +6,7 @@ import typing
 
 import yaml
 
-from fblt._binary import resolve_binary
+from fblt._binary import ensure_wsl_cuda_env, resolve_binary
 from fblt._config import InferConfig, add_config_args, load_config
 from fblt._runner import run_binary
 
@@ -221,6 +221,8 @@ def main() -> None:
         sys.exit(rc)
 
     # Resolve binary and run
+    if cfg.backend == "cuda":
+        ensure_wsl_cuda_env()
     binary = resolve_binary("infer", cfg.backend)
     argv = cfg.to_argv()
     # to_argv omits fields equal to their default, but the binary treats

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .masks import cross_group_mask, figure5_mask
 from .ops import apply_rope, rmsnorm
@@ -146,10 +147,11 @@ class DiffusionLayer(nn.Module):
         Q = (xn @ self.cross_q.weight.T).view(S, cross_heads, head_dim).transpose(0, 1)
         K = (patch_in @ self.cross_k.weight.T).view(M, cross_heads, head_dim).transpose(0, 1)
         V = (patch_in @ self.cross_v.weight.T).view(M, cross_heads, head_dim).transpose(0, 1)
-        cmask = cross_group_mask(q_groups, kv_groups).unsqueeze(0).to(x.device)
-        scores = (Q @ K.transpose(-2, -1)) / (head_dim**0.5) + cmask
-        probs = torch.softmax(scores, dim=-1)
-        out = (probs @ V).transpose(0, 1).reshape(S, -1)
+        cmask = cross_group_mask(q_groups, kv_groups).to(x.device).unsqueeze(0).unsqueeze(0)
+        out = F.scaled_dot_product_attention(
+            Q.unsqueeze(0), K.unsqueeze(0), V.unsqueeze(0), attn_mask=cmask
+        )
+        out = out.squeeze(0).transpose(0, 1).reshape(S, -1)
         x = x + self.cross_proj(out)
         # self
         normed = rmsnorm(x, self.norm1)
@@ -163,9 +165,13 @@ class DiffusionLayer(nn.Module):
         kmat = kmat.permute(1, 0, 2).contiguous().view(S, cross_heads, head_dim)
         kmat = apply_rope(kmat, cos, sin)
         kmat = kmat.permute(1, 0, 2).contiguous().view(cross_heads, S, head_dim)
-        scores2 = (q @ kmat.transpose(-2, -1)) / (head_dim**0.5) + self_mask.unsqueeze(0)
-        probs2 = torch.softmax(scores2, dim=-1)
-        attn_out = (probs2 @ vmat).transpose(0, 1).reshape(S, -1)
+        attn_out = F.scaled_dot_product_attention(
+            q.unsqueeze(0),
+            kmat.unsqueeze(0),
+            vmat.unsqueeze(0),
+            attn_mask=self_mask.unsqueeze(0).unsqueeze(0),
+        )
+        attn_out = attn_out.squeeze(0).transpose(0, 1).reshape(S, -1)
         attn_out = self.self_proj(attn_out)
         x = x + attn_out
         # ffn
@@ -228,36 +234,35 @@ class DiffusionDecoder(nn.Module):
         tokens = batch["tokens"] if isinstance(batch, dict) else batch.tokens
         if self.d0_mode == "learned":
             x[N:] = self.d0_embed(tokens.clamp(0, 256))
-        positions = list(range(N)) + [
-            int(p)
-            for p in (batch["positions"] if isinstance(batch, dict) else batch.positions).tolist()
-        ]
-        cos = self.rope_cos[positions]
-        sin = self.rope_sin[positions]
-        q_groups = [0] * (N + R)
-        for i in range(N):
-            pos = i
-            if pos < patches[0][0]:
-                q_groups[i] = 0
+        positions_tensor = torch.cat(
+            [
+                torch.arange(N, device=byte_hidden.device),
+                (batch["positions"] if isinstance(batch, dict) else batch.positions)
+                .to(byte_hidden.device)
+                .long(),
+            ],
+            dim=0,
+        )
+        cos = self.rope_cos[positions_tensor]
+        sin = self.rope_sin[positions_tensor]
+        q_groups = torch.zeros(N + R, dtype=torch.long, device=byte_hidden.device)
+        for j, (start, plen) in enumerate(patches):
+            s = max(0, start)
+            e = min(N, start + plen)
+            if s >= e:
                 continue
-            gi = 0
-            for j, (start, plen) in enumerate(patches):
-                if start > pos:
-                    break
-                if pos < start + plen:
-                    if trailing_closed and i == N - 1:
-                        gi = M - 1
-                    elif pos + 1 == start + plen and j + 1 < M:
-                        gi = j
-                    else:
-                        gi = 0 if j == 0 else j - 1
-                    break
-            else:
-                gi = M - 1
-            q_groups[i] = gi
+            base = 0 if j == 0 else j - 1
+            q_groups[s:e] = base
+            last = e - 1
+            if last >= s and j + 1 < M:
+                q_groups[last] = j
         groups = batch["groups"] if isinstance(batch, dict) else batch.groups
-        for r in range(R):
-            q_groups[N + r] = int(groups[r].item() if torch.is_tensor(groups[r]) else groups[r])
+        if torch.is_tensor(groups):
+            q_groups[N:] = groups.to(byte_hidden.device).long().view(-1)
+        else:
+            q_groups[N:] = torch.tensor(
+                [int(g) for g in groups], device=byte_hidden.device, dtype=torch.long
+            )
         if trailing_closed and N > 0:
             q_groups[N - 1] = M - 1
         block_starts = [

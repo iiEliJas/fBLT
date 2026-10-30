@@ -9,7 +9,7 @@ def rng_next(state):
     return (z ^ (z >> 31)) & ((1 << 64) - 1)
 
 
-def rng_uniform01(state):
+def rng_uniform01_local(state):
     return (rng_next(state) >> 40) / (1 << 24)
 
 
@@ -19,66 +19,91 @@ def build_block_batch(bytes_seq, patches, block_size, rng_seed, t_in=0.0):
     NB = M - 1
     R = block_size * NB
     state = [rng_seed]
-    t = t_in if t_in > 0.0 else rng_uniform01(state)
+    t = t_in if t_in > 0.0 else rng_uniform01_local(state)
     if t <= 1e-6:
         t = 1e-6
-    tokens = []
-    positions = []
-    targets = []
-    cell_valid = []
-    cell_masked = []
-    groups = []
-    for i in range(1, M):
-        s = patches[i][0]
-        for k in range(block_size):
-            pos = s + k
-            valid = pos < N
-            positions.append(pos if valid else N - 1)
-            targets.append(bytes_seq[pos] if valid else 0)
-            masked_draw = (not valid) or (rng_uniform01(state) < t)
-            tok = 256 if masked_draw else bytes_seq[pos]  # 256 = MASK
-            tokens.append(tok)
-            cell_valid.append(1 if valid else 0)
-            cell_masked.append(1 if (valid and tok == 256) else 0)
-            groups.append(i - 1)
+
+    if NB <= 0 or R <= 0:
+        return {
+            "num_clean": N,
+            "block_size": block_size,
+            "num_blocks": 0,
+            "n_block_rows": 0,
+            "t": t,
+            "tokens": torch.zeros(0, dtype=torch.long),
+            "positions": torch.zeros(0, dtype=torch.long),
+            "targets": torch.zeros(0, dtype=torch.uint8),
+            "cell_valid": torch.zeros(0, dtype=torch.uint8),
+            "cell_masked": torch.zeros(0, dtype=torch.uint8),
+            "groups": torch.zeros(0, dtype=torch.long),
+        }
+
+    block_starts = torch.tensor([patches[i][0] for i in range(1, M)], dtype=torch.long)
+    offsets = torch.arange(block_size, dtype=torch.long)
+    positions = block_starts.repeat_interleave(block_size) + offsets.repeat(NB)
+    valid = positions < N
+    positions_clamped = positions.clamp(max=max(0, N - 1))
+    byte_tensor = (
+        torch.tensor(bytes_seq, dtype=torch.uint8) if N > 0 else torch.zeros(0, dtype=torch.uint8)
+    )
+    targets = torch.where(
+        valid,
+        byte_tensor[positions_clamped.clamp(max=max(0, N - 1))],
+        torch.zeros_like(positions, dtype=torch.uint8),
+    )
+    # rng draws
+    draws = torch.tensor([rng_uniform01_local(state) for _ in range(R)], dtype=torch.float32)
+    masked = (~valid) | (draws < t)
+    tokens = torch.where(masked, torch.full_like(positions, 256), targets.long())
+    # bytes_seq lookup for unmasked
+    vals = torch.where(
+        valid,
+        byte_tensor[positions_clamped.clamp(max=max(0, N - 1))],
+        torch.zeros_like(positions, dtype=torch.uint8),
+    )
+    tokens = torch.where(masked, torch.full_like(positions, 256), vals.long())
+    cell_valid = valid.to(torch.uint8)
+    cell_masked = (valid & masked).to(torch.uint8)
+    groups = torch.arange(NB, dtype=torch.long).repeat_interleave(block_size)
     return {
         "num_clean": N,
         "block_size": block_size,
         "num_blocks": NB,
         "n_block_rows": R,
         "t": t,
-        "tokens": torch.tensor(tokens, dtype=torch.long),
-        "positions": torch.tensor(positions, dtype=torch.long),
-        "targets": torch.tensor(targets, dtype=torch.uint8),
-        "cell_valid": torch.tensor(cell_valid, dtype=torch.uint8),
-        "cell_masked": torch.tensor(cell_masked, dtype=torch.uint8),
-        "groups": torch.tensor(groups, dtype=torch.long),
+        "tokens": tokens.long(),
+        "positions": positions_clamped.long(),
+        "targets": targets.to(torch.uint8),
+        "cell_valid": cell_valid,
+        "cell_masked": cell_masked,
+        "groups": groups.long(),
     }
 
 
 def figure5_mask(N, R, block_size, block_starts, num_blocks):
     S = N + R
-    mask = torch.zeros(S, S)
-    # clean rows causal
-    for i in range(N):
-        for j in range(N):
-            if j <= i:
-                mask[i, j] = 0.0
-            else:
-                mask[i, j] = float("-inf")
-    # block rows: attend clean cutoff (block_start) + all block rows
+    mask = torch.full((S, S), float("-inf"))
+    # clean rows causal within window
+    # clean rows: j <= i
+    ii = torch.arange(N)[:, None]
+    jj = torch.arange(N)[None, :]
+    mask[:N, :N] = torch.where(
+        jj <= ii, torch.zeros_like(mask[:N, :N]), torch.full_like(mask[:N, :N], float("-inf"))
+    )
+    # block rows
     for bi in range(num_blocks):
         start = block_starts[bi]
+        row0 = N + bi * block_size
         for k in range(block_size):
-            row = N + bi * block_size + k
-            for j in range(start):
-                mask[row, j] = 0.0 if j < N else float("-inf")
-            for j in range(N, S):
-                mask[row, j] = 0.0
-            for j in range(start, N):
-                mask[row, j] = float("-inf")
+            row = row0 + k
+            # attend clean bytes < start
+            if start > 0:
+                mask[row, : min(start, N)] = 0.0
+            # attend all block rows
+            mask[row, N:S] = 0.0
+            # mask clean bytes >= start
+            if start < N:
+                mask[row, start:N] = float("-inf")
     # clean rows do not attend block rows
-    for i in range(N):
-        for j in range(N, S):
-            mask[i, j] = float("-inf")
+    mask[:N, N:S] = float("-inf")
     return mask

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .ops import apply_rope, rmsnorm, swiglu
 
@@ -28,10 +29,16 @@ class SelfAttention(nn.Module):
         mask = j <= i
         if window and window > 0:
             mask = mask & ((i - j) < window)
-        scores = (q.transpose(0, 1) @ k.transpose(0, 1).transpose(-2, -1)) / (self.head_dim**0.5)
-        scores = scores.masked_fill(~mask.unsqueeze(0), float("-inf"))
-        probs = torch.softmax(scores, dim=-1)
-        out = (probs @ v.transpose(0, 1)).transpose(0, 1).reshape(S, D)
+        qh = q.transpose(0, 1).unsqueeze(0)  # (1, heads, S, hd)
+        kh = k.transpose(0, 1).unsqueeze(0)
+        vh = v.transpose(0, 1).unsqueeze(0)
+        # causal/window mask as additive -inf
+        attn_mask = torch.zeros(S, S, device=x.device, dtype=q.dtype)
+        attn_mask = attn_mask.masked_fill(~mask, float("-inf"))
+        out = F.scaled_dot_product_attention(
+            qh, kh, vh, attn_mask=attn_mask.unsqueeze(0).unsqueeze(0)
+        )
+        out = out.squeeze(0).transpose(0, 1).reshape(S, D)
         return self.proj(out)
 
 

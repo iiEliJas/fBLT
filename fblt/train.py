@@ -9,7 +9,7 @@ import typing
 
 import yaml
 
-from fblt._binary import resolve_binary
+from fblt._binary import ensure_wsl_cuda_env, resolve_binary
 from fblt._config import TrainConfig, add_config_args, load_config
 from fblt._runner import run_binary
 
@@ -135,6 +135,9 @@ def main() -> None:
 
         rc = run_train(cfg, args)
         sys.exit(rc)
+
+    if cfg.backend == "cuda":
+        ensure_wsl_cuda_env()
 
     # Resolve binary and run
     binary = resolve_binary("train_blt_d", cfg.backend)
