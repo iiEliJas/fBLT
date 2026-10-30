@@ -80,6 +80,7 @@ typedef struct {
     const char *loss_log;
     const char *metrics_log;
     int deterministic;
+    int bf16;
     size_t cuda_scratch_mb;
     size_t scratch_mb;
     size_t model_mb;
