@@ -128,3 +128,40 @@ void blt_generate_sample(const blt_model *model, const blt_entropy_lm *entropy_m
     generate_loop(model, entropy_model, patcher_config, prompt_bytes, prompt_len, max_new_bytes, output_bytes, opts,
                   arena);
 }
+
+void blt_generate_greedy_batched(const blt_model *model, const blt_entropy_lm *entropy_model,
+                                 const blt_patcher_config *patcher_config, const uint8_t *prompt_bytes,
+                                 size_t prompt_len, size_t max_new_bytes, const blt_decode_options *opts,
+                                 size_t num_samples, const uint64_t *seeds, uint8_t **outputs, blt_arena *arena) {
+    BLT_REQUIRE(model != NULL && entropy_model != NULL && patcher_config != NULL && prompt_bytes != NULL &&
+                    outputs != NULL && arena != NULL,
+                "blt_generate_greedy_batched: arguments cannot be NULL");
+    BLT_REQUIRE(num_samples >= 1, "blt_generate_greedy_batched: num_samples must be >= 1");
+    BLT_REQUIRE(prompt_len >= 2, "blt_generate_greedy_batched: prompt_len must be >= 2");
+
+    if (num_samples == 1) {
+        if (opts) {
+            blt_decode_options o = *opts;
+            if (seeds) o.seed = seeds[0];
+            blt_generate_sample(model, entropy_model, patcher_config, prompt_bytes, prompt_len, max_new_bytes,
+                                outputs[0], &o, arena);
+        } else {
+            blt_generate_greedy(model, entropy_model, patcher_config, prompt_bytes, prompt_len, max_new_bytes,
+                                outputs[0], arena);
+        }
+        return;
+    }
+
+    for (size_t si = 0; si < num_samples; si++) {
+        blt_arena_reset(arena);
+        if (opts) {
+            blt_decode_options o = *opts;
+            o.seed = seeds ? seeds[si] : (o.seed ? o.seed + si : 1);
+            blt_generate_sample(model, entropy_model, patcher_config, prompt_bytes, prompt_len, max_new_bytes,
+                                outputs[si], &o, arena);
+        } else {
+            blt_generate_greedy(model, entropy_model, patcher_config, prompt_bytes, prompt_len, max_new_bytes,
+                                outputs[si], arena);
+        }
+    }
+}

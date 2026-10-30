@@ -26,3 +26,13 @@ void blt_generate_sample(const blt_model *model, const blt_entropy_lm *entropy_m
                          size_t max_new_bytes, uint8_t *output_bytes, const blt_decode_options *opts, blt_arena *arena);
 
 #endif // BLT_TOOLS_GENERATE_GREEDY_H
+
+// Batched greedy/sampling entry point. Runs `num_samples` independent
+// generations with per-sample seeds (seeds[si]) into outputs[si] (each
+// caller-allocated, size >= prompt_len + max_new_bytes). opts may be NULL
+// for plain argmax. Single-sample (num_samples == 1) delegates to the
+// existing functions, so output is byte-identical.
+void blt_generate_greedy_batched(const blt_model *model, const blt_entropy_lm *entropy_model,
+                                 const blt_patcher_config *patcher_config, const uint8_t *prompt_bytes,
+                                 size_t prompt_len, size_t max_new_bytes, const blt_decode_options *opts,
+                                 size_t num_samples, const uint64_t *seeds, uint8_t **outputs, blt_arena *arena);
