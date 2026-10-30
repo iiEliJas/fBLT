@@ -9,7 +9,7 @@ import typing
 
 import yaml
 
-from fblt._binary import resolve_binary
+from fblt._binary import ensure_wsl_cuda_env, resolve_binary
 from fblt._config import TrainConfig, add_config_args, load_config
 from fblt._runner import run_binary
 
@@ -25,7 +25,7 @@ def _parse_args() -> typing.Tuple[argparse.Namespace, typing.Dict[str, typing.An
     parser.add_argument("--config", type=str, default=None, help="YAML config path")
     parser.add_argument(
         "--backend",
-        choices=["cpu", "cuda"],
+        choices=["cpu", "cuda", "torch"],
         required=True,
         help="Compute backend",
     )
@@ -95,6 +95,20 @@ def main() -> None:
     for key, val in explicit.items():
         setattr(cfg, key, val)
     cfg.backend = args.backend
+    if cfg.backend == "torch":
+        _venv = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "pysrc",
+            ".venv",
+            "bin",
+            "python",
+        )
+        _same = os.path.abspath(sys.executable) == os.path.abspath(_venv)
+        _reexec = os.environ.get("FBLT_TORCH_REEXEC")
+        if os.path.exists(_venv) and (not _same) and (not _reexec):
+            os.environ["FBLT_TORCH_REEXEC"] = "1"
+            _mod = "train" if "train.py" in __file__ else "infer"
+            os.execv(_venv, [_venv, "-m", "fblt." + _mod] + sys.argv[1:])
 
     # Derive run name and directory
     run_name = args.run_name if args.run_name is not None else _derive_run_name(args.config)
@@ -113,6 +127,17 @@ def main() -> None:
 
     # Print run directory
     print(run_dir)
+
+    if cfg.backend == "torch":
+        _p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "pysrc")
+        sys.path.insert(0, _p)
+        from fblt_torch.cli import run_train
+
+        rc = run_train(cfg, args)
+        sys.exit(rc)
+
+    if cfg.backend == "cuda":
+        ensure_wsl_cuda_env()
 
     # Resolve binary and run
     binary = resolve_binary("train_blt_d", cfg.backend)

@@ -67,6 +67,7 @@ class TrainConfig:
     weight_decay: float = 0.01
     weight_decay_norms: bool = False
     max_norm: float = 20000.0
+    grad_accum: int = 1
     paper_loss: int = 1
     mask_loss_norm: int = 0
     seed: int = 7
