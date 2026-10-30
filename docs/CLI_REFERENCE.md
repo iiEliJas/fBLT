@@ -150,6 +150,7 @@ works with a prompt of any length up to the sequence bound, which is derived fro
 | `--hidden H` | 128 | FFN width |
 | `--layers L` | 2 | Layers per submodule (encoder/global/decoder) |
 | `--max-norm F` | 20000 | Global gradient clip threshold |
+| `--grad-accum N` | 1 | Gradient accumulation steps (micro-batches per optimizer step) |
 | `--d0-mode MODE` | learned | `zeros` \| `learned` for decoder d0 embed |
 | `--seed S` | 7 | RNG seed |
 | `--report-every K` | 25 | Print frequency |
