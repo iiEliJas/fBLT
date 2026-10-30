@@ -155,6 +155,7 @@ works with a prompt of any length up to the sequence bound, which is derived fro
 | `--seed S` | 7 | RNG seed |
 | `--report-every K` | 25 | Print frequency |
 | `--deterministic` | off | Deterministic training (slower, no cuda atomics) |
+| `--bf16` | off | BF16 mixed precision (CUDA only) |
 
 ### Window Order
 
