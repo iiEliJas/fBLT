@@ -197,3 +197,122 @@ void blt_model_backward(const blt_model *model, const blt_tensor *bytes_in, cons
 
     blt_backend_pass_sync(bytes_in->backend);
 }
+static void blt_model_grad_zero_one(blt_model_grad *grad, const blt_model *model) {
+    blt_local_encoder_grad *eg = grad->encoder_grad;
+    blt_global_transformer_grad *gg = grad->global_grad;
+    blt_local_decoder_grad *dg = grad->decoder_grad;
+
+    zero_tensor(&eg->embedding_grad);
+    for (size_t k = 0; k < model->encoder->ngram_weights.num_tables; k++) zero_tensor(&eg->ngram_grads.tables[k]);
+    for (size_t l = 0; l < model->encoder->config.num_layers; l++) {
+        blt_local_layer_grad *t = &eg->layer_grads[l];
+        blt_tensor *all[12] = {&t->norm1_weight,   &t->attn_qkv_w,     &t->attn_proj_w,    &t->norm2_weight,
+                               &t->ffn_up_w,       &t->ffn_gate_w,     &t->ffn_down_w,     &t->cross_norm_weight,
+                               &t->cross_weight_q, &t->cross_weight_k, &t->cross_weight_v, &t->cross_weight_proj};
+        for (int i = 0; i < 12; i++) zero_tensor(all[i]);
+    }
+    for (size_t l = 0; l < model->global->stack.num_layers; l++) {
+        blt_transformer_layer_grad *t = &gg->stack_grad->layer_grads[l];
+        blt_tensor *all[7] = {&t->norm1_weight, &t->attn_qkv_w, &t->attn_proj_w, &t->norm2_weight,
+                              &t->ffn_up_w,     &t->ffn_gate_w, &t->ffn_down_w};
+        for (int i = 0; i < 7; i++) zero_tensor(all[i]);
+    }
+    for (size_t l = 0; l < model->decoder->config.num_layers; l++) {
+        blt_local_layer_grad *t = &dg->layer_grads[l];
+        blt_tensor *all[12] = {&t->cross_norm_weight, &t->cross_weight_q, &t->cross_weight_k, &t->cross_weight_v,
+                               &t->cross_weight_proj, &t->norm1_weight,   &t->attn_qkv_w,     &t->attn_proj_w,
+                               &t->norm2_weight,      &t->ffn_up_w,       &t->ffn_gate_w,     &t->ffn_down_w};
+        for (int i = 0; i < 12; i++) zero_tensor(all[i]);
+    }
+    zero_tensor(&dg->lm_head_grad);
+    zero_tensor(&dg->d0_embed_grad);
+}
+
+void blt_model_grad_zero(const blt_model *model, blt_model_grad *grad) {
+    BLT_REQUIRE(model != NULL && grad != NULL, "blt_model_grad_zero: model and grad cannot be NULL");
+    blt_model_grad_zero_one(grad, model);
+}
+
+static void blt_model_grad_add_one(blt_model_grad *dst, const blt_model_grad *src, const blt_model *model) {
+    blt_local_encoder_grad *de = dst->encoder_grad, *se = (blt_local_encoder_grad *)src->encoder_grad;
+    blt_global_transformer_grad *dg = dst->global_grad, *sg = (blt_global_transformer_grad *)src->global_grad;
+    blt_local_decoder_grad *dd = dst->decoder_grad, *sd = (blt_local_decoder_grad *)src->decoder_grad;
+
+    blt_add(&de->embedding_grad, &se->embedding_grad, &de->embedding_grad);
+    for (size_t k = 0; k < model->encoder->ngram_weights.num_tables; k++)
+        blt_add(&de->ngram_grads.tables[k], &se->ngram_grads.tables[k], &de->ngram_grads.tables[k]);
+    for (size_t l = 0; l < model->encoder->config.num_layers; l++) {
+        blt_local_layer_grad *dt = &de->layer_grads[l];
+        blt_local_layer_grad *st = &se->layer_grads[l];
+        blt_tensor *da[12] = {&dt->norm1_weight,   &dt->attn_qkv_w,     &dt->attn_proj_w,    &dt->norm2_weight,
+                              &dt->ffn_up_w,       &dt->ffn_gate_w,     &dt->ffn_down_w,     &dt->cross_norm_weight,
+                              &dt->cross_weight_q, &dt->cross_weight_k, &dt->cross_weight_v, &dt->cross_weight_proj};
+        blt_tensor *sa[12] = {&st->norm1_weight,   &st->attn_qkv_w,     &st->attn_proj_w,    &st->norm2_weight,
+                              &st->ffn_up_w,       &st->ffn_gate_w,     &st->ffn_down_w,     &st->cross_norm_weight,
+                              &st->cross_weight_q, &st->cross_weight_k, &st->cross_weight_v, &st->cross_weight_proj};
+        for (int i = 0; i < 12; i++) blt_add(da[i], sa[i], da[i]);
+    }
+    for (size_t l = 0; l < model->global->stack.num_layers; l++) {
+        blt_transformer_layer_grad *dt = &dg->stack_grad->layer_grads[l];
+        blt_transformer_layer_grad *st = &sg->stack_grad->layer_grads[l];
+        blt_tensor *da[7] = {&dt->norm1_weight, &dt->attn_qkv_w, &dt->attn_proj_w, &dt->norm2_weight,
+                             &dt->ffn_up_w,     &dt->ffn_gate_w, &dt->ffn_down_w};
+        blt_tensor *sa[7] = {&st->norm1_weight, &st->attn_qkv_w, &st->attn_proj_w, &st->norm2_weight,
+                             &st->ffn_up_w,     &st->ffn_gate_w, &st->ffn_down_w};
+        for (int i = 0; i < 7; i++) blt_add(da[i], sa[i], da[i]);
+    }
+    for (size_t l = 0; l < model->decoder->config.num_layers; l++) {
+        blt_local_layer_grad *dt = &dd->layer_grads[l];
+        blt_local_layer_grad *st = &sd->layer_grads[l];
+        blt_tensor *da[12] = {&dt->cross_norm_weight, &dt->cross_weight_q, &dt->cross_weight_k, &dt->cross_weight_v,
+                              &dt->cross_weight_proj, &dt->norm1_weight,   &dt->attn_qkv_w,     &dt->attn_proj_w,
+                              &dt->norm2_weight,      &dt->ffn_up_w,       &dt->ffn_gate_w,     &dt->ffn_down_w};
+        blt_tensor *sa[12] = {&st->cross_norm_weight, &st->cross_weight_q, &st->cross_weight_k, &st->cross_weight_v,
+                              &st->cross_weight_proj, &st->norm1_weight,   &st->attn_qkv_w,     &st->attn_proj_w,
+                              &st->norm2_weight,      &st->ffn_up_w,       &st->ffn_gate_w,     &st->ffn_down_w};
+        for (int i = 0; i < 12; i++) blt_add(da[i], sa[i], da[i]);
+    }
+    blt_add(&dd->lm_head_grad, &sd->lm_head_grad, &dd->lm_head_grad);
+    blt_add(&dd->d0_embed_grad, &sd->d0_embed_grad, &dd->d0_embed_grad);
+}
+
+void blt_model_grad_add(const blt_model *model, blt_model_grad *dst, const blt_model_grad *src) {
+    BLT_REQUIRE(model != NULL && dst != NULL && src != NULL, "blt_model_grad_add: arguments cannot be NULL");
+    blt_model_grad_add_one(dst, src, model);
+}
+
+static void blt_model_grad_scale_one(blt_model_grad *grad, const blt_model *model, float scale) {
+    blt_local_encoder_grad *eg = grad->encoder_grad;
+    blt_global_transformer_grad *gg = grad->global_grad;
+    blt_local_decoder_grad *dg = grad->decoder_grad;
+
+    blt_scale(&eg->embedding_grad, scale);
+    for (size_t k = 0; k < model->encoder->ngram_weights.num_tables; k++) blt_scale(&eg->ngram_grads.tables[k], scale);
+    for (size_t l = 0; l < model->encoder->config.num_layers; l++) {
+        blt_local_layer_grad *t = &eg->layer_grads[l];
+        blt_tensor *all[12] = {&t->norm1_weight,   &t->attn_qkv_w,     &t->attn_proj_w,    &t->norm2_weight,
+                               &t->ffn_up_w,       &t->ffn_gate_w,     &t->ffn_down_w,     &t->cross_norm_weight,
+                               &t->cross_weight_q, &t->cross_weight_k, &t->cross_weight_v, &t->cross_weight_proj};
+        for (int i = 0; i < 12; i++) blt_scale(all[i], scale);
+    }
+    for (size_t l = 0; l < model->global->stack.num_layers; l++) {
+        blt_transformer_layer_grad *t = &gg->stack_grad->layer_grads[l];
+        blt_tensor *all[7] = {&t->norm1_weight, &t->attn_qkv_w, &t->attn_proj_w, &t->norm2_weight,
+                              &t->ffn_up_w,     &t->ffn_gate_w, &t->ffn_down_w};
+        for (int i = 0; i < 7; i++) blt_scale(all[i], scale);
+    }
+    for (size_t l = 0; l < model->decoder->config.num_layers; l++) {
+        blt_local_layer_grad *t = &dg->layer_grads[l];
+        blt_tensor *all[12] = {&t->cross_norm_weight, &t->cross_weight_q, &t->cross_weight_k, &t->cross_weight_v,
+                               &t->cross_weight_proj, &t->norm1_weight,   &t->attn_qkv_w,     &t->attn_proj_w,
+                               &t->norm2_weight,      &t->ffn_up_w,       &t->ffn_gate_w,     &t->ffn_down_w};
+        for (int i = 0; i < 12; i++) blt_scale(all[i], scale);
+    }
+    blt_scale(&dg->lm_head_grad, scale);
+    blt_scale(&dg->d0_embed_grad, scale);
+}
+
+void blt_model_grad_scale(const blt_model *model, blt_model_grad *grad, float scale) {
+    BLT_REQUIRE(model != NULL && grad != NULL, "blt_model_grad_scale: model and grad cannot be NULL");
+    blt_model_grad_scale_one(grad, model, scale);
+}

@@ -44,6 +44,7 @@ static void usage(void) {
                     "  --t-hi-start F          high-t curriculum start floor (default 0.8)\n"
                     "  --block-size B          diffusion block size (default 4)\n"
                     "  --window W              clean-sequence length (default 48)\n"
+                    "  --grad-accum N          gradient accumulation steps (default 1)\n"
                     "\n"
                     "mask schedule:\n"
                     "  --mask-warmup N         ramp mask scale 0->1 over N steps (default 0)\n"
@@ -94,6 +95,7 @@ args_t parse_args(int argc, char **argv) {
                 .lr = 0.0001f,
                 .block_size = 4,
                 .window = 48,
+                .grad_accum = 1,
                 .embed = 64,
                 .hidden = 128,
                 .layers = 2,
@@ -164,6 +166,7 @@ args_t parse_args(int argc, char **argv) {
         else if (!strcmp(argv[i], "--lr") && i + 1 < argc) a.lr = atof(argv[++i]);
         else if (!strcmp(argv[i], "--block-size") && i + 1 < argc) a.block_size = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--window") && i + 1 < argc) a.window = strtoull(argv[++i], NULL, 10);
+        else if (!strcmp(argv[i], "--grad-accum") && i + 1 < argc) a.grad_accum = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--embed") && i + 1 < argc) a.embed = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--hidden") && i + 1 < argc) a.hidden = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--layers") && i + 1 < argc) a.layers = strtoull(argv[++i], NULL, 10);

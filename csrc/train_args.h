@@ -16,6 +16,7 @@ typedef struct {
     float lr;
     size_t block_size;
     size_t window;
+    size_t grad_accum;
     size_t embed;
     size_t hidden;
     size_t layers;

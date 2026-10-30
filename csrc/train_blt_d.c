@@ -418,6 +418,11 @@ int main(int argc, char **argv) {
     }
 
     blt_model_grad *grad = blt_model_grad_create(model_arena, model);
+    if (a.grad_accum < 1) {
+        fprintf(stderr, "--grad-accum must be >= 1\n");
+        return 1;
+    }
+    blt_model_grad *grad_accum = blt_model_grad_create(model_arena, model);
     blt_entropy_lm *train_lm = a.entropy_patches ? blt_make_entropy_lm(host_lm_arena, MS, NULL, 11) : NULL;
     if (train_lm && a.entropy_lm) {
         blt_entropy_lm_load(train_lm, a.entropy_lm);
@@ -664,160 +669,170 @@ int main(int argc, char **argv) {
 
     for (size_t step = a.start_step; step < end_step; step++) {
         if (timing) ts0 = blt_time_sec();
-        blt_arena_reset(scratch);
+        blt_model_grad_zero(model, grad_accum);
+        double step_loss = 0.0;
+        for (size_t micro = 0; micro < a.grad_accum; micro++) {
+            const size_t data_step = step * a.grad_accum + micro;
+            blt_arena_reset(scratch);
 #ifdef BLT_WITH_CUDA
-        if (a.use_cuda) blt_cuda_scratch_reset();
+            if (a.use_cuda) blt_cuda_scratch_reset();
 #endif
 
-        const size_t w = train_window_index(step, num_windows, a.seed);
-        const uint8_t *text = corpus + w * a.window;
-        const size_t N = a.window;
+            const size_t w = train_window_index(data_step, num_windows, a.seed);
+            const uint8_t *text = corpus + w * a.window;
+            const size_t N = a.window;
 
-        blt_patch_info patches[BLT_MAX_PATCHES];
-        const size_t M = train_lm ? (blt_arena_reset(host_seg_arena),
-                                     entropy_segment(host_seg_arena, train_lm, text, N, patches, BLT_MAX_PATCHES))
-                                  : fixed_stride(N, 4, patches);
-        BLT_REQUIRE(M >= 2, "training window produced < 2 patches");
-        if (M < 2) continue;
-        if (M >= BLT_MAX_PATCHES) continue;
+            blt_patch_info patches[BLT_MAX_PATCHES];
+            const size_t M = train_lm ? (blt_arena_reset(host_seg_arena),
+                                         entropy_segment(host_seg_arena, train_lm, text, N, patches, BLT_MAX_PATCHES))
+                                      : fixed_stride(N, 4, patches);
+            BLT_REQUIRE(M >= 2, "training window produced < 2 patches");
+            if (M < 2) continue;
+            if (M >= BLT_MAX_PATCHES) continue;
 
-        blt_block_batch batch;
-        if (a.diffusion) {
-            uint64_t trng = a.seed * 0x9E3779B97F4A7C15ULL + step + 1;
-            float t_draw = (float)((double)(t_rng_next(&trng) >> 11) / 9007199254740992.0);
-            if (t_draw <= 1e-6f) t_draw = 1e-6f;
-            // High-t curriculum: hold the draw above a floor that decays
-            // linearly from --t-hi-start to t_min over the first
-            // --t-warmup-hi fraction of steps, so early training emphasizes
-            // heavily-masked blocks (the regime block drafting relies on)
-            // before annealing into the full U(0,1) distribution.
-            if (a.t_warmup_frac > 0.0f && end_step > 0 && a.t_hi_start > a.t_min) {
-                const size_t warm = (size_t)((double)end_step * (double)a.t_warmup_frac);
-                if (warm > 0 && step < warm) {
-                    const float thr = a.t_hi_start + (a.t_min - a.t_hi_start) * ((float)step / (float)warm);
-                    if (t_draw < thr) t_draw = thr;
+            blt_block_batch batch;
+            if (a.diffusion) {
+                uint64_t trng = a.seed * 0x9E3779B97F4A7C15ULL + data_step + 1;
+                float t_draw = (float)((double)(t_rng_next(&trng) >> 11) / 9007199254740992.0);
+                if (t_draw <= 1e-6f) t_draw = 1e-6f;
+                // High-t curriculum: hold the draw above a floor that decays
+                // linearly from --t-hi-start to t_min over the first
+                // --t-warmup-hi fraction of steps, so early training emphasizes
+                // heavily-masked blocks (the regime block drafting relies on)
+                // before annealing into the full U(0,1) distribution.
+                if (a.t_warmup_frac > 0.0f && end_step > 0 && a.t_hi_start > a.t_min) {
+                    const size_t warm = (size_t)((double)end_step * (double)a.t_warmup_frac);
+                    if (warm > 0 && step < warm) {
+                        const float thr = a.t_hi_start + (a.t_min - a.t_hi_start) * ((float)step / (float)warm);
+                        if (t_draw < thr) t_draw = thr;
+                    }
                 }
+                blt_block_batch_build_t(&batch, scratch, text, N, patches, M, a.block_size, a.seed + data_step, t_draw);
+                // --paper-loss is Eq. 5 + Eq. 7 exactly: both terms are sums.
+                batch.mask_norm = a.paper_loss ? 0 : a.mask_loss_norm;
+                batch.clean_sum = a.paper_loss;
+                batch.last_row_scale = a.last_row_scale;
+                // Floor the timestep: without it, rare tiny-t draws give 1/t
+                // weights up to ~1e6 that dominate gradients and starve
+                // L_clean (observed as wild loss swings). Standard masked-
+                // diffusion stabilization; caps the weight at 1/t_min.
+                if (batch.t < a.t_min) batch.t = a.t_min;
+                // Optional warmup: ramp the mask-loss weight 0->1 (paper §6
+                // explicitly sanctions reweighting toward next-byte prediction).
+                if (a.mask_warmup > 0) {
+                    batch.loss_scale = (float)step / (float)a.mask_warmup;
+                }
+                float cap = a.mask_scale;
+                if (a.mask_late_step > 0 && step >= a.mask_late_step && end_step > a.mask_late_step) {
+                    const float frac = (float)(step - a.mask_late_step) / (float)(end_step - a.mask_late_step);
+                    cap = a.mask_scale + (a.mask_late_scale - a.mask_scale) * frac;
+                }
+                if (batch.loss_scale > cap) batch.loss_scale = cap;
+                // Log batch properties for spike investigation
+                if (batch_fp) log_batch_properties(batch_fp, step, w * a.window, text, N, patches, M, &batch);
             }
-            blt_block_batch_build_t(&batch, scratch, text, N, patches, M, a.block_size, a.seed + step, t_draw);
-            // --paper-loss is Eq. 5 + Eq. 7 exactly: both terms are sums.
-            batch.mask_norm = a.paper_loss ? 0 : a.mask_loss_norm;
-            batch.clean_sum = a.paper_loss;
-            batch.last_row_scale = a.last_row_scale;
-            // Floor the timestep: without it, rare tiny-t draws give 1/t
-            // weights up to ~1e6 that dominate gradients and starve
-            // L_clean (observed as wild loss swings). Standard masked-
-            // diffusion stabilization; caps the weight at 1/t_min.
-            if (batch.t < a.t_min) batch.t = a.t_min;
-            // Optional warmup: ramp the mask-loss weight 0->1 (paper §6
-            // explicitly sanctions reweighting toward next-byte prediction).
-            if (a.mask_warmup > 0) {
-                batch.loss_scale = (float)step / (float)a.mask_warmup;
+
+            size_t bshape[1] = {N};
+            blt_tensor bytes_in = blt_tensor_create(scratch, bshape, 1, BLT_DTYPE_UINT8);
+            blt_tensor_upload(&bytes_in, text, N);
+
+            // Targets for L_clean: window+1 bytes so the last row has a prediction target
+            size_t tshape[1] = {N + 1};
+            blt_tensor targets = blt_tensor_create(scratch, tshape, 1, BLT_DTYPE_UINT8);
+            blt_tensor_upload(&targets, text, N + 1);
+
+            size_t h_shape[2] = {N, a.embed};
+            size_t sc_shape[1] = {1};
+
+            blt_model_grad_zero(model, grad);
+
+            if (a.diffusion) {
+                size_t p_shape2[2] = {M, a.embed};
+                blt_tensor P = blt_tensor_create(scratch, p_shape2, 2, BLT_DTYPE_FP32);
+                blt_tensor h = blt_tensor_create(scratch, h_shape, 2, BLT_DTYPE_FP32);
+                if (timing) tsA = blt_time_sec();
+                blt_local_encoder_forward(model->encoder, &bytes_in, patches, M, NULL, 0, &P, &h, scratch);
+
+                blt_tensor O = blt_tensor_create(scratch, p_shape2, 2, BLT_DTYPE_FP32);
+                blt_global_transformer_forward(model->global, &P, NULL, 0, &O, scratch);
+
+                size_t S = N + batch.n_block_rows;
+                size_t lg_shape[2] = {S, 256};
+                blt_tensor logits = blt_tensor_create(scratch, lg_shape, 2, BLT_DTYPE_FP32);
+                blt_tensor loss = blt_tensor_create(scratch, sc_shape, 1, BLT_DTYPE_FP32);
+                blt_local_decoder_forward_diffusion(model->decoder, &h, &O, patches, M, text, &targets, &batch,
+                                                    a.d0_learned ? BLT_D0_LEARNED : BLT_D0_ZEROS, &logits, &loss,
+                                                    scratch);
+
+                if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
+                    log_forward_activation_dump(adump_fp, step + 1, &P, &h, &O, &logits);
+
+                float lv;
+                blt_tensor_download(&loss, &lv, sizeof(float));
+                if (loss_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
+                    fprintf(loss_fp, "%zu %.6f\n", step + 1, (double)lv);
+                if (timing) {
+                    tsB = blt_time_sec();
+                    t_fwd += tsB - tsA;
+                }
+                step_loss += lv;
+                last_loss = lv;
+                patch_sum += M;
+                patch_n++;
+
+                blt_tensor grad_h = blt_tensor_create(scratch, h_shape, 2, BLT_DTYPE_FP32);
+                blt_tensor grad_O = blt_tensor_create(scratch, p_shape2, 2, BLT_DTYPE_FP32);
+                blt_local_decoder_backward_diffusion(model->decoder, &h, &O, patches, M, text, &targets, &batch,
+                                                     a.d0_learned ? BLT_D0_LEARNED : BLT_D0_ZEROS, &grad_h, &grad_O,
+                                                     grad->decoder_grad, scratch);
+
+                blt_tensor grad_P = blt_tensor_create(scratch, p_shape2, 2, BLT_DTYPE_FP32);
+                blt_global_transformer_backward(model->global, &P, NULL, 0, &grad_O, &grad_P, grad->global_grad,
+                                                scratch);
+
+                blt_local_encoder_backward(model->encoder, &bytes_in, patches, M, NULL, 0, &grad_P, &grad_h,
+                                           grad->encoder_grad, scratch);
+                if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
+                    log_gradient_activation_dump(adump_fp, step + 1, model, grad);
+                if (timing) {
+                    tsC = blt_time_sec();
+                    t_bwd += tsC - tsB;
+                }
+            } else {
+                // plain causal BLT baseline: identical pipeline, standard
+                // shifted-CE objective through the composed model API
+                size_t lg_shape[2] = {N, 256};
+                blt_tensor logits = blt_tensor_create(scratch, lg_shape, 2, BLT_DTYPE_FP32);
+                blt_tensor loss = blt_tensor_create(scratch, sc_shape, 1, BLT_DTYPE_FP32);
+                blt_model_forward(model, &bytes_in, &targets, patches, M, NULL, 0, &logits, &loss, scratch);
+
+                if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
+                    log_forward_activation_dump(adump_fp, step + 1, NULL, NULL, NULL, &logits);
+
+                float lv;
+                blt_tensor_download(&loss, &lv, sizeof(float));
+                if (loss_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
+                    fprintf(loss_fp, "%zu %.6f\n", step + 1, (double)lv);
+                step_loss += lv;
+                last_loss = lv;
+                patch_sum += M;
+                patch_n++;
+
+                blt_model_backward(model, &bytes_in, &targets, patches, M, NULL, 0, grad, scratch);
+
+                if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
+                    log_gradient_activation_dump(adump_fp, step + 1, model, grad);
             }
-            float cap = a.mask_scale;
-            if (a.mask_late_step > 0 && step >= a.mask_late_step && end_step > a.mask_late_step) {
-                const float frac = (float)(step - a.mask_late_step) / (float)(end_step - a.mask_late_step);
-                cap = a.mask_scale + (a.mask_late_scale - a.mask_scale) * frac;
-            }
-            if (batch.loss_scale > cap) batch.loss_scale = cap;
-            // Log batch properties for spike investigation
-            if (batch_fp) log_batch_properties(batch_fp, step, w * a.window, text, N, patches, M, &batch);
+
+            blt_model_grad_add(model, grad_accum, grad);
         }
 
-        size_t bshape[1] = {N};
-        blt_tensor bytes_in = blt_tensor_create(scratch, bshape, 1, BLT_DTYPE_UINT8);
-        blt_tensor_upload(&bytes_in, text, N);
+        blt_model_grad_zero(model, grad);
+        blt_model_grad_add(model, grad, grad_accum);
+        blt_model_grad_scale(model, grad, 1.0f / (float)a.grad_accum);
 
-        // Targets for L_clean: window+1 bytes so the last row has a prediction target
-        size_t tshape[1] = {N + 1};
-        blt_tensor targets = blt_tensor_create(scratch, tshape, 1, BLT_DTYPE_UINT8);
-        blt_tensor_upload(&targets, text, N + 1);
-
-        size_t h_shape[2] = {N, a.embed};
-        size_t sc_shape[1] = {1};
-
-        zero_tensor(&grad->encoder_grad->embedding_grad);
-        for (size_t i = 0; i < model->encoder->ngram_weights.num_tables; i++)
-            zero_tensor(&grad->encoder_grad->ngram_grads.tables[i]);
-        zero_tensor(&grad->decoder_grad->d0_embed_grad);
-        blt_model_visit_params(model, grad, zero_norm_fn, NULL, 1);
-
-        if (a.diffusion) {
-            size_t p_shape2[2] = {M, a.embed};
-            blt_tensor P = blt_tensor_create(scratch, p_shape2, 2, BLT_DTYPE_FP32);
-            blt_tensor h = blt_tensor_create(scratch, h_shape, 2, BLT_DTYPE_FP32);
-            if (timing) tsA = blt_time_sec();
-            blt_local_encoder_forward(model->encoder, &bytes_in, patches, M, NULL, 0, &P, &h, scratch);
-
-            blt_tensor O = blt_tensor_create(scratch, p_shape2, 2, BLT_DTYPE_FP32);
-            blt_global_transformer_forward(model->global, &P, NULL, 0, &O, scratch);
-
-            size_t S = N + batch.n_block_rows;
-            size_t lg_shape[2] = {S, 256};
-            blt_tensor logits = blt_tensor_create(scratch, lg_shape, 2, BLT_DTYPE_FP32);
-            blt_tensor loss = blt_tensor_create(scratch, sc_shape, 1, BLT_DTYPE_FP32);
-            blt_local_decoder_forward_diffusion(model->decoder, &h, &O, patches, M, text, &targets, &batch,
-                                                a.d0_learned ? BLT_D0_LEARNED : BLT_D0_ZEROS, &logits, &loss, scratch);
-
-            if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
-                log_forward_activation_dump(adump_fp, step + 1, &P, &h, &O, &logits);
-
-            float lv;
-            blt_tensor_download(&loss, &lv, sizeof(float));
-            if (loss_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
-                fprintf(loss_fp, "%zu %.6f\n", step + 1, (double)lv);
-            if (timing) {
-                tsB = blt_time_sec();
-                t_fwd += tsB - tsA;
-            }
-            running += lv;
-            last_loss = lv;
-            running_n++;
-            patch_sum += M;
-            patch_n++;
-
-            blt_tensor grad_h = blt_tensor_create(scratch, h_shape, 2, BLT_DTYPE_FP32);
-            blt_tensor grad_O = blt_tensor_create(scratch, p_shape2, 2, BLT_DTYPE_FP32);
-            blt_local_decoder_backward_diffusion(model->decoder, &h, &O, patches, M, text, &targets, &batch,
-                                                 a.d0_learned ? BLT_D0_LEARNED : BLT_D0_ZEROS, &grad_h, &grad_O,
-                                                 grad->decoder_grad, scratch);
-
-            blt_tensor grad_P = blt_tensor_create(scratch, p_shape2, 2, BLT_DTYPE_FP32);
-            blt_global_transformer_backward(model->global, &P, NULL, 0, &grad_O, &grad_P, grad->global_grad, scratch);
-
-            blt_local_encoder_backward(model->encoder, &bytes_in, patches, M, NULL, 0, &grad_P, &grad_h,
-                                       grad->encoder_grad, scratch);
-            if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
-                log_gradient_activation_dump(adump_fp, step + 1, model, grad);
-            if (timing) {
-                tsC = blt_time_sec();
-                t_bwd += tsC - tsB;
-            }
-        } else {
-            // plain causal BLT baseline: identical pipeline, standard
-            // shifted-CE objective through the composed model API
-            size_t lg_shape[2] = {N, 256};
-            blt_tensor logits = blt_tensor_create(scratch, lg_shape, 2, BLT_DTYPE_FP32);
-            blt_tensor loss = blt_tensor_create(scratch, sc_shape, 1, BLT_DTYPE_FP32);
-            blt_model_forward(model, &bytes_in, &targets, patches, M, NULL, 0, &logits, &loss, scratch);
-
-            if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
-                log_forward_activation_dump(adump_fp, step + 1, NULL, NULL, NULL, &logits);
-
-            float lv;
-            blt_tensor_download(&loss, &lv, sizeof(float));
-            if (loss_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
-                fprintf(loss_fp, "%zu %.6f\n", step + 1, (double)lv);
-            running += lv;
-            last_loss = lv;
-            running_n++;
-            patch_sum += M;
-            patch_n++;
-
-            blt_model_backward(model, &bytes_in, &targets, patches, M, NULL, 0, grad, scratch);
-
-            if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
-                log_gradient_activation_dump(adump_fp, step + 1, model, grad);
-        }
+        running += step_loss / (double)a.grad_accum;
+        running_n++;
 
         float lr = train_lr_at_step(&a, step, end_step);
 

@@ -7,6 +7,7 @@ extern "C" {
 
 #include "core/allocator.h"
 #include "core/tensor.h"
+#include "ops/elementwise.h"
 #include "models/local_encoder.h"
 #include "models/global_transformer.h"
 #include "models/local_decoder.h"
@@ -33,6 +34,10 @@ typedef struct {
 
 blt_model *blt_model_create(blt_arena *arena, const blt_model_config *config);
 blt_model_grad *blt_model_grad_create(blt_arena *arena, const blt_model *model);
+
+void blt_model_grad_zero(const blt_model *model, blt_model_grad *grad);
+void blt_model_grad_add(const blt_model *model, blt_model_grad *dst, const blt_model_grad *src);
+void blt_model_grad_scale(const blt_model *model, blt_model_grad *grad, float scale);
 
 typedef struct {
     blt_tensor patch_out;         // P_final [num_patches, patch_dim]
