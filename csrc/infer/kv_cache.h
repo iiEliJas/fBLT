@@ -45,6 +45,7 @@ extern "C" {
 typedef struct {
     const blt_local_decoder *decoder;
     size_t max_seq_len;
+    size_t batch_size;
     size_t max_subtokens; // capacity of tier 2 (= max_seq_len; patches have >= 1 byte)
     size_t embed_dim;
     size_t k; // patch_dim / embed_dim split factor (1 = no split)
@@ -67,6 +68,11 @@ typedef struct {
 // Tensor payloads come from `arena` (either backend); container metadata
 // lives on the host heap.
 blt_kv_cache *blt_kv_cache_create(blt_arena *arena, const blt_local_decoder *decoder, size_t max_seq_len);
+// Batched variant: allocates leading batch dimension. batch_size == 1
+// reduces exactly to blt_kv_cache_create. Batched decode indexing is a
+// follow-up; this entry point reserves the storage layout.
+blt_kv_cache *blt_kv_cache_create_batched(blt_arena *arena, const blt_local_decoder *decoder, size_t max_seq_len,
+                                          size_t batch_size);
 
 // Frees the cache's host-side container. Tensor payloads die with the arena.
 void blt_kv_cache_destroy(blt_kv_cache *cache);
