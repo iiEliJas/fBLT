@@ -73,6 +73,7 @@ class TrainConfig:
     seed: int = 7
     backend: str = "cpu"
     deterministic: bool = False
+    bf16: bool = False
 
     embed: int = 64
     hidden: int = 128
