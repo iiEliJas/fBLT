@@ -24,7 +24,9 @@
 #include <string.h>
 #include <stdio.h>
 
-blt_kv_cache *blt_kv_cache_create(blt_arena *arena, const blt_local_decoder *decoder, size_t max_seq_len) {
+blt_kv_cache *blt_kv_cache_create_batched(blt_arena *arena, const blt_local_decoder *decoder, size_t max_seq_len,
+                                          size_t batch_size) {
+    if (batch_size == 0) batch_size = 1;
     BLT_REQUIRE(arena != NULL && decoder != NULL, "blt_kv_cache_create: arena and decoder cannot be NULL");
     BLT_REQUIRE(max_seq_len >= 2 && max_seq_len <= decoder->config.max_seq_len,
                 "blt_kv_cache_create: max_seq_len must be in [2, decoder max_seq_len]");
@@ -37,6 +39,7 @@ blt_kv_cache *blt_kv_cache_create(blt_arena *arena, const blt_local_decoder *dec
     BLT_REQUIRE(c != NULL, "blt_kv_cache_create: failed to allocate cache container");
     c->decoder = decoder;
     c->max_seq_len = max_seq_len;
+    c->batch_size = batch_size;
     c->max_subtokens = max_seq_len; // patches have >= 1 byte each
     c->embed_dim = E;
     c->patch_dim = patch_dim;
@@ -50,8 +53,8 @@ blt_kv_cache *blt_kv_cache_create(blt_arena *arena, const blt_local_decoder *dec
     BLT_REQUIRE(c->self_k && c->self_v && c->cross_k && c->cross_v,
                 "blt_kv_cache_create: failed to allocate layer handle arrays");
 
-    size_t self_shape[2] = {max_seq_len, E};
-    size_t cross_shape[2] = {c->max_subtokens, E};
+    size_t self_shape[2] = {batch_size * max_seq_len, E};
+    size_t cross_shape[2] = {batch_size * c->max_subtokens, E};
     for (size_t l = 0; l < L; l++) {
         c->self_k[l] = blt_tensor_create(arena, self_shape, 2, BLT_DTYPE_FP32);
         c->self_v[l] = blt_tensor_create(arena, self_shape, 2, BLT_DTYPE_FP32);
@@ -59,12 +62,16 @@ blt_kv_cache *blt_kv_cache_create(blt_arena *arena, const blt_local_decoder *dec
         c->cross_v[l] = blt_tensor_create(arena, cross_shape, 2, BLT_DTYPE_FP32);
     }
 
-    c->cached_patches = (blt_patch_info *)calloc(max_seq_len, sizeof(blt_patch_info));
+    c->cached_patches = (blt_patch_info *)calloc(batch_size * max_seq_len, sizeof(blt_patch_info));
     BLT_REQUIRE(c->cached_patches != NULL, "blt_kv_cache_create: failed to allocate patch table");
 
     c->self_len = 0;
     c->cross_num_patches = 0;
     return c;
+}
+
+blt_kv_cache *blt_kv_cache_create(blt_arena *arena, const blt_local_decoder *decoder, size_t max_seq_len) {
+    return blt_kv_cache_create_batched(arena, decoder, max_seq_len, 1);
 }
 
 void blt_kv_cache_destroy(blt_kv_cache *cache) {
