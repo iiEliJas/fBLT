@@ -155,6 +155,8 @@ args_t parse_args(int argc, char **argv) {
                 .loss_log = NULL,
                 .metrics_log = NULL,
                 .deterministic = 0,
+                .bf16 = 0,
+                .bf16 = 0,
                 .cuda_scratch_mb = 0,
                 .scratch_mb = 0,
                 .model_mb = 0,
@@ -273,6 +275,8 @@ args_t parse_args(int argc, char **argv) {
         else if (!strcmp(argv[i], "--model-mb") && i + 1 < argc) a.model_mb = strtoull(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--peak-tflops") && i + 1 < argc) a.peak_tflops = atof(argv[++i]);
         else if (!strcmp(argv[i], "--deterministic")) a.deterministic = 1;
+        else if (!strcmp(argv[i], "--bf16")) a.bf16 = 1;
+        else if (!strcmp(argv[i], "--bf16")) a.bf16 = 1;
         else {
             usage();
         }

@@ -35,6 +35,8 @@
 #include "ops/softmax.h"
 #include "models/local_encoder.h"
 #include "models/global_transformer.h"
+#include "models/transformer_stack.h"
+#include "models/transformer.h"
 #include "models/local_common.h"
 #include "models/block_diffusion.h"
 #include "ops/optim.h"
@@ -286,6 +288,20 @@ static size_t blt_count_params(const blt_model *model) {
     return n;
 }
 
+static void refresh_bf16_weights(const blt_model *model) {
+    blt_transformer_stack *st = &model->global->stack;
+    if (!st->use_bf16 || !st->layer_weights_bf16) return;
+    for (size_t l = 0; l < st->num_layers; l++) {
+        blt_transformer_layer_storage *s = &st->layer_storage[l];
+        blt_transformer_weights_bf16 *b = &st->layer_weights_bf16[l];
+        blt_mixed_weight_refresh((blt_tensor *)b->attn_qkv_w, &s->attn_qkv_w);
+        blt_mixed_weight_refresh((blt_tensor *)b->attn_proj_w, &s->attn_proj_w);
+        blt_mixed_weight_refresh((blt_tensor *)b->ffn_up_w, &s->ffn_up_w);
+        blt_mixed_weight_refresh((blt_tensor *)b->ffn_gate_w, &s->ffn_gate_w);
+        blt_mixed_weight_refresh((blt_tensor *)b->ffn_down_w, &s->ffn_down_w);
+    }
+}
+
 int main(int argc, char **argv) {
     args_t a = parse_args(argc, argv);
 
@@ -330,6 +346,10 @@ int main(int argc, char **argv) {
         printf("[TRAIN] note: --train-entropy-lm runs on CPU regardless of "
                "--backend\n");
         a.use_cuda = 0;
+    }
+    if (a.bf16 && !a.use_cuda) {
+        fprintf(stderr, "train_blt_d: --bf16 requires --backend cuda\n");
+        return 1;
     }
     const blt_backend dev = a.use_cuda ? BLT_BACKEND_CUDA : BLT_BACKEND_CPU;
     g_blt_deterministic = a.deterministic;
@@ -377,6 +397,7 @@ int main(int argc, char **argv) {
 
     blt_model_config cfg;
     blt_model_config_defaults(&cfg, a.embed, a.hidden, a.enc_layers, a.glob_layers, a.dec_layers, MS, a.cross_last);
+    if (a.bf16) cfg.global_config.use_bf16 = 1;
 
     blt_model *model = blt_model_create(model_arena, &cfg);
 
@@ -754,6 +775,7 @@ int main(int argc, char **argv) {
                 blt_local_encoder_forward(model->encoder, &bytes_in, patches, M, NULL, 0, &P, &h, scratch);
 
                 blt_tensor O = blt_tensor_create(scratch, p_shape2, 2, BLT_DTYPE_FP32);
+                refresh_bf16_weights(model);
                 blt_global_transformer_forward(model->global, &P, NULL, 0, &O, scratch);
 
                 size_t S = N + batch.n_block_rows;
@@ -804,6 +826,7 @@ int main(int argc, char **argv) {
                 size_t lg_shape[2] = {N, 256};
                 blt_tensor logits = blt_tensor_create(scratch, lg_shape, 2, BLT_DTYPE_FP32);
                 blt_tensor loss = blt_tensor_create(scratch, sc_shape, 1, BLT_DTYPE_FP32);
+                refresh_bf16_weights(model);
                 blt_model_forward(model, &bytes_in, &targets, patches, M, NULL, 0, &logits, &loss, scratch);
 
                 if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))
