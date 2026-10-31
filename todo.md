@@ -54,6 +54,7 @@ full workflow, see [docs/RESEARCH_GUIDE.md](docs/RESEARCH_GUIDE.md).
 | 23 | Tokenizer/BPE hybrid patching modes | Data | Open |
 | 24 | Official-scale configuration and scaling matrix | Training | Open |
 | 25 | Tensor parallelism and multi-node training | Training | Open |
+| 26 | Backward-pass and launch-overhead optimization | Training (CUDA) | In progress |
 
 ---
 
