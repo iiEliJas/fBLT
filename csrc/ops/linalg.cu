@@ -1,4 +1,6 @@
 #include "core/backend.h"
+#include "core/allocator.h"
+#include "core/cuda_shim.h"
 #include "ops/matmul.h"
 #include "core/tensor.h"
 
@@ -48,6 +50,47 @@ extern "C" void blt_matmul_cuda(const blt_tensor *a, const blt_tensor *b, blt_te
     const size_t k = a->shape[1];
     const size_t n = b->shape[1];
     if (m == 0 || k == 0 || n == 0) {
+        return;
+    }
+
+    // Mixed precision: if one operand is fp8 and the other fp32, cast the fp32
+    // operand to fp8 in scratch and recurse with both fp8.
+    if ((a->dtype == BLT_DTYPE_FP32 && b->dtype == BLT_DTYPE_FP8_E4M3) ||
+        (a->dtype == BLT_DTYPE_FP8_E4M3 && b->dtype == BLT_DTYPE_FP32)) {
+        const blt_tensor *fp8_op = (a->dtype == BLT_DTYPE_FP8_E4M3) ? a : b;
+        const blt_tensor *fp32_op = (a->dtype == BLT_DTYPE_FP32) ? a : b;
+        // cast fp32_op to fp8 scratch
+        void *scratch = blt_arena_alloc(blt_cuda_get_scratch_arena(), fp32_op->numel, 64);
+        int nn = (int)fp32_op->numel;
+        int th = 256, bl = (nn + th - 1) / th;
+        // inline cast kernel
+        // (declared below via a lambda? use a helper kernel)
+        // We'll call a small kernel defined above.
+        // For simplicity, cast on host via cudaMemcpy? No, stay on device.
+        // Use blt_cast_cuda with temp tensors.
+        // Build temp tensor for fp32 (view) and fp8 (scratch).
+        blt_tensor t32 = *fp32_op;
+        t32.dtype = BLT_DTYPE_FP32;
+        t32.data = (void *)fp32_op->data;
+        blt_tensor t8 = *fp32_op;
+        t8.dtype = BLT_DTYPE_FP8_E4M3;
+        t8.data = scratch;
+        t8.backend = BLT_BACKEND_CUDA;
+        extern void blt_cast_cuda(const blt_tensor *, blt_tensor *);
+        blt_cast_cuda(&t32, &t8);
+        blt_tensor a8 = *a;
+        blt_tensor b8 = *b;
+        if (a->dtype == BLT_DTYPE_FP32) {
+            a8 = t8;
+            a8.shape[0] = a->shape[0];
+            a8.shape[1] = a->shape[1];
+        }
+        if (b->dtype == BLT_DTYPE_FP32) {
+            b8 = t8;
+            b8.shape[0] = b->shape[0];
+            b8.shape[1] = b->shape[1];
+        }
+        blt_matmul_cuda(&a8, &b8, out);
         return;
     }
 

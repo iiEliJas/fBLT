@@ -24,6 +24,7 @@ typedef struct {
     float rope_theta;
     size_t max_seq_len; // max on num_patches
     bool use_bf16;      // mixed-precision matmuls via bf16 weight copies
+    bool use_fp8;       // mixed-precision matmuls via fp8 weight copies
 } blt_global_transformer_config;
 
 typedef struct {

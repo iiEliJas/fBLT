@@ -77,6 +77,11 @@ typedef struct {
     blt_tensor ffn_up_w_bf16;
     blt_tensor ffn_gate_w_bf16;
     blt_tensor ffn_down_w_bf16;
+    blt_tensor attn_qkv_w_fp8;
+    blt_tensor attn_proj_w_fp8;
+    blt_tensor ffn_up_w_fp8;
+    blt_tensor ffn_gate_w_fp8;
+    blt_tensor ffn_down_w_fp8;
 } blt_transformer_layer_storage;
 
 typedef struct {
