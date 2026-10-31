@@ -157,6 +157,7 @@ args_t parse_args(int argc, char **argv) {
                 .deterministic = 0,
                 .bf16 = 0,
                 .bf16 = 0,
+                .flash_attn = 0,
                 .cuda_scratch_mb = 0,
                 .scratch_mb = 0,
                 .model_mb = 0,
@@ -277,6 +278,7 @@ args_t parse_args(int argc, char **argv) {
         else if (!strcmp(argv[i], "--deterministic")) a.deterministic = 1;
         else if (!strcmp(argv[i], "--bf16")) a.bf16 = 1;
         else if (!strcmp(argv[i], "--fp8")) a.fp8 = 1;
+        else if (!strcmp(argv[i], "--flash-attn")) a.flash_attn = 1;
         else if (!strcmp(argv[i], "--bf16")) a.bf16 = 1;
         else if (!strcmp(argv[i], "--fp8")) a.fp8 = 1;
         else {

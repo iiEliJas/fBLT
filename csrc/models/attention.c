@@ -1,4 +1,5 @@
 #include "models/attention.h"
+#include <stdlib.h>
 #include "core/backend.h"
 #include "core/tensor.h"
 #include "core/allocator.h"
@@ -90,7 +91,7 @@ static void apply_rope_to_all_heads(float *qkv_data, size_t seq_len, size_t embe
 
 static void attention_head(blt_backend backend, const float *qkv_data, size_t head_idx, size_t seq_len,
                            size_t embed_dim, size_t head_dim, bool is_causal, const float *mask, float scale,
-                           float *scores_buf, float *combined_out) {
+                           float *scores_buf, float *lse_buf, float *combined_out) {
     size_t qkv_stride = 3 * embed_dim;
     size_t q_offset = head_idx * head_dim;
     size_t k_offset = embed_dim + head_idx * head_dim;
@@ -107,7 +108,15 @@ static void attention_head(blt_backend backend, const float *qkv_data, size_t he
     a.combined = combined_out;
     a.combined_stride = embed_dim;
     a.combined_col_offset = q_offset;
-    a.weights_out = scores_buf; // doubles as the backward cache when requested
+    const char *flash_env = getenv("BLT_FLASH_ATTN");
+    int flash_on = (flash_env && flash_env[0] == '1');
+    if (flash_on) {
+        a.weights_out = NULL;
+        a.lse_out = lse_buf;
+    } else {
+        a.weights_out = scores_buf;
+        a.lse_out = NULL;
+    }
     a.mask = mask;
     a.nq = seq_len;
     a.nk = seq_len;
@@ -189,7 +198,7 @@ void blt_multihead_attention(const blt_tensor *input, const blt_tensor *weight_q
 
     for (size_t head = 0; head < num_heads; ++head) {
         attention_head(input->backend, qkv_data, head, seq_len, embed_dim, head_dim, config->is_causal, mask_data,
-                       scale, scores_buf, combined_data);
+                       scale, scores_buf, scores_buf, combined_data);
     }
 
     blt_tensor combined_tensor;
@@ -200,7 +209,8 @@ void blt_multihead_attention(const blt_tensor *input, const blt_tensor *weight_q
 typedef struct {
     float *qkv_data;      // [seq_len, 3*embed_dim], post-RoPE
     float *combined_data; // [seq_len, embed_dim]
-    float *weights_all;   // [num_heads, seq_len, seq_len] softmax weights
+    float *weights_all;   // [num_heads, seq_len, seq_len] softmax weights (legacy)
+    float *lse_all;       // [num_heads, seq_len, 2] LSE (m, l) per row (flash)
 } attn_bwd_forward_cache;
 
 static void attn_bwd_recompute_forward(const blt_tensor *input, const blt_tensor *weight_qkv,
@@ -216,6 +226,8 @@ static void attn_bwd_recompute_forward(const blt_tensor *input, const blt_tensor
     cache->qkv_data = (float *)blt_arena_alloc(arena, qkv_numel * sizeof(float), sizeof(float));
     cache->combined_data = (float *)blt_arena_alloc(arena, combined_numel * sizeof(float), sizeof(float));
     cache->weights_all = (float *)blt_arena_alloc(arena, weights_numel * sizeof(float), sizeof(float));
+    size_t lse_numel = num_heads * seq_len * 2;
+    cache->lse_all = (float *)blt_arena_alloc(arena, lse_numel * sizeof(float), sizeof(float));
     {
         blt_tensor zt;
         blt_tensor_view_2d(&zt, cache->combined_data, combined_numel, 1, input->backend);
@@ -272,7 +284,7 @@ static void attn_bwd_recompute_forward(const blt_tensor *input, const blt_tensor
     for (size_t head = 0; head < num_heads; head++) {
         float *W = cache->weights_all + head * seq_len * seq_len;
         attention_head(input->backend, cache->qkv_data, head, seq_len, embed_dim, head_dim, config->is_causal,
-                       mask_data, scale, W, cache->combined_data);
+                       mask_data, scale, W, cache->lse_all + head * seq_len * 2, cache->combined_data);
     }
 }
 
@@ -328,6 +340,7 @@ void blt_multihead_attention_backward(const blt_tensor *input, const blt_tensor 
     }
 
     float *grad_scores_buf = (float *)blt_arena_alloc(arena, seq_len * seq_len * sizeof(float), sizeof(float));
+    const float *mask_data = build_mask(config, seq_len, arena);
 
     for (size_t head = 0; head < num_heads; head++) {
         size_t q_offset = head * head_dim;
@@ -342,7 +355,17 @@ void blt_multihead_attention_backward(const blt_tensor *input, const blt_tensor 
         a.k_stride = qkv_stride;
         a.v = cache.qkv_data + v_offset;
         a.v_stride = qkv_stride;
-        a.weights = cache.weights_all + head * seq_len * seq_len;
+        const char *flash_env2 = getenv("BLT_FLASH_ATTN");
+        int flash_on2 = (flash_env2 && flash_env2[0] == '1');
+        if (flash_on2) {
+            a.weights = cache.weights_all + head * seq_len * seq_len;
+            a.lse = cache.lse_all + head * seq_len * 2;
+        } else {
+            a.weights = cache.weights_all + head * seq_len * seq_len;
+            a.lse = NULL;
+        }
+        a.mask = (const float *)mask_data; // may be NULL
+        a.is_causal = config->is_causal;
         a.grad_combined = grad_combined_data;
         a.gc_stride = embed_dim;
         a.gc_col_offset = q_offset;

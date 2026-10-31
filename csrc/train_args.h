@@ -83,6 +83,7 @@ typedef struct {
     int deterministic;
     int bf16;
     int fp8;
+    int flash_attn;
     size_t cuda_scratch_mb;
     size_t scratch_mb;
     size_t model_mb;

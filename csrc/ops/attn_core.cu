@@ -148,7 +148,7 @@ __global__ void blt_attn_core_fwd_kernel(const float *q, size_t q_stride, const 
     }
 }
 
-#define FLASH_TILE 32
+#define FLASH_TILE 128
 
 // Flash-attention-style fused forward: tiled over keys with online softmax.
 // Reduces global memory traffic by keeping scores in shared memory and
@@ -156,13 +156,13 @@ __global__ void blt_attn_core_fwd_kernel(const float *q, size_t q_stride, const 
 // (second pass) so the backward path is unchanged.
 __global__ void blt_attn_core_flash_fwd_kernel(const float *q, size_t q_stride, const float *k, size_t k_stride,
                                                const float *v, size_t v_stride, float *combined, size_t c_stride,
-                                               size_t c_offset, float *scores, const float *mask, size_t nk,
-                                               size_t head_dim, int is_causal, float scale) {
+                                               size_t c_offset, float *scores, float *lse_out, const float *mask,
+                                               size_t nk, size_t head_dim, int is_causal, float scale) {
     const size_t i = blockIdx.x;
     const size_t tid = threadIdx.x;
     const float *q_i = q + i * q_stride;
     float *out_i = combined + i * c_stride + c_offset;
-    float *sc_i = scores + i * nk;
+    float *sc_i = scores ? (scores + i * nk) : NULL;
 
     __shared__ float tile_scores[FLASH_TILE];
 
@@ -198,6 +198,7 @@ __global__ void blt_attn_core_flash_fwd_kernel(const float *q, size_t q_stride, 
                 val = -INFINITY;
             }
             tile_scores[tid] = val;
+            if (sc_i) sc_i[j_start + tid] = val; // store raw score
         }
         __syncthreads();
 
@@ -262,24 +263,25 @@ __global__ void blt_attn_core_flash_fwd_kernel(const float *q, size_t q_stride, 
         }
     }
 
-    // Store weights in second pass (using final m, l)
-    for (size_t j = tid; j < nk; j += ATTN_BLOCK) {
-        const float *k_j = k + j * k_stride;
-        float sum = 0.0f;
-        for (size_t d = 0; d < head_dim; ++d) {
-            sum += q_i[d] * k_j[d];
+    if (lse_out != NULL) {
+        if (tid == 0) {
+            lse_out[i * 2] = m;
+            lse_out[i * 2 + 1] = l;
         }
-        float val = sum * scale;
-        if (mask != NULL) {
-            val += mask[i * nk + j];
-        } else if (is_causal && j > i) {
-            val = -INFINITY;
-        }
-        if (isfinite(val) && l > 0.0f) {
-            sc_i[j] = expf(val - m) / l;
-        } else {
-            sc_i[j] = 0.0f;
-        }
+        if (sc_i)
+            for (size_t j = tid; j < nk; j += ATTN_BLOCK) {
+                sc_i[j] = 0.0f;
+            }
+    } else {
+        if (sc_i)
+            for (size_t j = tid; j < nk; j += ATTN_BLOCK) {
+                float val = sc_i[j];
+                if (isfinite(val) && l > 0.0f) {
+                    sc_i[j] = expf(val - m) / l;
+                } else {
+                    sc_i[j] = 0.0f;
+                }
+            }
     }
 }
 
@@ -289,8 +291,8 @@ extern "C" void blt_attention_head_core_cuda(blt_backend backend, const blt_atte
                 "blt_attention_head_core: CUDA implementation called with non-CUDA backend");
     BLT_REQUIRE(a != NULL && a->q != NULL && a->k != NULL && a->v != NULL && a->combined != NULL,
                 "blt_attention_head_core: buffers must not be NULL");
-    BLT_REQUIRE(a->weights_out != NULL || a->scores_scratch != NULL,
-                "blt_attention_head_core: need weights_out or scores_scratch");
+    BLT_REQUIRE(a->weights_out != NULL || a->scores_scratch != NULL || a->lse_out != NULL,
+                "blt_attention_head_core: need weights_out, scores_scratch, or lse_out");
     float *scores = a->weights_out ? a->weights_out : a->scores_scratch;
 
     int use_flash = 0;
@@ -300,7 +302,7 @@ extern "C" void blt_attention_head_core_cuda(blt_backend backend, const blt_atte
     if (use_flash) {
         blt_attn_core_flash_fwd_kernel<<<(unsigned)a->nq, ATTN_BLOCK>>>(
             a->q, a->q_stride, a->k, a->k_stride, a->v, a->v_stride, a->combined, a->combined_stride,
-            a->combined_col_offset, scores, a->mask, a->nk, a->head_dim, a->is_causal ? 1 : 0, a->scale);
+            a->combined_col_offset, scores, a->lse_out, a->mask, a->nk, a->head_dim, a->is_causal ? 1 : 0, a->scale);
     } else {
         blt_attn_core_fwd_kernel<<<(unsigned)a->nq, ATTN_BLOCK>>>(
             a->q, a->q_stride, a->k, a->k_stride, a->v, a->v_stride, a->combined, a->combined_stride,
@@ -472,13 +474,52 @@ __global__ void blt_attn_core_bwd_kv_kernel(const float *q, size_t q_stride, con
     }
 }
 
+// Recompute softmax weights from LSE (m, l) for flash-attention backward.
+__global__ void blt_attn_recompute_weights_kernel(const float *q, size_t q_stride, const float *k, size_t k_stride,
+                                                  const float *lse, const float *mask, size_t nk, size_t head_dim,
+                                                  int is_causal, float scale, float *weights) {
+    const size_t i = blockIdx.x;
+    const size_t tid = threadIdx.x;
+    const float *q_i = q + i * q_stride;
+    float *w_i = weights + i * nk;
+    float m = lse[i * 2];
+    float l = lse[i * 2 + 1];
+
+    for (size_t j = tid; j < nk; j += ATTN_BLOCK) {
+        const float *k_j = k + j * k_stride;
+        float sum = 0.0f;
+        for (size_t d = 0; d < head_dim; ++d) {
+            sum += q_i[d] * k_j[d];
+        }
+        float val = sum * scale;
+        if (mask != NULL) val += mask[i * nk + j];
+        else if (is_causal && j > i) val = -INFINITY;
+        if (isfinite(val) && l > 0.0f) {
+            w_i[j] = expf(val - m) / l;
+        } else {
+            w_i[j] = 0.0f;
+        }
+    }
+}
+
 extern "C" void blt_attention_head_core_backward_cuda(blt_backend backend, const blt_attention_head_bwd_args *a) {
     (void)backend;
     BLT_REQUIRE(backend == BLT_BACKEND_CUDA,
                 "blt_attention_head_core_backward: CUDA implementation called with non-CUDA backend");
-    BLT_REQUIRE(a != NULL && a->q != NULL && a->k != NULL && a->v != NULL && a->weights != NULL &&
-                    a->grad_combined != NULL,
+    BLT_REQUIRE(a != NULL && a->q != NULL && a->k != NULL && a->v != NULL && a->grad_combined != NULL,
                 "blt_attention_head_core_backward: buffers must not be NULL");
+
+    // If LSE provided (flash path), recompute weights into scores_scratch
+    const float *weights = a->weights;
+    if (a->lse != NULL && a->weights != NULL) {
+        blt_attn_recompute_weights_kernel<<<(unsigned)a->nq, ATTN_BLOCK>>>(a->q, a->q_stride, a->k, a->k_stride, a->lse,
+                                                                           a->mask, a->nk, a->head_dim, a->is_causal,
+                                                                           a->scale, (float *)a->weights);
+        blt_cuda_launch_check("blt_attn_recompute_weights");
+        weights = a->weights;
+    }
+
+    BLT_REQUIRE(weights != NULL, "blt_attention_head_core_backward: weights or lse+weights required");
 
     const bool need_gs = (a->grad_q != NULL || a->grad_k != NULL);
     BLT_REQUIRE(!need_gs || a->scores_scratch != NULL,
@@ -486,7 +527,7 @@ extern "C" void blt_attention_head_core_backward_cuda(blt_backend backend, const
 
     if (need_gs) {
         blt_attn_core_bwd_row_kernel<<<(unsigned)a->nq, ATTN_BLOCK>>>(
-            a->q, a->q_stride, a->v, a->v_stride, a->weights, a->grad_combined, a->gc_stride, a->gc_col_offset,
+            a->q, a->q_stride, a->v, a->v_stride, weights, a->grad_combined, a->gc_stride, a->gc_col_offset,
             a->scores_scratch, a->grad_q, a->gq_stride, a->nk, a->head_dim, a->scale);
         blt_cuda_launch_check("blt_attention_head_core_backward (row pass)");
     }
@@ -494,7 +535,7 @@ extern "C" void blt_attention_head_core_backward_cuda(blt_backend backend, const
     if (a->grad_k != NULL || a->grad_v != NULL) {
         if (a->head_dim <= ATTN_BLOCK) {
             blt_attn_core_bwd_kv_kernel<<<(unsigned)a->nk, ATTN_BLOCK>>>(
-                a->q, a->q_stride, a->weights, a->grad_combined, a->gc_stride, a->gc_col_offset, a->scores_scratch,
+                a->q, a->q_stride, weights, a->grad_combined, a->gc_stride, a->gc_col_offset, a->scores_scratch,
                 a->grad_k, a->gk_stride, a->grad_v, a->gv_stride, a->nq, a->nk, a->head_dim);
         } else {
             const size_t cells = a->nk * a->head_dim;
@@ -502,7 +543,7 @@ extern "C" void blt_attention_head_core_backward_cuda(blt_backend backend, const
             if (blocks > 4096) blocks = 4096;
             if (blocks == 0) blocks = 1;
             blt_attn_core_bwd_kv_cells_kernel<<<blocks, ATTN_BLOCK>>>(
-                a->q, a->q_stride, a->weights, a->grad_combined, a->gc_stride, a->gc_col_offset, a->scores_scratch,
+                a->q, a->q_stride, weights, a->grad_combined, a->gc_stride, a->gc_col_offset, a->scores_scratch,
                 a->grad_k, a->gk_stride, a->grad_v, a->gv_stride, a->nq, a->nk, a->head_dim);
         }
         blt_cuda_launch_check("blt_attention_head_core_backward (kv pass)");
