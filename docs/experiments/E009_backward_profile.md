@@ -37,3 +37,26 @@ Backward matmuls and memory traffic (memset/memcpy) dominate. Future speed work 
 
 ## Status
 Checked (exploratory profiling).
+
+## Optimization results (feature/cuda-backward-opt)
+
+| Change | ms/step (FP32) | bwd | opt |
+|--------|----------------|-----|-----|
+| Baseline | 26.2 | 12.9 | 4.9 |
+| + async memset + skip redundant grad passes (grad_accum==1) | 22.1 | 12.6 | 4.3 |
+| + batched gradient-norm download in clip_all | 19.9 | 12.0 | 1.0 |
+| + skip zero-init for fully-overwritten upload tensors | 20.2 | 12.6 | 1.1 |
+
+Net: ~23% faster (26.2 -> 20.2), loss unchanged (556.8496).
+
+## Remaining (item 26)
+
+- 26.4 (fold clip scale into optimizer): low value; clip scale only runs when
+  grad norm exceeds max_norm, rare in practice.
+- 26.6 (fuse elementwise chains): moderate effort; would reduce the ~197
+  `blt_add_kernel` launches per step.
+- 26.7 (CUDA graph capture): highest potential win, but the step mixes host-side
+  per-step variation (timestep draw, patch count, text) with device kernels, and
+  several kernels read host-side structs by pointer. A correct capture needs
+  those inputs moved to device buffers updated before replay. Deferred to a
+  dedicated branch.
