@@ -3,6 +3,7 @@
 
 #include <string.h>
 #include <stdint.h>
+#include <math.h>
 
 // fp32 -> bf16 -> fp32 round-trip. Deterministic, bit-exact on all
 // platforms — this is the CPU ground truth for CUDA parity tests.
