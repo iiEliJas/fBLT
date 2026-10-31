@@ -13,6 +13,11 @@ extern "C" {
 // sum(a[i] * b[i]) for i in [0, n).
 float blt_vec_dot(blt_backend backend, const float *a, const float *b, size_t n);
 
+// Same as blt_vec_dot, but writes the result to *out (host or device pointer
+// matching backend) instead of returning it. Avoids a host sync when the
+// caller accumulates several results before downloading.
+void blt_vec_dot_into(blt_backend backend, const float *a, const float *b, size_t n, float *out);
+
 // Numerically stable softmax over a single FP32 row, in place.
 //
 // For each column col:

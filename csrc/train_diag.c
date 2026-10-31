@@ -7,6 +7,9 @@
 #include <math.h>
 #include <stdlib.h>
 #include "ops/vecmath.h"
+#ifdef BLT_WITH_CUDA
+#include <cuda_runtime.h>
+#endif
 #include "core/cuda_shim.h"
 
 //----------------------------------------------------------------------
@@ -36,14 +39,80 @@ static void clip_scale_fn(float *p, const blt_param_info *info, void *ctx) {
     }
 }
 
-float clip_all(blt_model *m, blt_model_grad *g, float max_norm) {
-    struct clip_sq_ctx sq_ctx = {0.0f};
-    blt_model_visit_params(m, g, clip_sq_fn, &sq_ctx, 1);
+// Device-side accumulation: launch every dot into a grow-only device array,
+// then do a single D2H + host sum. Avoids one sync per parameter tensor.
+struct clip_sq_ctx_dev {
+    float *d_sums;
+    size_t count;
+    size_t cap;
+    blt_backend backend;
+};
 
-    const float norm = sqrtf(sq_ctx.sq);
-    if (norm <= max_norm || norm == 0.0f) return norm;
+static void clip_sq_fn_dev(float *p, const blt_param_info *info, void *ctx) {
+    struct clip_sq_ctx_dev *c = (struct clip_sq_ctx_dev *)ctx;
+    if (c->count >= c->cap) {
+        size_t newcap = c->cap ? c->cap * 2 : 64;
+        float *nd = NULL;
+        if (c->backend == BLT_BACKEND_CUDA) {
+#ifdef BLT_WITH_CUDA
+            if (c->d_sums) cudaFree(c->d_sums);
+            cudaMalloc((void **)&nd, newcap * sizeof(float));
+#endif
+        } else {
+            nd = (float *)realloc(c->d_sums, newcap * sizeof(float));
+        }
+        c->d_sums = nd;
+        c->cap = newcap;
+    }
+    blt_vec_dot_into(c->backend, (const float *)p, (const float *)p, info->numel, &c->d_sums[c->count]);
+    c->count++;
+}
+
+float clip_all(blt_model *m, blt_model_grad *g, float max_norm) {
+    struct clip_sq_ctx_dev ctx = {0};
+    ctx.backend = g ? g->encoder_grad ? BLT_BACKEND_CPU : BLT_BACKEND_CPU : BLT_BACKEND_CPU;
+    // backend detection: use model's backend via first param; fall back to CPU
+    // We pass the real backend through the visitor by querying param backend in fn.
+    // Determine backend from the model pointer is not available here; infer from
+    // the grad's first tensor backend instead.
+    if (g && g->encoder_grad && g->encoder_grad->embedding_grad.backend == BLT_BACKEND_CUDA) {
+        ctx.backend = BLT_BACKEND_CUDA;
+    }
+
+    // Use device-accumulation path for both backends (CPU uses host array).
+    blt_model_visit_params(m, g, clip_sq_fn_dev, &ctx, 1);
+
+    float sq = 0.0f;
+    if (ctx.backend == BLT_BACKEND_CUDA) {
+#ifdef BLT_WITH_CUDA
+        float *host = (float *)malloc(ctx.count * sizeof(float));
+        cudaMemcpy(host, ctx.d_sums, ctx.count * sizeof(float), cudaMemcpyDeviceToHost);
+        for (size_t i = 0; i < ctx.count; i++) sq += host[i];
+        free(host);
+#endif
+    } else {
+        for (size_t i = 0; i < ctx.count; i++) sq += ctx.d_sums[i];
+    }
+    const float norm = sqrtf(sq);
+    if (norm <= max_norm || norm == 0.0f) {
+        if (ctx.backend == BLT_BACKEND_CUDA) {
+#ifdef BLT_WITH_CUDA
+            if (ctx.d_sums) cudaFree(ctx.d_sums);
+#endif
+        } else {
+            free(ctx.d_sums);
+        }
+        return norm;
+    }
     struct clip_scale_ctx sc_ctx = {max_norm / norm};
     blt_model_visit_params(m, g, clip_scale_fn, &sc_ctx, 1);
+    if (ctx.backend == BLT_BACKEND_CUDA) {
+#ifdef BLT_WITH_CUDA
+        if (ctx.d_sums) cudaFree(ctx.d_sums);
+#endif
+    } else {
+        free(ctx.d_sums);
+    }
     return norm;
 }
 
