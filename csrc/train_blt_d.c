@@ -690,7 +690,7 @@ int main(int argc, char **argv) {
 
     for (size_t step = a.start_step; step < end_step; step++) {
         if (timing) ts0 = blt_time_sec();
-        blt_model_grad_zero(model, grad_accum);
+        if (a.grad_accum > 1) blt_model_grad_zero(model, grad_accum);
         double step_loss = 0.0;
         for (size_t micro = 0; micro < a.grad_accum; micro++) {
             const size_t data_step = step * a.grad_accum + micro;
@@ -847,12 +847,14 @@ int main(int argc, char **argv) {
                     log_gradient_activation_dump(adump_fp, step + 1, model, grad);
             }
 
-            blt_model_grad_add(model, grad_accum, grad);
+            if (a.grad_accum > 1) blt_model_grad_add(model, grad_accum, grad);
         }
 
-        blt_model_grad_zero(model, grad);
-        blt_model_grad_add(model, grad, grad_accum);
-        blt_model_grad_scale(model, grad, 1.0f / (float)a.grad_accum);
+        if (a.grad_accum > 1) {
+            blt_model_grad_zero(model, grad);
+            blt_model_grad_add(model, grad, grad_accum);
+            blt_model_grad_scale(model, grad, 1.0f / (float)a.grad_accum);
+        }
 
         running += step_loss / (double)a.grad_accum;
         running_n++;
