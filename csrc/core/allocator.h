@@ -20,6 +20,7 @@ void blt_arena_destroy(blt_arena *arena);
 void blt_arena_reset(blt_arena *arena);
 void *blt_arena_alloc(blt_arena *arena, size_t bytes, size_t alignment);
 blt_tensor blt_tensor_create(blt_arena *arena, const size_t *shape, size_t ndim, blt_dtype dtype);
+blt_tensor blt_tensor_create_uninit(blt_arena *arena, const size_t *shape, size_t ndim, blt_dtype dtype);
 
 // Source must be CPU-backed. Requires BLT_WITH_CUDA.
 blt_tensor blt_tensor_to_device(const blt_tensor *src, blt_arena *device_arena);

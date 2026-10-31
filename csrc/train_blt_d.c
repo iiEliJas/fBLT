@@ -189,7 +189,7 @@ static void blt_monitor(const blt_model *model, blt_arena *scratch, blt_arena *s
 
         blt_arena_reset(scratch);
         size_t bshape[1] = {N};
-        blt_tensor bytes_in = blt_tensor_create(scratch, bshape, 1, BLT_DTYPE_UINT8);
+        blt_tensor bytes_in = blt_tensor_create_uninit(scratch, bshape, 1, BLT_DTYPE_UINT8);
         blt_tensor_upload(&bytes_in, text, N);
         blt_model_enc_out enc;
         blt_model_encode(model, &bytes_in, patches, M, NULL, 0, &enc, scratch);
@@ -759,7 +759,7 @@ int main(int argc, char **argv) {
 
             // Targets for L_clean: window+1 bytes so the last row has a prediction target
             size_t tshape[1] = {N + 1};
-            blt_tensor targets = blt_tensor_create(scratch, tshape, 1, BLT_DTYPE_UINT8);
+            blt_tensor targets = blt_tensor_create_uninit(scratch, tshape, 1, BLT_DTYPE_UINT8);
             blt_tensor_upload(&targets, text, N + 1);
 
             size_t h_shape[2] = {N, a.embed};
