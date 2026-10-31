@@ -75,6 +75,7 @@ class TrainConfig:
     deterministic: bool = False
     bf16: bool = False
     fp8: bool = False
+    flash_attn: bool = False
 
     embed: int = 64
     hidden: int = 128
