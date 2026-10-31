@@ -335,12 +335,9 @@ void blt_transformer_layer_backward(const blt_transformer_layer_cache *cache, co
     blt_tensor grad_norm2_b = blt_tensor_create(arena, embed_shape, 2, BLT_DTYPE_FP32);
     blt_matmul_backward(&cache->norm2_out, w->ffn_gate_w, &grad_gate, &grad_norm2_b, &lg->ffn_gate_w);
 
-    blt_tensor grad_norm2_out = blt_tensor_create(arena, embed_shape, 2, BLT_DTYPE_FP32);
-    blt_add(&grad_norm2_a, &grad_norm2_b, &grad_norm2_out);
-
     blt_tensor grad_attn_residual_from_norm2 = blt_tensor_create(arena, embed_shape, 2, BLT_DTYPE_FP32);
-    blt_rmsnorm_backward(&grad_norm2_out, &cache->attn_residual, w->norm2_weight, &grad_attn_residual_from_norm2,
-                         &lg->norm2_weight);
+    blt_rmsnorm_backward_add(&grad_norm2_a, &grad_norm2_b, &cache->attn_residual, w->norm2_weight,
+                             &grad_attn_residual_from_norm2, &lg->norm2_weight);
 
     blt_tensor grad_attn_residual = blt_tensor_create(arena, embed_shape, 2, BLT_DTYPE_FP32);
     blt_add(grad_out, &grad_attn_residual_from_norm2, &grad_attn_residual);

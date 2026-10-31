@@ -454,6 +454,70 @@ extern "C" void blt_rmsnorm_backward_cuda(const blt_tensor *grad_out, const blt_
     blt_cuda_launch_check("blt_rmsnorm_backward");
 }
 
+// Fused RMSNorm backward that sums two gradient inputs (grad_a + grad_b) internally,
+// avoiding a separate blt_add + intermediate buffer.
+__global__ void blt_rmsnorm_backward_add_fused_kernel(const float *grad_a, const float *grad_b, const float *x,
+                                                      const float *w, float *grad_x, float *grad_weight, size_t seq_len,
+                                                      size_t embed_dim) {
+    extern __shared__ float shmem[];
+    float *inv_rms = shmem;
+
+    const size_t tid = threadIdx.x;
+    const size_t num_threads = blockDim.x;
+
+    for (size_t i = tid; i < seq_len; i += num_threads) {
+        const float *row = x + i * embed_dim;
+        float sumsq = 0.0f;
+        for (size_t j = 0; j < embed_dim; j++) sumsq += row[j] * row[j];
+        float mean_sq = sumsq / (float)embed_dim;
+        inv_rms[i] = 1.0f / sqrtf(mean_sq + BLT_RMSNORM_EPS);
+    }
+    __syncthreads();
+
+    for (size_t i = tid; i < seq_len; i += num_threads) {
+        const float *row = x + i * embed_dim;
+        const float *ga_row = grad_a + i * embed_dim;
+        const float *gb_row = grad_b + i * embed_dim;
+        float *gx_row = grad_x + i * embed_dim;
+
+        float dot = 0.0f;
+        for (size_t j = 0; j < embed_dim; j++) {
+            float go = ga_row[j] + gb_row[j];
+            dot += go * w[j] * row[j];
+        }
+
+        float inv_rms3_over_n = (inv_rms[i] * inv_rms[i] * inv_rms[i]) / (float)embed_dim;
+        for (size_t j = 0; j < embed_dim; j++) {
+            float go = ga_row[j] + gb_row[j];
+            gx_row[j] = go * w[j] * inv_rms[i] - row[j] * inv_rms3_over_n * dot;
+        }
+    }
+    __syncthreads();
+
+    for (size_t j = tid; j < embed_dim; j += num_threads) {
+        float acc = grad_weight[j];
+        for (size_t i = 0; i < seq_len; i++) {
+            float go = grad_a[i * embed_dim + j] + grad_b[i * embed_dim + j];
+            acc += go * x[i * embed_dim + j] * inv_rms[i];
+        }
+        grad_weight[j] = acc;
+    }
+}
+
+extern "C" void blt_rmsnorm_backward_add_cuda(const blt_tensor *grad_a, const blt_tensor *grad_b, const blt_tensor *x,
+                                              const blt_tensor *weight, blt_tensor *grad_x, blt_tensor *grad_weight) {
+    const size_t seq_len = x->shape[0];
+    const size_t embed_dim = x->shape[1];
+
+    size_t shared_mem = seq_len * sizeof(float);
+    size_t threads = (seq_len > embed_dim ? seq_len : embed_dim);
+    if (threads > 256) threads = 256;
+    blt_rmsnorm_backward_add_fused_kernel<<<1, threads, shared_mem>>>(
+        (const float *)grad_a->data, (const float *)grad_b->data, (const float *)x->data, (const float *)weight->data,
+        (float *)grad_x->data, (float *)grad_weight->data, seq_len, embed_dim);
+    blt_cuda_launch_check("blt_rmsnorm_backward_add");
+}
+
 // LayerNorm (forward only; backward is unimplemented on CPU as well)
 
 __global__ void blt_layernorm_forward_kernel(const float *x, const float *w, const float *b, float *out, size_t seq_len,

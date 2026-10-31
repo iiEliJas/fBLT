@@ -96,6 +96,8 @@ void blt_layernorm_backward_cpu(const blt_tensor *grad_out, const blt_tensor *x,
 void blt_rmsnorm_forward_cpu(const blt_tensor *x, const blt_tensor *weight, blt_tensor *out);
 void blt_rmsnorm_backward_cpu(const blt_tensor *grad_out, const blt_tensor *x, const blt_tensor *weight,
                               blt_tensor *grad_x, blt_tensor *grad_weight);
+void blt_rmsnorm_backward_add_cpu(const blt_tensor *grad_a, const blt_tensor *grad_b, const blt_tensor *x,
+                                  const blt_tensor *weight, blt_tensor *grad_x, blt_tensor *grad_weight);
 
 #define BLT_CUDA_NOT_IMPLEMENTED(op_name) BLT_FATAL(op_name " is not yet implemented for CUDA")
 
@@ -174,6 +176,8 @@ void blt_layernorm_forward_cuda(const blt_tensor *x, const blt_tensor *weight, c
 void blt_rmsnorm_forward_cuda(const blt_tensor *x, const blt_tensor *weight, blt_tensor *out);
 void blt_rmsnorm_backward_cuda(const blt_tensor *grad_out, const blt_tensor *x, const blt_tensor *weight,
                                blt_tensor *grad_x, blt_tensor *grad_weight);
+void blt_rmsnorm_backward_add_cuda(const blt_tensor *grad_a, const blt_tensor *grad_b, const blt_tensor *x,
+                                   const blt_tensor *weight, blt_tensor *grad_x, blt_tensor *grad_weight);
 
 void blt_matmul_cuda(const blt_tensor *a, const blt_tensor *b, blt_tensor *out);
 void blt_matmul_backward_cuda(const blt_tensor *a, const blt_tensor *b, const blt_tensor *grad_out, blt_tensor *grad_a,
@@ -381,6 +385,11 @@ void blt_rmsnorm_backward(const blt_tensor *grad_out, const blt_tensor *x, const
                           blt_tensor *grad_weight) {
     BLT_DISPATCH(x, blt_rmsnorm_backward_cpu(grad_out, x, weight, grad_x, grad_weight),
                  blt_rmsnorm_backward_cuda(grad_out, x, weight, grad_x, grad_weight));
+}
+void blt_rmsnorm_backward_add(const blt_tensor *grad_a, const blt_tensor *grad_b, const blt_tensor *x,
+                              const blt_tensor *weight, blt_tensor *grad_x, blt_tensor *grad_weight) {
+    BLT_DISPATCH(x, blt_rmsnorm_backward_add_cpu(grad_a, grad_b, x, weight, grad_x, grad_weight),
+                 blt_rmsnorm_backward_add_cuda(grad_a, grad_b, x, weight, grad_x, grad_weight));
 }
 
 // LINALG

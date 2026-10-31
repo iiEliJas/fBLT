@@ -12,6 +12,8 @@ extern "C" {
 void blt_rmsnorm_forward(const blt_tensor *x, const blt_tensor *weight, blt_tensor *out);
 void blt_rmsnorm_backward(const blt_tensor *grad_out, const blt_tensor *x, const blt_tensor *weight, blt_tensor *grad_x,
                           blt_tensor *grad_weight);
+void blt_rmsnorm_backward_add(const blt_tensor *grad_a, const blt_tensor *grad_b, const blt_tensor *x,
+                              const blt_tensor *weight, blt_tensor *grad_x, blt_tensor *grad_weight);
 #ifdef __cplusplus
 }
 #endif

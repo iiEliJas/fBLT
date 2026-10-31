@@ -93,3 +93,20 @@ Full CUDA graph capture is feasible but requires a substantial refactor:
 
 Estimated as a multi-week effort. Deferred to a dedicated branch. The simpler
 optimizations already delivered ~23% speedup (26.2 -> 20.2 ms/step).
+
+## Elementwise fusion (item 26.6, feature/elementwise-fusion)
+
+Fused `blt_add(a,b,tmp) + blt_rmsnorm_backward(tmp,...)` into a single kernel
+`blt_rmsnorm_backward_add` that sums the two gradient inputs internally,
+eliminating one intermediate buffer + one kernel launch per call site.
+
+Call sites updated: transformer_stack.c (grad_norm2_a + grad_norm2_b).
+
+| Config | ms/step | fwd | bwd | opt |
+|--------|---------|-----|-----|-----|
+| Before (large config) | 46.5 | 12.8 | 30.0 | 2.3 |
+| After  (large config) | 46.8 | 12.8 | 30.4 | 2.3 |
+
+Net: within noise at this scale (single fusion, 4 calls/step). Deeper fusion
+(chaining residual adds into attention/FFN backward) needed for measurable gain.
+CPU ground truth parity maintained (80/80 tests pass).
