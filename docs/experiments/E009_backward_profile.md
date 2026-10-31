@@ -93,3 +93,17 @@ Full CUDA graph capture is feasible but requires a substantial refactor:
 
 Estimated as a multi-week effort. Deferred to a dedicated branch. The simpler
 optimizations already delivered ~23% speedup (26.2 -> 20.2 ms/step).
+
+## Large-config profiling (window 128, embed 128, hidden 256, layers 4)
+
+| Backend | ms/step | fwd | bwd | opt |
+|---------|---------|-----|-----|-----|
+| CUDA FP32 | 46.5 | 12.8 | 30.0 | 2.3 |
+| CUDA BF16 | 46.3 | 12.8 | 29.8 | 2.4 |
+| CUDA FP8  | 46.4 | 12.9 | 29.9 | 2.4 |
+
+- At this scale, backward pass is ~64% of step time (30.0/46.5).
+- Optimizer ~5% of step time.
+- Forward ~27%.
+- BF16/FP8 do not yet show speedups at this scale (matmul shapes are larger but
+  mixed-precision path still dominates by memory traffic).
