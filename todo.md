@@ -1996,9 +1996,11 @@ work, not compute.
    producing kernel; use it at forward/backward allocation sites.
 6. Reduce elementwise launch count in backward: fuse consecutive add/scale/
    copy chains where the producing kernel can write the final result.
-7. Evaluate CUDA graph capture for the whole train step (separate item; the
-   archived branch in `docs/HANDOFF_RESET.md` has prior context). This is
-   expected to be the largest single win because the model is launch-bound.
+7. CUDA graph capture for the whole train step. Attempted; blocked by sync
+   cudaMemcpy/cudaMemset during capture, host-side scratch arena state, and
+   per-step inputs (t, positions, tokens) being read on host. Requires
+   device-resident inputs and async copies throughout. Deferred to a dedicated
+   branch (see E009).
 
 ### Acceptance
 
