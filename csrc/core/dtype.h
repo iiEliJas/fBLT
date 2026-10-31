@@ -8,7 +8,13 @@ extern "C" {
 #include <stddef.h>
 #include <stdint.h>
 
-typedef enum { BLT_DTYPE_FP32 = 0, BLT_DTYPE_BF16 = 1, BLT_DTYPE_INT32 = 2, BLT_DTYPE_UINT8 = 3 } blt_dtype;
+typedef enum {
+    BLT_DTYPE_FP32 = 0,
+    BLT_DTYPE_BF16 = 1,
+    BLT_DTYPE_INT32 = 2,
+    BLT_DTYPE_UINT8 = 3,
+    BLT_DTYPE_FP8_E4M3 = 4
+} blt_dtype;
 
 static inline size_t blt_dtype_sizeof(blt_dtype dtype) {
     switch (dtype) {
@@ -19,6 +25,8 @@ static inline size_t blt_dtype_sizeof(blt_dtype dtype) {
     case BLT_DTYPE_INT32:
         return 4;
     case BLT_DTYPE_UINT8:
+        return 1;
+    case BLT_DTYPE_FP8_E4M3:
         return 1;
     default:
         return 0;
