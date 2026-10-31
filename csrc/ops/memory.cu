@@ -58,7 +58,8 @@ extern "C" void blt_cuda_memset(void *dst, int value, size_t bytes) {
 }
 
 extern "C" void blt_cuda_memcpy_h2d(void *dst, const void *src, size_t bytes) {
-    blt_cuda_check(cudaMemcpy(dst, src, bytes, cudaMemcpyHostToDevice), "cudaMemcpy H2D");
+    // Async on the default stream so this can be captured into a CUDA graph.
+    blt_cuda_check(cudaMemcpyAsync(dst, src, bytes, cudaMemcpyHostToDevice, 0), "cudaMemcpyAsync H2D");
 }
 
 extern "C" void blt_cuda_memcpy_d2h(void *dst, const void *src, size_t bytes) {

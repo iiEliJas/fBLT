@@ -84,15 +84,25 @@ launch overhead (GPU is ~15% busy; ~1190 launches/step at ~9.5 us/launch).
    to read from device memory instead of host structs.
 4. **Loss download (D2H).** Must be moved outside the capture region.
 
-### Conclusion
+### Conclusion (updated)
 
-Full CUDA graph capture is feasible but requires a substantial refactor:
-- async memcpy/memset everywhere in the capture path,
-- device-resident per-step inputs (t, positions, tokens, text),
-- decoder refactored to read inputs from device memory.
+CUDA graph capture was attempted on this branch (feature/cuda-graph-capture).
+Even a trivial `cudaStreamBeginCapture` + `cudaGraphInstantiate` + `cudaGraphLaunch`
+on a single empty kernel **segfaults** in this WSL2 environment, indicating the
+driver/JIT combination here does not support graph capture at all (consistent
+with the documented WSL2 `libnvidia-ptxjitcompiler` issues). As a result, full
+CUDA graph capture is **not feasible in this environment** regardless of the
+code-level blockers.
 
-Estimated as a multi-week effort. Deferred to a dedicated branch. The simpler
-optimizations already delivered ~23% speedup (26.2 -> 20.2 ms/step).
+Delivered instead:
+- Async H2D memcpy (prerequisite #1) — measurable ~3.6% speedup.
+- Mask-builder capture-guard (skips sync D2H row check when a stream is
+  capturing) — harmless in normal runs, unblocks future capture attempts on
+  native (non-WSL) hardware.
+
+The remaining code-level blockers (host arena state, device-resident inputs,
+D2H outside capture) are documented above for reference if graph capture is
+revisited on native hardware.
 
 ## Elementwise fusion (item 26.6, feature/elementwise-fusion)
 
@@ -110,3 +120,29 @@ Call sites updated: transformer_stack.c (grad_norm2_a + grad_norm2_b).
 Net: within noise at this scale (single fusion, 4 calls/step). Deeper fusion
 (chaining residual adds into attention/FFN backward) needed for measurable gain.
 CPU ground truth parity maintained (80/80 tests pass).
+
+## Async memcpy (feature/cuda-graph-capture)
+
+Converted `blt_cuda_memcpy_h2d` from sync `cudaMemcpy` to async
+`cudaMemcpyAsync` on the default stream (memset was already async). This is
+prerequisite #1 for CUDA graph capture and removes host stalls.
+
+| Config (large) | ms/step | fwd | bwd | opt |
+|----------------|---------|-----|-----|-----|
+| Before (sync H2D) | 46.8 | 12.8 | 30.4 | 2.3 |
+| After  (async H2D) | 45.1 | 12.9 | 28.8 | 2.2 |
+
+Net: ~3.6% faster. CPU ground truth parity maintained (80/80 tests pass).
+
+## CUDA graph capture status
+
+Full graph capture of the training step remains blocked by:
+1. ~~Sync memcpy/memset~~ — resolved (async H2D + async memset).
+2. Host-side scratch arena state — arena offset advances on host; must be reset
+   before replay.
+3. Per-step varying inputs read on host (t, positions, tokens, patch count, text)
+   — must move to device buffers and refactor decoder to read from device memory.
+4. Loss download (D2H) — must stay outside capture region.
+
+Implementing (2)-(4) is a substantial refactor (estimated multi-week). The async
+change is the safe, measurable prerequisite delivered here.
