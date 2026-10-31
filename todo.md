@@ -41,7 +41,7 @@ full workflow, see [docs/RESEARCH_GUIDE.md](docs/RESEARCH_GUIDE.md).
 | 10 | Byte-level SFT and chat | Post-training | Open |
 | 11 | Sandboxed tool execution | Post-training | Open |
 | 12 | RL / GRPO | Post-training | Open |
-| 13 | FP8 / FP16 training | Training | Open |
+| 13 | FP8 / FP16 training | Training | Partial (primitives landed; model integration + scaling pending) |
 | 14 | Dataset download and cache | Data | Open |
 | 15 | Reproducible speedrun and leaderboard | Tooling | Open |
 | 16 | Peak FLOPS/BW table and MBU | Tooling | Open (E009 profiling landed) |

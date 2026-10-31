@@ -5,6 +5,8 @@
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 #include <cuda_bf16.h>
+#include <cuda_fp8.h>
+#include <cublasLt.h>
 
 // fp32 GEMMs on cuBLAS. cuBLAS is column-major; row-major C = A @ B maps to
 // the standard swapped-operand formulation C' = B' @ A' (primes denote the
@@ -20,6 +22,16 @@ static cublasHandle_t blt_cublas_handle(void) {
         }
         if (g_blt_deterministic) {
             cublasSetMathMode(handle, CUBLAS_PEDANTIC_MATH);
+        }
+    }
+    return handle;
+}
+
+static cublasLtHandle_t blt_cublaslt_handle(void) {
+    static cublasLtHandle_t handle = NULL;
+    if (!handle) {
+        if (cublasLtCreate(&handle) != CUBLAS_STATUS_SUCCESS) {
+            BLT_FATAL("blt_matmul: cublasLtCreate failed");
         }
     }
     return handle;
@@ -49,6 +61,30 @@ extern "C" void blt_matmul_cuda(const blt_tensor *a, const blt_tensor *b, blt_te
                                       (int)n, a->data, CUDA_R_16BF, (int)k, &beta, out->data, CUDA_R_32F, (int)n,
                                       CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT_TENSOR_OP),
                          "blt_matmul: cublasGemmEx bf16");
+        return;
+    }
+
+    // fp8 (E4M3) inputs: use cuBLASLt tensor cores, accumulate in fp32.
+    if (a->dtype == BLT_DTYPE_FP8_E4M3 && b->dtype == BLT_DTYPE_FP8_E4M3) {
+        cublasLtHandle_t lth = blt_cublaslt_handle();
+        cublasLtMatmulDesc_t desc = NULL;
+        cublasLtMatrixLayout_t layoutA = NULL, layoutB = NULL, layoutC = NULL;
+        cublasLtMatmulDescCreate(&desc, CUBLAS_COMPUTE_32F, CUDA_R_32F);
+        cublasLtMatrixLayoutCreate(&layoutA, CUDA_R_8F_E4M3, (int)k, (int)m, (int)k);
+        cublasLtMatrixLayoutCreate(&layoutB, CUDA_R_8F_E4M3, (int)n, (int)k, (int)n);
+        cublasLtMatrixLayoutCreate(&layoutC, CUDA_R_32F, (int)n, (int)m, (int)n);
+        size_t ws_size = 4 * 1024 * 1024;
+        void *ws = NULL;
+        cudaMalloc(&ws, ws_size);
+        const float alpha = 1.0f, beta = 0.0f;
+        // Row-major C=A@B  <=>  col-major C'=B'@A'. Pass b->data as A-slot, a->data as B-slot.
+        cublasLtMatmul(lth, desc, &alpha, b->data, layoutB, a->data, layoutA, &beta, out->data, layoutC, out->data,
+                       layoutC, NULL, ws, ws_size, 0);
+        cudaFree(ws);
+        cublasLtMatmulDescDestroy(desc);
+        cublasLtMatrixLayoutDestroy(layoutA);
+        cublasLtMatrixLayoutDestroy(layoutB);
+        cublasLtMatrixLayoutDestroy(layoutC);
         return;
     }
 
