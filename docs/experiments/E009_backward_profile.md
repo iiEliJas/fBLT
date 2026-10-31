@@ -110,3 +110,29 @@ Call sites updated: transformer_stack.c (grad_norm2_a + grad_norm2_b).
 Net: within noise at this scale (single fusion, 4 calls/step). Deeper fusion
 (chaining residual adds into attention/FFN backward) needed for measurable gain.
 CPU ground truth parity maintained (80/80 tests pass).
+
+## Async memcpy (feature/cuda-graph-capture)
+
+Converted `blt_cuda_memcpy_h2d` from sync `cudaMemcpy` to async
+`cudaMemcpyAsync` on the default stream (memset was already async). This is
+prerequisite #1 for CUDA graph capture and removes host stalls.
+
+| Config (large) | ms/step | fwd | bwd | opt |
+|----------------|---------|-----|-----|-----|
+| Before (sync H2D) | 46.8 | 12.8 | 30.4 | 2.3 |
+| After  (async H2D) | 45.1 | 12.9 | 28.8 | 2.2 |
+
+Net: ~3.6% faster. CPU ground truth parity maintained (80/80 tests pass).
+
+## CUDA graph capture status
+
+Full graph capture of the training step remains blocked by:
+1. ~~Sync memcpy/memset~~ — resolved (async H2D + async memset).
+2. Host-side scratch arena state — arena offset advances on host; must be reset
+   before replay.
+3. Per-step varying inputs read on host (t, positions, tokens, patch count, text)
+   — must move to device buffers and refactor decoder to read from device memory.
+4. Loss download (D2H) — must stay outside capture region.
+
+Implementing (2)-(4) is a substantial refactor (estimated multi-week). The async
+change is the safe, measurable prerequisite delivered here.
