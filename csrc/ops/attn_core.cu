@@ -148,7 +148,7 @@ __global__ void blt_attn_core_fwd_kernel(const float *q, size_t q_stride, const 
     }
 }
 
-#define FLASH_TILE 128
+#define FLASH_TILE 32
 
 // Flash-attention-style fused forward: tiled over keys with online softmax.
 // Reduces global memory traffic by keeping scores in shared memory and
