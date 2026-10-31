@@ -305,3 +305,10 @@ extern "C" float blt_cuda_adamw_sqnorm(const float *w, const float *g, const flo
     if (err != cudaSuccess) BLT_FATAL("blt_cuda_adamw_sqnorm: copy failed: %s", cudaGetErrorString(err));
     return result;
 }
+
+extern "C" void blt_vec_dot_into_cuda(blt_backend backend, const float *a, const float *b, size_t n, float *out) {
+    (void)backend;
+    BLT_REQUIRE(backend == BLT_BACKEND_CUDA, "blt_vec_dot_into: CUDA implementation called with non-CUDA backend");
+    blt_vec_dot_kernel<<<1, BLT_VEC_DOT_BLOCK>>>(a, b, n, out);
+    blt_cuda_launch_check("blt_vec_dot_into_kernel");
+}

@@ -85,3 +85,8 @@ void blt_fill_constant_cpu(blt_backend backend, float *data, size_t n, float v) 
         data[i] = v;
     }
 }
+
+void blt_vec_dot_into_cpu(blt_backend backend, const float *a, const float *b, size_t n, float *out) {
+    (void)backend;
+    *out = blt_vec_dot_cpu(backend, a, b, n);
+}

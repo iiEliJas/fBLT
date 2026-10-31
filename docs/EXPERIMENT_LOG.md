@@ -30,6 +30,7 @@ report can still be useful.
 | E006 | Which architecture and schedule choices matter at 2.97M parameters? | Checked | High-t warmup improves BPB by 0.33; mask-late shows no benefit; deeper decoder does not help; deeper encoder is harmful. Results use 3-6 seeds at 40k steps. | [docs/ABLATIONS.md](ABLATIONS.md) |
 | E007 | Does BLT-DV improve over greedy at the 7.8M-parameter scale? | Checked | BLT-DV is a net win only at the trained block size `B=4`: 65% acceptance, output byte-identical to greedy, 0.85x memory bandwidth, 0.89x wall-clock. Configurations at `B>=8` lose badly. | [docs/BENCHMARKS.md](BENCHMARKS.md) |
 | E008 | What CUDA speedup and determinism cost does fBLT have? | Checked | CUDA provides 76x training and 34x generation speedup over the single-threaded CPU baseline at the production config. CUDA is non-deterministic unless `--deterministic` is used. | [docs/BENCHMARKS.md](BENCHMARKS.md) |
+| E009 | Where does training time go, and what should be optimized first? | Checked | Backward pass is ~50% of step time on CUDA (FP32 and BF16); top kernels are sgemm, patch-pool backward, and many memset/memcpy calls. | [docs/experiments/E009_backward_profile.md](experiments/E009_backward_profile.md) |
 
 ## Notes
 

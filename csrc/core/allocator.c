@@ -106,6 +106,28 @@ void *blt_arena_alloc(blt_arena *arena, size_t bytes, size_t alignment) {
     return ptr;
 }
 
+blt_tensor blt_tensor_create_uninit(blt_arena *arena, const size_t *shape, size_t ndim, blt_dtype dtype) {
+    blt_tensor tensor;
+    memset(&tensor, 0, sizeof(tensor));
+
+    tensor.dtype = dtype;
+    tensor.backend = arena ? arena->backend : BLT_BACKEND_CPU;
+    tensor.is_view = false;
+    tensor.ndim = ndim;
+
+    for (size_t i = 0; i < BLT_MAX_NDIM; ++i) {
+        tensor.shape[i] = (i < ndim) ? shape[i] : 0;
+    }
+
+    tensor.numel = blt_tensor_compute_numel(shape, ndim);
+    blt_tensor_compute_row_major_strides(shape, ndim, tensor.strides);
+
+    size_t bytes = blt_tensor_bytes(&tensor);
+    tensor.data = blt_arena_alloc(arena, bytes, 64);
+    // Caller is responsible for fully writing tensor.data before reading.
+    return tensor;
+}
+
 blt_tensor blt_tensor_create(blt_arena *arena, const size_t *shape, size_t ndim, blt_dtype dtype) {
     blt_tensor tensor;
     memset(&tensor, 0, sizeof(tensor));

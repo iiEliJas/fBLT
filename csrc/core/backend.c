@@ -35,6 +35,7 @@ void blt_matmul_backward_cpu(const blt_tensor *a, const blt_tensor *b, const blt
                              blt_tensor *grad_b);
 
 float blt_vec_dot_cpu(blt_backend backend, const float *a, const float *b, size_t n);
+void blt_vec_dot_into_cpu(blt_backend backend, const float *a, const float *b, size_t n, float *out);
 void blt_softmax_masked_row_inplace_cpu(blt_backend backend, float *row, size_t row_len, size_t row_idx, bool is_causal,
                                         const float *mask_row, float scale);
 void blt_strided_copy_cpu(blt_backend backend, float *dst, size_t dst_stride, const float *src, size_t src_stride,
@@ -135,6 +136,7 @@ void blt_rmsnorm_backward_cpu(const blt_tensor *grad_out, const blt_tensor *x, c
     } while (0)
 
 float blt_vec_dot_cuda(blt_backend backend, const float *a, const float *b, size_t n);
+void blt_vec_dot_into_cuda(blt_backend backend, const float *a, const float *b, size_t n, float *out);
 void blt_softmax_masked_row_inplace_cuda(blt_backend backend, float *row, size_t row_len, size_t row_idx, int is_causal,
                                          const float *mask_row, float scale);
 void blt_strided_copy_cuda(blt_backend backend, float *dst, size_t dst_stride, const float *src, size_t src_stride,
@@ -397,6 +399,11 @@ void blt_matmul_backward(const blt_tensor *a, const blt_tensor *b, const blt_ten
 
 float blt_vec_dot(blt_backend backend, const float *a, const float *b, size_t n) {
     BLT_DISPATCH_BACKEND_RET(backend, blt_vec_dot_cpu(backend, a, b, n), blt_vec_dot_cuda(backend, a, b, n));
+}
+
+void blt_vec_dot_into(blt_backend backend, const float *a, const float *b, size_t n, float *out) {
+    BLT_DISPATCH_BACKEND(backend, blt_vec_dot_into_cpu(backend, a, b, n, out),
+                         blt_vec_dot_into_cuda(backend, a, b, n, out));
 }
 
 void blt_softmax_masked_row_inplace(blt_backend backend, float *row, size_t row_len, size_t row_idx, bool is_causal,

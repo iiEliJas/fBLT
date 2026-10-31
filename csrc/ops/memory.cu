@@ -52,7 +52,9 @@ extern "C" void blt_cuda_free(void *ptr) {
 }
 
 extern "C" void blt_cuda_memset(void *dst, int value, size_t bytes) {
-    blt_cuda_check(cudaMemset(dst, value, bytes), "cudaMemset");
+    // Async on the default stream: all kernels use the default stream, so
+    // ordering is preserved, and the host no longer stalls on each call.
+    blt_cuda_check(cudaMemsetAsync(dst, value, bytes, 0), "cudaMemsetAsync");
 }
 
 extern "C" void blt_cuda_memcpy_h2d(void *dst, const void *src, size_t bytes) {

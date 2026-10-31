@@ -29,14 +29,14 @@ full workflow, see [docs/RESEARCH_GUIDE.md](docs/RESEARCH_GUIDE.md).
 
 | # | Item | Area | Status |
 |---|------|------|--------|
-| 1 | Gradient accumulation / batch > 1 | Training | Open |
-| 2 | BF16 mixed-precision training | Training | Partially wired |
+| 1 | Gradient accumulation / batch > 1 | Training | Done (PR #66) |
+| 2 | BF16 mixed-precision training | Training | Done (global transformer, PR #68) |
 | 3 | Multi-GPU data parallel | Training | Design draft |
 | 4 | Evaluation harness (BPB + CORE tasks) | Evaluation | Open |
 | 5 | MuonAdamW and optimizer parameter groups | Training | Open |
 | 6 | Compute-optimal scaling dial | Training | Open |
 | 7 | Document-aware data pipeline | Data | Open |
-| 8 | Batched inference and KV cache | Inference | Open |
+| 8 | Batched inference and KV cache | Inference | Partial (storage + helper, PRs #69/#70) |
 | 9 | Checkpoint ergonomics | Checkpoints | Open |
 | 10 | Byte-level SFT and chat | Post-training | Open |
 | 11 | Sandboxed tool execution | Post-training | Open |
@@ -44,9 +44,9 @@ full workflow, see [docs/RESEARCH_GUIDE.md](docs/RESEARCH_GUIDE.md).
 | 13 | FP8 / FP16 training | Training | Open |
 | 14 | Dataset download and cache | Data | Open |
 | 15 | Reproducible speedrun and leaderboard | Tooling | Open |
-| 16 | Peak FLOPS/BW table and MBU | Tooling | Open |
+| 16 | Peak FLOPS/BW table and MBU | Tooling | Open (E009 profiling landed) |
 | 17 | Interactive chat CLI | Inference | Open |
-| 18 | Experiment log and negative results | Docs | Done |
+| 18 | Experiment log and negative results | Docs | Done (E009 added) |
 | 19 | Test coverage for new subsystems | Testing | Open |
 | 20 | Architecture experiments | Research | Exploratory |
 | 21 | Hugging Face checkpoint and model integration | Integration | Open |
@@ -54,6 +54,7 @@ full workflow, see [docs/RESEARCH_GUIDE.md](docs/RESEARCH_GUIDE.md).
 | 23 | Tokenizer/BPE hybrid patching modes | Data | Open |
 | 24 | Official-scale configuration and scaling matrix | Training | Open |
 | 25 | Tensor parallelism and multi-node training | Training | Open |
+| 26 | Backward-pass and launch-overhead optimization | Training (CUDA) | In progress (async memset, redundant passes, batched clip norm, uninit tensors) |
 
 ---
 
@@ -1945,6 +1946,79 @@ multi-GPU item currently covers data parallelism only.
 
 ---
 
+## 26. Backward-pass and launch-overhead optimization
+
+- **Status:** Open
+- **Area:** Training (CUDA)
+- **Depends on:** 1 (gradient accumulation)
+
+### Why
+
+Profiling (E009) shows the backward pass is ~50% of step time on CUDA (FP32
+and BF16), and the GPU is busy only ~15% of each step. The dominant costs are
+host launch overhead, synchronous host-device copies, and redundant per-tensor
+work, not compute.
+
+### Measured (research config, W=64, embed=64, hidden=128, layers=2)
+
+- CPU: 50.9 ms/step (fwd 15.1, bwd 33.7, opt 1.6)
+- CUDA FP32: 26.2 ms/step (fwd ~4.8-7.8, bwd ~12.9, opt ~4.9)
+- CUDA BF16: 25.1 ms/step (fwd ~4.7-6.6, bwd ~12.4, opt ~4.8)
+- GPU kernel time: ~3.8 ms/step (38.3 ms / 10 steps); ~1340 kernel launches/step.
+- `cudaMemset`: 573/step (5.5 ms/step GPU, ~44 ms/step host API time).
+- `cudaMemcpy` (D2H): 105/step, 69 of which are 4-byte scalar downloads in
+  `clip_all` (per-tensor `blt_vec_dot`).
+- `cudaLaunchKernel`: ~1190/step, ~9.5 us/launch host time.
+
+### Current state
+
+- `blt_tensor_create` zeroes every allocation (`cudaMemset`), including
+  scratch tensors that are fully overwritten.
+- `blt_model_grad_zero` zeroes all gradient tensors separately; called 3 times
+  per step even when `grad_accum == 1`.
+- `clip_all` calls `blt_vec_dot` (a synchronous D2H) per parameter tensor.
+- `blt_cuda_memset` uses the synchronous `cudaMemset`.
+- `adamw_all`/`sgd_all` scale gradients per tensor (69 extra launches).
+
+### Implementation
+
+1. Async memset: change `blt_cuda_memset` to `cudaMemsetAsync` on the default
+   stream. Order is preserved because all kernels use the default stream.
+2. Skip redundant zero passes when `grad_accum == 1`: backward directly into
+   `grad`, drop the accumulator zero/add/scale.
+3. Device-side grad norm: add `blt_vec_dot_into` that writes to a device
+   pointer without D2H; `clip_all` launches all dots into a device array and
+   does one D2H, preserving deterministic summation order.
+4. Fold clip scale into the optimizer: pass a `grad_scale` to `adamw_all`/
+   `sgd_all` and scale the gradient inside the kernel, dropping the separate
+   scale pass.
+5. Add `blt_tensor_create_uninit` for tensors fully overwritten by their
+   producing kernel; use it at forward/backward allocation sites.
+6. Reduce elementwise launch count in backward: fuse consecutive add/scale/
+   copy chains where the producing kernel can write the final result.
+7. Evaluate CUDA graph capture for the whole train step (separate item; the
+   archived branch in `docs/HANDOFF_RESET.md` has prior context). This is
+   expected to be the largest single win because the model is launch-bound.
+
+### Acceptance
+
+- `--grad-accum 1` step time improves measurably with no loss change.
+- Gradient clipping remains bit-identical (same per-tensor values and order).
+- CPU behavior unchanged (CPU path keeps synchronous `memset`/`vec_dot`).
+- Parity tests still pass; no change to op numerics.
+
+### Tests and docs
+
+- Regression test: `grad_accum == 1` matches current trainer bit-for-bit.
+- CUDA parity test for clip norm (host-summed array vs per-tensor).
+- Document the measured breakdown and the new flags in `docs/BENCHMARKS.md`.
+
+### Risks
+
+- Async memset could hide use-after-free if a tensor is read before being
+  written; only allocate uninitialized where the producer fully writes.
+- CUDA graph capture is fragile with dynamic shapes (patch count varies per
+  window); capture may need a fixed-shape path.
 
 ---
 
