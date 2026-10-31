@@ -77,6 +77,7 @@ void blt_transformer_stack_init(blt_arena *arena, blt_transformer_stack *stack,
     stack->layer_config.activation_type = BLT_ACTIVATION_SWIGLU;
     stack->layer_config.use_bf16 = config->use_bf16;
     stack->use_bf16 = config->use_bf16;
+    stack->use_fp8 = config->use_fp8;
 
     stack->layer_storage = (blt_transformer_layer_storage *)blt_container_alloc(
         arena, config->num_layers * sizeof(blt_transformer_layer_storage));
@@ -87,6 +88,11 @@ void blt_transformer_stack_init(blt_arena *arena, blt_transformer_stack *stack,
     if (config->use_bf16) {
         stack->layer_weights_bf16 = (blt_transformer_weights_bf16 *)blt_container_alloc(
             arena, config->num_layers * sizeof(blt_transformer_weights_bf16));
+    }
+    stack->layer_weights_fp8 = NULL;
+    if (config->use_fp8) {
+        stack->layer_weights_fp8 =
+            (blt_transformer_weights *)blt_container_alloc(arena, config->num_layers * sizeof(blt_transformer_weights));
     }
 
     for (size_t l = 0; l < config->num_layers; ++l) {
@@ -116,6 +122,13 @@ void blt_transformer_stack_init(blt_arena *arena, blt_transformer_stack *stack,
             s->ffn_gate_w_bf16 = blt_tensor_create(arena, ffn_up_shape, 2, BLT_DTYPE_BF16);
             s->ffn_down_w_bf16 = blt_tensor_create(arena, ffn_down_shape, 2, BLT_DTYPE_BF16);
         }
+        if (config->use_fp8) {
+            s->attn_qkv_w_fp8 = blt_tensor_create(arena, qkv_shape, 2, BLT_DTYPE_FP8_E4M3);
+            s->attn_proj_w_fp8 = blt_tensor_create(arena, proj_shape, 2, BLT_DTYPE_FP8_E4M3);
+            s->ffn_up_w_fp8 = blt_tensor_create(arena, ffn_up_shape, 2, BLT_DTYPE_FP8_E4M3);
+            s->ffn_gate_w_fp8 = blt_tensor_create(arena, ffn_up_shape, 2, BLT_DTYPE_FP8_E4M3);
+            s->ffn_down_w_fp8 = blt_tensor_create(arena, ffn_down_shape, 2, BLT_DTYPE_FP8_E4M3);
+        }
 
         blt_transformer_weights *w = &stack->layer_weights[l];
         w->norm1_weight = &s->norm1_weight;
@@ -130,6 +143,18 @@ void blt_transformer_stack_init(blt_arena *arena, blt_transformer_stack *stack,
 
         if (config->use_bf16) {
             stack->layer_weights_bf16[l] = blt_transformer_layer_bf16_view(s, 1);
+        }
+        if (config->use_fp8) {
+            blt_transformer_weights *wfp = &stack->layer_weights_fp8[l];
+            wfp->norm1_weight = &s->norm1_weight;
+            wfp->norm1_bias = NULL;
+            wfp->attn_qkv_w = &s->attn_qkv_w_fp8;
+            wfp->attn_proj_w = &s->attn_proj_w_fp8;
+            wfp->norm2_weight = &s->norm2_weight;
+            wfp->norm2_bias = NULL;
+            wfp->ffn_up_w = &s->ffn_up_w_fp8;
+            wfp->ffn_gate_w = &s->ffn_gate_w_fp8;
+            wfp->ffn_down_w = &s->ffn_down_w_fp8;
         }
     }
 }
@@ -380,4 +405,16 @@ void blt_transformer_stack_backward(const blt_transformer_stack *stack, const bl
         g = grad_prev;
     }
     *grad_x = g;
+}
+
+void blt_transformer_stack_refresh_fp8(blt_transformer_stack *stack) {
+    if (!stack || !stack->use_fp8 || !stack->layer_weights_fp8) return;
+    for (size_t l = 0; l < stack->num_layers; l++) {
+        blt_transformer_layer_storage *s = &stack->layer_storage[l];
+        blt_cast(&s->attn_qkv_w, &s->attn_qkv_w_fp8);
+        blt_cast(&s->attn_proj_w, &s->attn_proj_w_fp8);
+        blt_cast(&s->ffn_up_w, &s->ffn_up_w_fp8);
+        blt_cast(&s->ffn_gate_w, &s->ffn_gate_w_fp8);
+        blt_cast(&s->ffn_down_w, &s->ffn_down_w_fp8);
+    }
 }

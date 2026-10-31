@@ -276,7 +276,9 @@ args_t parse_args(int argc, char **argv) {
         else if (!strcmp(argv[i], "--peak-tflops") && i + 1 < argc) a.peak_tflops = atof(argv[++i]);
         else if (!strcmp(argv[i], "--deterministic")) a.deterministic = 1;
         else if (!strcmp(argv[i], "--bf16")) a.bf16 = 1;
+        else if (!strcmp(argv[i], "--fp8")) a.fp8 = 1;
         else if (!strcmp(argv[i], "--bf16")) a.bf16 = 1;
+        else if (!strcmp(argv[i], "--fp8")) a.fp8 = 1;
         else {
             usage();
         }

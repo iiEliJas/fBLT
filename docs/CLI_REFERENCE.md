@@ -156,6 +156,7 @@ works with a prompt of any length up to the sequence bound, which is derived fro
 | `--report-every K` | 25 | Print frequency |
 | `--deterministic` | off | Deterministic training (slower, no cuda atomics) |
 | `--bf16` | off | BF16 mixed precision (CUDA only) |
+| `--fp8` | off | FP8 (E4M3) mixed precision (CUDA only) |
 
 ### Window Order
 

@@ -17,6 +17,7 @@ typedef struct {
     blt_transformer_layer_storage *layer_storage;     // owned weights, [num_layers]
     blt_transformer_weights *layer_weights;           // const-views into layer_storage, [num_layers]
     blt_transformer_weights_bf16 *layer_weights_bf16; // bf16 weight views, [num_layers] (NULL when use_bf16=0)
+    blt_transformer_weights *layer_weights_fp8;       // fp8 weight views, [num_layers] (NULL when use_fp8=0)
 
     blt_tensor rope_cos_cache; // [max_seq_len, head_dim/2]
     blt_tensor rope_sin_cache; // [max_seq_len, head_dim/2]
@@ -28,6 +29,7 @@ typedef struct {
     size_t head_dim;
     size_t max_seq_len;
     int use_bf16;
+    int use_fp8;
 } blt_transformer_stack;
 
 typedef struct {
@@ -47,6 +49,7 @@ typedef struct {
     size_t max_seq_len; // upper bound used to size the shared RoPE cache
     float rope_theta;
     int use_bf16; // 1 = allocate bf16 weight copies for mixed-precision matmul
+    int use_fp8;  // 1 = allocate fp8 weight copies
 } blt_transformer_stack_config;
 
 // Precomputes the shared RoPE cache. Caller fills weight data afterward
@@ -100,6 +103,8 @@ void blt_transformer_layer_backward(const blt_transformer_layer_cache *cache, co
                                     const blt_transformer_config *cfg, blt_arena *arena, size_t seq_len,
                                     size_t embed_dim, size_t hidden_dim, const blt_tensor *grad_out,
                                     blt_transformer_layer_grad *lg, blt_tensor *grad_x);
+
+void blt_transformer_stack_refresh_fp8(blt_transformer_stack *stack);
 
 #ifdef __cplusplus
 }

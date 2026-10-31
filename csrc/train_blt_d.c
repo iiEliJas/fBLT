@@ -302,6 +302,10 @@ static void refresh_bf16_weights(const blt_model *model) {
     }
 }
 
+static void refresh_fp8_weights(const blt_model *model) {
+    if (model && model->global) blt_transformer_stack_refresh_fp8(&model->global->stack);
+}
+
 int main(int argc, char **argv) {
     args_t a = parse_args(argc, argv);
 
@@ -351,6 +355,10 @@ int main(int argc, char **argv) {
         fprintf(stderr, "train_blt_d: --bf16 requires --backend cuda\n");
         return 1;
     }
+    if (a.fp8 && !a.use_cuda) {
+        fprintf(stderr, "train_blt_d: --fp8 requires --backend cuda\n");
+        return 1;
+    }
     const blt_backend dev = a.use_cuda ? BLT_BACKEND_CUDA : BLT_BACKEND_CPU;
     g_blt_deterministic = a.deterministic;
 #ifdef BLT_WITH_CUDA
@@ -398,6 +406,7 @@ int main(int argc, char **argv) {
     blt_model_config cfg;
     blt_model_config_defaults(&cfg, a.embed, a.hidden, a.enc_layers, a.glob_layers, a.dec_layers, MS, a.cross_last);
     if (a.bf16) cfg.global_config.use_bf16 = 1;
+    if (a.fp8) cfg.global_config.use_fp8 = 1;
 
     blt_model *model = blt_model_create(model_arena, &cfg);
 
@@ -776,6 +785,7 @@ int main(int argc, char **argv) {
 
                 blt_tensor O = blt_tensor_create(scratch, p_shape2, 2, BLT_DTYPE_FP32);
                 refresh_bf16_weights(model);
+                refresh_fp8_weights(model);
                 blt_global_transformer_forward(model->global, &P, NULL, 0, &O, scratch);
 
                 size_t S = N + batch.n_block_rows;
@@ -827,6 +837,7 @@ int main(int argc, char **argv) {
                 blt_tensor logits = blt_tensor_create(scratch, lg_shape, 2, BLT_DTYPE_FP32);
                 blt_tensor loss = blt_tensor_create(scratch, sc_shape, 1, BLT_DTYPE_FP32);
                 refresh_bf16_weights(model);
+                refresh_fp8_weights(model);
                 blt_model_forward(model, &bytes_in, &targets, patches, M, NULL, 0, &logits, &loss, scratch);
 
                 if (adump_fp && ((step + 1) % a.report_every == 0 || step + 1 == end_step))

@@ -47,6 +47,7 @@ blt_global_transformer *blt_global_transformer_create(blt_arena *arena, const bl
         .max_seq_len = config->max_seq_len,
         .rope_theta = config->rope_theta,
         .use_bf16 = config->use_bf16,
+        .use_fp8 = config->use_fp8,
     };
     blt_transformer_stack_init(arena, &model->stack, &stack_cfg);
 
