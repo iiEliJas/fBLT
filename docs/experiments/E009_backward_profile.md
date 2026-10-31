@@ -60,3 +60,36 @@ Net: ~23% faster (26.2 -> 20.2), loss unchanged (556.8496).
   several kernels read host-side structs by pointer. A correct capture needs
   those inputs moved to device buffers updated before replay. Deferred to a
   dedicated branch.
+
+## CUDA graph capture attempt (feature/cuda-graph-train)
+
+Attempted to capture the full diffusion training step as a CUDA graph to eliminate
+launch overhead (GPU is ~15% busy; ~1190 launches/step at ~9.5 us/launch).
+
+### Blockers found
+
+1. **Synchronous memcpy/memset during capture.** `blt_cuda_memcpy_h2d` uses
+   `cudaMemcpy` (sync) and `blt_cuda_memset` used `cudaMemset` (sync). CUDA does
+   not allow synchronous copies during stream capture. Converting these to async
+   versions is required throughout the capture path.
+2. **Host-side scratch arena state.** `blt_embedding_lookup_cuda` allocates from
+   `blt_cuda_get_scratch_arena()` and advances its offset on the host. This is
+   not a CUDA API call but couples host state to capture; the arena must be reset
+   to the same offset before every replay.
+3. **Per-step varying inputs read on host.** `batch->t`, `batch->positions`,
+   `batch->tokens` are read on the host during the forward pass and used to
+   derive kernel arguments. In a captured graph those arguments are frozen at
+   capture time. Making the graph correct requires moving these inputs into
+   device buffers that kernels read at replay time, and refactoring the decoder
+   to read from device memory instead of host structs.
+4. **Loss download (D2H).** Must be moved outside the capture region.
+
+### Conclusion
+
+Full CUDA graph capture is feasible but requires a substantial refactor:
+- async memcpy/memset everywhere in the capture path,
+- device-resident per-step inputs (t, positions, tokens, text),
+- decoder refactored to read inputs from device memory.
+
+Estimated as a multi-week effort. Deferred to a dedicated branch. The simpler
+optimizations already delivered ~23% speedup (26.2 -> 20.2 ms/step).
