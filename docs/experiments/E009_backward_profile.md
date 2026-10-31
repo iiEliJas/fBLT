@@ -84,15 +84,25 @@ launch overhead (GPU is ~15% busy; ~1190 launches/step at ~9.5 us/launch).
    to read from device memory instead of host structs.
 4. **Loss download (D2H).** Must be moved outside the capture region.
 
-### Conclusion
+### Conclusion (updated)
 
-Full CUDA graph capture is feasible but requires a substantial refactor:
-- async memcpy/memset everywhere in the capture path,
-- device-resident per-step inputs (t, positions, tokens, text),
-- decoder refactored to read inputs from device memory.
+CUDA graph capture was attempted on this branch (feature/cuda-graph-capture).
+Even a trivial `cudaStreamBeginCapture` + `cudaGraphInstantiate` + `cudaGraphLaunch`
+on a single empty kernel **segfaults** in this WSL2 environment, indicating the
+driver/JIT combination here does not support graph capture at all (consistent
+with the documented WSL2 `libnvidia-ptxjitcompiler` issues). As a result, full
+CUDA graph capture is **not feasible in this environment** regardless of the
+code-level blockers.
 
-Estimated as a multi-week effort. Deferred to a dedicated branch. The simpler
-optimizations already delivered ~23% speedup (26.2 -> 20.2 ms/step).
+Delivered instead:
+- Async H2D memcpy (prerequisite #1) — measurable ~3.6% speedup.
+- Mask-builder capture-guard (skips sync D2H row check when a stream is
+  capturing) — harmless in normal runs, unblocks future capture attempts on
+  native (non-WSL) hardware.
+
+The remaining code-level blockers (host arena state, device-resident inputs,
+D2H outside capture) are documented above for reference if graph capture is
+revisited on native hardware.
 
 ## Elementwise fusion (item 26.6, feature/elementwise-fusion)
 

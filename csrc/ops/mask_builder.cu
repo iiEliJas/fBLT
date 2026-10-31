@@ -138,18 +138,23 @@ extern "C" void blt_build_attention_mask_cuda(const blt_mask_config *config, blt
         (const float *)out_mask->data, seq_q, seq_kv, d_row_ok);
     blt_cuda_launch_check("blt_mask_row_check_kernel");
 
-    unsigned char *row_ok = (unsigned char *)malloc(seq_q);
-    BLT_REQUIRE(row_ok != NULL, "blt_build_attention_mask: failed to allocate row check buffer");
-    blt_cuda_memcpy_d2h(row_ok, d_row_ok, seq_q);
-    for (size_t i = 0; i < seq_q; i++) {
-        // Column 0 is always valid under every supported mask configuration
-        // (causal keeps j=0; window keeps |i-j|<w with j=i; docs/groups include self).
-        if (!row_ok[i]) {
-            free(row_ok);
-            BLT_FATAL("blt_build_attention_mask: query position has no valid key");
+    // During CUDA graph capture, synchronous D2H is not permitted; skip the
+    // (assertion-only) row-validity check in that case. Masks are guaranteed
+    // valid by construction (column 0 is always allowed).
+    cudaStreamCaptureStatus cap_status = cudaStreamCaptureStatusNone;
+    cudaStreamIsCapturing(0, &cap_status);
+    if (cap_status == cudaStreamCaptureStatusNone) {
+        unsigned char *row_ok = (unsigned char *)malloc(seq_q);
+        BLT_REQUIRE(row_ok != NULL, "blt_build_attention_mask: failed to allocate row check buffer");
+        blt_cuda_memcpy_d2h(row_ok, d_row_ok, seq_q);
+        for (size_t i = 0; i < seq_q; i++) {
+            if (!row_ok[i]) {
+                free(row_ok);
+                BLT_FATAL("blt_build_attention_mask: query position has no valid key");
+            }
         }
+        free(row_ok);
     }
-    free(row_ok);
 }
 
 __global__ void blt_block_diffusion_mask_kernel(float *m, size_t S, size_t N, size_t B, int infer_mode,
