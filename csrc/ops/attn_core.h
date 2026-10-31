@@ -33,6 +33,7 @@ typedef struct {
     size_t combined_stride;
     size_t combined_col_offset;
     float *weights_out;    // optional [nq * nk]; receives post-softmax weights (backward cache)
+    float *lse_out;        // optional [nq * 2]; receives (m, l) per row for flash-attention LSE path
     float *scores_scratch; // required when weights_out == NULL ([nq * nk] workspace)
     const float *mask;     // optional [nq * nk] additive mask
     size_t nq;
@@ -57,7 +58,10 @@ typedef struct {
     size_t k_stride;
     const float *v; // [nk, v_stride]
     size_t v_stride;
-    const float *weights;       // [nq * nk] post-softmax weights from forward
+    const float *weights;       // [nq * nk] post-softmax weights from forward (NULL if lse provided)
+    const float *lse;           // optional [nq * 2]; (m, l) per row for flash-attention LSE path
+    const float *mask;          // optional [nq * nk] additive mask (needed for LSE recompute)
+    int is_causal;              // causal masking flag (needed for LSE recompute)
     const float *grad_combined; // [nq, gc_stride], slice at gc_col_offset
     size_t gc_stride;
     size_t gc_col_offset;

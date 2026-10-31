@@ -157,6 +157,7 @@ works with a prompt of any length up to the sequence bound, which is derived fro
 | `--deterministic` | off | Deterministic training (slower, no cuda atomics) |
 | `--bf16` | off | BF16 mixed precision (CUDA only) |
 | `--fp8` | off | FP8 (E4M3) mixed precision (CUDA only) |
+| `--flash-attn` | off | LSE-based flash attention (CUDA only, experimental) |
 
 ### Window Order
 
